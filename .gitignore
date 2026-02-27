@@ -1,0 +1,32 @@
+# Rust/Cargo build artifacts
+target/
+**/target/
+
+# Rust toolchain/temp
+*.rs.bk
+
+# Environment and local scratch
+.env
+.env.*
+local/
+scratch/
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs and diagnostics
+*.log
+logs/
+
+# Coverage and reports
+coverage/
+.coverage
+*.lcov
+
+# Test/binary artifacts
+*.out
+*.profraw
+*.profdata
