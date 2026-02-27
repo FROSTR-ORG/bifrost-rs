@@ -10,6 +10,8 @@ pub enum CodecError {
     Hex,
     #[error("invalid byte length: expected {expected}, got {actual}")]
     InvalidLength { expected: usize, actual: usize },
+    #[error("invalid payload shape: {0}")]
+    InvalidPayload(&'static str),
 }
 
 impl From<serde_json::Error> for CodecError {

@@ -5,6 +5,13 @@ members = [
   "crates/bifrost-transport",
   "crates/bifrost-node",
   "crates/bifrost-transport-ws",
+  "crates/bifrost-rpc",
+  "crates/bifrost-relay-dev",
+  "crates/bifrost-devnet",
+  "crates/bifrostd",
+  "crates/bifrost-cli",
+  "crates/bifrost-tui",
+  "contrib/example",
 ]
 resolver = "2"
 

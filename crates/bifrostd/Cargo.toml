@@ -1,0 +1,20 @@
+[package]
+name = "bifrostd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+hex.workspace = true
+bifrost-codec = { path = "../bifrost-codec" }
+bifrost-core = { path = "../bifrost-core" }
+bifrost-node = { path = "../bifrost-node" }
+bifrost-rpc = { path = "../bifrost-rpc" }
+bifrost-transport = { path = "../bifrost-transport" }
+bifrost-transport-ws = { path = "../bifrost-transport-ws" }

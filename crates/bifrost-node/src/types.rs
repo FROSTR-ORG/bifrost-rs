@@ -30,13 +30,31 @@ pub struct PeerData {
     pub updated: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerNonceHealth {
+    pub member_idx: u16,
+    pub incoming_available: usize,
+    pub outgoing_available: usize,
+    pub outgoing_spent: usize,
+    pub can_sign: bool,
+    pub should_send_nonces: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BifrostNodeOptions {
     pub sign_timeout_ms: u64,
     pub ecdh_timeout_ms: u64,
     pub ping_timeout_ms: u64,
+    pub request_ttl_secs: u64,
+    pub request_cache_limit: usize,
     pub max_sign_batch: usize,
     pub max_ecdh_batch: usize,
+    pub max_request_id_len: usize,
+    pub max_sender_len: usize,
+    pub max_echo_len: usize,
+    pub max_sign_content_len: usize,
+    pub ecdh_cache_ttl_secs: u64,
+    pub ecdh_cache_max_entries: usize,
     pub nonce_pool: NoncePoolConfig,
 }
 
@@ -46,8 +64,16 @@ impl Default for BifrostNodeOptions {
             sign_timeout_ms: 30_000,
             ecdh_timeout_ms: 30_000,
             ping_timeout_ms: 15_000,
+            request_ttl_secs: 300,
+            request_cache_limit: 4096,
             max_sign_batch: 100,
             max_ecdh_batch: 100,
+            max_request_id_len: 256,
+            max_sender_len: 256,
+            max_echo_len: 8192,
+            max_sign_content_len: 16384,
+            ecdh_cache_ttl_secs: 300,
+            ecdh_cache_max_entries: 1024,
             nonce_pool: NoncePoolConfig::default(),
         }
     }
@@ -59,7 +85,7 @@ pub struct BifrostNodeConfig {
     pub peers: Vec<PeerData>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeEvent {
     Ready,
     Closed,

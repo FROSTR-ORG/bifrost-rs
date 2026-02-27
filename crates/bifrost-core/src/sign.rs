@@ -58,6 +58,30 @@ pub fn create_partial_sig_package(
     })
 }
 
+pub fn create_partial_sig_packages_batch(
+    group: &GroupPackage,
+    sessions: &[SignSessionPackage],
+    share: &SharePackage,
+    signing_nonces: &[frost::round1::SigningNonces],
+    pubkey: [u8; 33],
+) -> CoreResult<Vec<PartialSigPackage>> {
+    if sessions.is_empty() {
+        return Err(CoreError::EmptySessionHashes);
+    }
+    if sessions.len() != signing_nonces.len() {
+        return Err(CoreError::BatchItemCountMismatch);
+    }
+
+    let mut out = Vec::with_capacity(sessions.len());
+    for (session, nonces) in sessions.iter().zip(signing_nonces.iter()) {
+        out.push(create_partial_sig_package(
+            group, session, share, nonces, pubkey,
+        )?);
+    }
+
+    Ok(out)
+}
+
 pub fn verify_partial_sig_package(
     group: &GroupPackage,
     session: &SignSessionPackage,
@@ -159,6 +183,30 @@ pub fn combine_signatures(
     Ok(out)
 }
 
+pub fn combine_signatures_batch(
+    group: &GroupPackage,
+    sessions: &[SignSessionPackage],
+    pkgs_by_session: &[Vec<PartialSigPackage>],
+) -> CoreResult<Vec<SignatureEntry>> {
+    if sessions.is_empty() {
+        return Err(CoreError::EmptySessionHashes);
+    }
+    if sessions.len() != pkgs_by_session.len() {
+        return Err(CoreError::BatchItemCountMismatch);
+    }
+
+    let mut out = Vec::with_capacity(sessions.len());
+    for (session, pkgs) in sessions.iter().zip(pkgs_by_session.iter()) {
+        let sigs = combine_signatures(group, session, pkgs)?;
+        if sigs.len() != 1 {
+            return Err(CoreError::UnsupportedBatchSigning);
+        }
+        out.push(sigs[0].clone());
+    }
+
+    Ok(out)
+}
+
 fn build_commitments_map(
     session: &SignSessionPackage,
 ) -> CoreResult<BTreeMap<frost::Identifier, frost::round1::SigningCommitments>> {
@@ -234,8 +282,56 @@ mod tests {
     use super::*;
     use rand_core::OsRng;
 
-    #[test]
-    fn combine_signatures_is_deterministic() {
+    fn two_member_fixture() -> (GroupPackage, Vec<SharePackage>) {
+        let (shares, group_pub) =
+            frost::keys::generate_with_dealer(2, 2, frost::keys::IdentifierList::Default, OsRng)
+                .expect("dealer");
+
+        let mut members = Vec::new();
+        let mut share_packages = Vec::new();
+        for (id, secret_share) in shares {
+            let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+            let mut member_pk = [0u8; 33];
+            member_pk.copy_from_slice(
+                &key_package
+                    .verifying_share()
+                    .serialize()
+                    .expect("serialize verifying share"),
+            );
+            members.push(crate::types::MemberPackage {
+                idx: id.serialize()[31] as u16,
+                pubkey: member_pk,
+            });
+
+            let mut seckey = [0u8; 32];
+            seckey.copy_from_slice(&key_package.signing_share().serialize());
+            share_packages.push(SharePackage {
+                idx: id.serialize()[31] as u16,
+                seckey,
+            });
+        }
+        members.sort_by_key(|m| m.idx);
+        share_packages.sort_by_key(|s| s.idx);
+
+        let mut group_pk = [0u8; 33];
+        group_pk.copy_from_slice(
+            &group_pub
+                .verifying_key()
+                .serialize()
+                .expect("serialize group key"),
+        );
+
+        (
+            GroupPackage {
+                group_pk,
+                threshold: 2,
+                members,
+            },
+            share_packages,
+        )
+    }
+
+    fn sign_fixture() -> (GroupPackage, SignSessionPackage, Vec<PartialSigPackage>) {
         let (shares, group_pub) =
             frost::keys::generate_with_dealer(2, 2, frost::keys::IdentifierList::Default, OsRng)
                 .expect("dealer");
@@ -307,7 +403,7 @@ mod tests {
         let session = SignSessionPackage {
             gid: [1; 32],
             sid: [2; 32],
-            members: vec![1, 2],
+            members: share_packages.iter().map(|s| s.idx).collect(),
             hashes: vec![vec![[7; 32]]],
             content: None,
             kind: "message".to_string(),
@@ -346,8 +442,160 @@ mod tests {
             });
         }
 
+        (group, session, pkgs)
+    }
+
+    #[test]
+    fn combine_signatures_is_deterministic() {
+        let (group, session, pkgs) = sign_fixture();
+
         let one = combine_signatures(&group, &session, &pkgs).expect("combine");
         let two = combine_signatures(&group, &session, &pkgs).expect("combine");
         assert_eq!(one, two);
+    }
+
+    #[test]
+    fn verify_partial_sig_rejects_tampered_signature_share() {
+        let (group, session, mut pkgs) = sign_fixture();
+        let mut pkg = pkgs.remove(0);
+        pkg.psigs[0].partial_sig[0] ^= 0x01;
+
+        let err = verify_partial_sig_package(&group, &session, &pkg).expect_err("must reject");
+        assert!(matches!(err, CoreError::Frost(_)));
+    }
+
+    #[test]
+    fn verify_partial_sig_rejects_unknown_member_idx() {
+        let (group, session, mut pkgs) = sign_fixture();
+        let mut pkg = pkgs.remove(0);
+        pkg.idx = 999;
+
+        let err = verify_partial_sig_package(&group, &session, &pkg).expect_err("must reject");
+        assert!(matches!(err, CoreError::MissingMember));
+    }
+
+    #[test]
+    fn create_partial_sig_packages_batch_rejects_nonce_count_mismatch() {
+        let (group, shares) = two_member_fixture();
+        let share = &shares[0];
+        let signing_share =
+            frost::keys::SigningShare::deserialize(&share.seckey).expect("signing share");
+        let (nonce_a, commitments_a) = frost::round1::commit(&signing_share, &mut OsRng);
+        let (nonce_b, _) = frost::round1::commit(&signing_share, &mut OsRng);
+
+        let session = SignSessionPackage {
+            gid: [1; 32],
+            sid: [2; 32],
+            members: shares.iter().map(|s| s.idx).collect(),
+            hashes: vec![vec![[7; 32]]],
+            content: None,
+            kind: "message".to_string(),
+            stamp: 1,
+            nonces: Some(vec![crate::types::MemberPublicNonce {
+                idx: share.idx,
+                binder_pn: commitments_a
+                    .binding()
+                    .serialize()
+                    .expect("serialize")
+                    .try_into()
+                    .expect("len"),
+                hidden_pn: commitments_a
+                    .hiding()
+                    .serialize()
+                    .expect("serialize")
+                    .try_into()
+                    .expect("len"),
+                code: [3u8; 32],
+            }]),
+        };
+
+        let err = create_partial_sig_packages_batch(
+            &group,
+            &[session],
+            share,
+            &[nonce_a, nonce_b],
+            group
+                .members
+                .iter()
+                .find(|m| m.idx == share.idx)
+                .expect("member")
+                .pubkey,
+        )
+        .expect_err("must reject mismatch");
+        assert!(matches!(err, CoreError::BatchItemCountMismatch));
+    }
+
+    #[test]
+    fn combine_signatures_batch_signs_multiple_sessions() {
+        let (group, shares) = two_member_fixture();
+
+        let mut sessions = Vec::new();
+        let mut local_nonces_by_share: Vec<Vec<frost::round1::SigningNonces>> =
+            vec![Vec::new(); shares.len()];
+        for idx in 0..3u8 {
+            let mut member_nonces = Vec::with_capacity(shares.len());
+            for (share_idx, share) in shares.iter().enumerate() {
+                let signing_share =
+                    frost::keys::SigningShare::deserialize(&share.seckey).expect("signing share");
+                let (nonces, commitments) = frost::round1::commit(&signing_share, &mut OsRng);
+                local_nonces_by_share[share_idx].push(nonces);
+                member_nonces.push(crate::types::MemberPublicNonce {
+                    idx: share.idx,
+                    binder_pn: commitments
+                        .binding()
+                        .serialize()
+                        .expect("serialize")
+                        .try_into()
+                        .expect("len"),
+                    hidden_pn: commitments
+                        .hiding()
+                        .serialize()
+                        .expect("serialize")
+                        .try_into()
+                        .expect("len"),
+                    code: [idx; 32],
+                });
+            }
+
+            sessions.push(SignSessionPackage {
+                gid: [1; 32],
+                sid: [10 + idx; 32],
+                members: shares.iter().map(|s| s.idx).collect(),
+                hashes: vec![vec![[20 + idx; 32]]],
+                content: None,
+                kind: "message".to_string(),
+                stamp: 100 + idx as u32,
+                nonces: Some(member_nonces),
+            });
+        }
+
+        let mut pkgs_per_share = Vec::with_capacity(shares.len());
+        for (share_idx, share) in shares.iter().enumerate() {
+            let pubkey = group
+                .members
+                .iter()
+                .find(|m| m.idx == share.idx)
+                .expect("member")
+                .pubkey;
+            let pkgs = create_partial_sig_packages_batch(
+                &group,
+                &sessions,
+                share,
+                &local_nonces_by_share[share_idx],
+                pubkey,
+            )
+            .expect("create batch");
+            pkgs_per_share.push(pkgs);
+        }
+
+        let mut pkgs_by_session: Vec<Vec<PartialSigPackage>> = vec![Vec::new(); sessions.len()];
+        for pkgs in pkgs_per_share {
+            for (session_idx, pkg) in pkgs.into_iter().enumerate() {
+                pkgs_by_session[session_idx].push(pkg);
+            }
+        }
+        let sigs =
+            combine_signatures_batch(&group, &sessions, &pkgs_by_session).expect("combine batch");
+        assert_eq!(sigs.len(), 3);
     }
 }

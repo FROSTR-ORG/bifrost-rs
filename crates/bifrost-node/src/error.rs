@@ -24,4 +24,16 @@ pub enum NodeError {
     InvalidResponse,
     #[error("invalid sign session: {0}")]
     InvalidSignSession(&'static str),
+    #[error("invalid sender binding: {0}")]
+    InvalidSenderBinding(&'static str),
+    #[error("invalid sign batch: {0}")]
+    InvalidSignBatch(&'static str),
+    #[error("invalid ecdh batch: {0}")]
+    InvalidEcdhBatch(&'static str),
+    #[error("replayed request id")]
+    ReplayRequestId,
+    #[error("stale envelope request id")]
+    StaleEnvelope,
+    #[error("payload limit exceeded: {0}")]
+    PayloadLimitExceeded(&'static str),
 }

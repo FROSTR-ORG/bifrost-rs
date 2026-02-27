@@ -1,0 +1,14 @@
+[package]
+name = "node_ws_multi_peer_example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hex = "0.4"
+frost-secp256k1-tr-unofficial = "2.2.0"
+rand_core = "0.6"
+tokio = { version = "1", features = ["rt", "time", "net", "sync"] }
+bifrost-core = { path = "../../crates/bifrost-core" }
+bifrost-node = { path = "../../crates/bifrost-node" }
+bifrost-transport = { path = "../../crates/bifrost-transport" }
+bifrost-transport-ws = { path = "../../crates/bifrost-transport-ws" }

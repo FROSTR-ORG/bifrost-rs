@@ -18,6 +18,8 @@ pub enum CoreError {
     EmptySessionMembers,
     #[error("session must include at least one hash")]
     EmptySessionHashes,
+    #[error("batch item count mismatch")]
+    BatchItemCountMismatch,
     #[error("batch signing is not supported in this implementation")]
     UnsupportedBatchSigning,
     #[error("session gid mismatch")]
@@ -28,6 +30,10 @@ pub enum CoreError {
     MissingMember,
     #[error("session missing nonces")]
     MissingNonces,
+    #[error("signing nonce code not found for peer")]
+    NonceNotFound,
+    #[error("signing nonce code already claimed/consumed")]
+    NonceAlreadyClaimed,
     #[error("frost error: {0}")]
     Frost(String),
 }

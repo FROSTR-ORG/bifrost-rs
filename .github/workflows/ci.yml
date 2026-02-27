@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - fmt
+          - check
+          - test-core
+          - test-node
+          - test-ws
+          - test-ws-nip44
+          - test-integration
+          - check-example
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo fmt
+        if: matrix.task == 'fmt'
+        run: cargo fmt --all -- --check
+
+      - name: Cargo check workspace
+        if: matrix.task == 'check'
+        run: cargo check --workspace
+
+      - name: Test core+codec
+        if: matrix.task == 'test-core'
+        run: cargo test -p bifrost-core -p bifrost-codec
+
+      - name: Test node unit+integration
+        if: matrix.task == 'test-node'
+        run: cargo test -p bifrost-node
+
+      - name: Test websocket transport
+        if: matrix.task == 'test-ws'
+        run: cargo test -p bifrost-transport-ws
+
+      - name: Test websocket NIP44 vectors
+        if: matrix.task == 'test-ws-nip44'
+        run: cargo test -p bifrost-transport-ws nip44_fixture_vectors
+
+      - name: Test node integration targets
+        if: matrix.task == 'test-integration'
+        run: |
+          cargo test -p bifrost-node --test happy_paths
+          cargo test -p bifrost-node --test adversarial
+
+      - name: Check example package
+        if: matrix.task == 'check-example'
+        run: cargo check -p node_ws_multi_peer_example

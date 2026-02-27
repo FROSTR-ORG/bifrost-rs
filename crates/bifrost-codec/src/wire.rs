@@ -1,12 +1,17 @@
 use bifrost_core::types::{
     DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, MemberPackage, MemberPublicNonce,
-    OnboardRequest, OnboardResponse, PartialSigEntry, PartialSigPackage, PingPayload,
+    OnboardRequest, OnboardResponse, PartialSigEntry, PartialSigPackage, PingPayload, SharePackage,
     SignSessionPackage,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::error::CodecResult;
 use crate::hexbytes;
+
+const MAX_GROUP_MEMBERS: usize = 1000;
+const MAX_SIGN_BATCH_SIZE: usize = 100;
+const MAX_ECDH_BATCH_SIZE: usize = 100;
+const MAX_NONCE_PACKAGE: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberPackageWire {
@@ -19,6 +24,12 @@ pub struct GroupPackageWire {
     pub group_pk: String,
     pub threshold: u16,
     pub members: Vec<MemberPackageWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharePackageWire {
+    pub idx: u16,
+    pub seckey: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +130,17 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: GroupPackageWire) -> Result<Self, Self::Error> {
+        if value.members.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "group members must not be empty",
+            ));
+        }
+        if value.members.len() > MAX_GROUP_MEMBERS {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "group members exceed max size",
+            ));
+        }
+
         let mut members = Vec::with_capacity(value.members.len());
         for m in value.members {
             members.push(m.try_into()?);
@@ -138,6 +160,26 @@ impl From<GroupPackage> for GroupPackageWire {
             group_pk: hexbytes::encode(&value.group_pk),
             threshold: value.threshold,
             members: value.members.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<SharePackageWire> for SharePackage {
+    type Error = crate::error::CodecError;
+
+    fn try_from(value: SharePackageWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            idx: value.idx,
+            seckey: hexbytes::decode(&value.seckey)?,
+        })
+    }
+}
+
+impl From<SharePackage> for SharePackageWire {
+    fn from(value: SharePackage) -> Self {
+        Self {
+            idx: value.idx,
+            seckey: hexbytes::encode(&value.seckey),
         }
     }
 }
@@ -192,8 +234,39 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: SignSessionPackageWire) -> Result<Self, Self::Error> {
+        if value.members.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "sign session members must not be empty",
+            ));
+        }
+        if value.members.len() > MAX_GROUP_MEMBERS {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "sign session members exceed max size",
+            ));
+        }
+        if value.hashes.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "sign session hashes must not be empty",
+            ));
+        }
+        if value.hashes.len() > MAX_SIGN_BATCH_SIZE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "sign session hash groups exceed max size",
+            ));
+        }
+
         let mut hashes = Vec::with_capacity(value.hashes.len());
         for vec in value.hashes {
+            if vec.is_empty() {
+                return Err(crate::error::CodecError::InvalidPayload(
+                    "sign session hash group must not be empty",
+                ));
+            }
+            if vec.len() > MAX_SIGN_BATCH_SIZE {
+                return Err(crate::error::CodecError::InvalidPayload(
+                    "sign session hash group exceeds max size",
+                ));
+            }
             hashes.push(
                 vec.into_iter()
                     .map(|h| hexbytes::decode::<32>(&h))
@@ -203,7 +276,14 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
 
         let nonces = value
             .nonces
-            .map(|n| n.into_iter().map(TryInto::try_into).collect())
+            .map(|n| {
+                if n.len() > MAX_NONCE_PACKAGE {
+                    return Err(crate::error::CodecError::InvalidPayload(
+                        "sign session nonces exceed max size",
+                    ));
+                }
+                n.into_iter().map(TryInto::try_into).collect()
+            })
             .transpose()?;
 
         Ok(Self {
@@ -266,6 +346,17 @@ impl TryFrom<PartialSigPackageWire> for PartialSigPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: PartialSigPackageWire) -> Result<Self, Self::Error> {
+        if value.psigs.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "partial signature list must not be empty",
+            ));
+        }
+        if value.psigs.len() > MAX_SIGN_BATCH_SIZE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "partial signature list exceeds max size",
+            ));
+        }
+
         Ok(Self {
             idx: value.idx,
             sid: hexbytes::decode(&value.sid)?,
@@ -323,6 +414,27 @@ impl TryFrom<EcdhPackageWire> for EcdhPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: EcdhPackageWire) -> Result<Self, Self::Error> {
+        if value.members.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ecdh members must not be empty",
+            ));
+        }
+        if value.members.len() > MAX_GROUP_MEMBERS {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ecdh members exceed max size",
+            ));
+        }
+        if value.entries.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ecdh entries must not be empty",
+            ));
+        }
+        if value.entries.len() > MAX_ECDH_BATCH_SIZE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ecdh entries exceed max size",
+            ));
+        }
+
         Ok(Self {
             idx: value.idx,
             members: value.members,
@@ -351,7 +463,14 @@ impl TryFrom<PingPayloadWire> for PingPayload {
     fn try_from(value: PingPayloadWire) -> Result<Self, Self::Error> {
         let nonces = value
             .nonces
-            .map(|n| n.into_iter().map(TryInto::try_into).collect())
+            .map(|n| {
+                if n.len() > MAX_NONCE_PACKAGE {
+                    return Err(crate::error::CodecError::InvalidPayload(
+                        "ping nonces exceed max size",
+                    ));
+                }
+                n.into_iter().map(TryInto::try_into).collect()
+            })
             .transpose()?;
 
         Ok(Self {
@@ -396,6 +515,11 @@ impl TryFrom<OnboardResponseWire> for OnboardResponse {
     type Error = crate::error::CodecError;
 
     fn try_from(value: OnboardResponseWire) -> Result<Self, Self::Error> {
+        if value.nonces.len() > MAX_NONCE_PACKAGE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "onboard nonces exceed max size",
+            ));
+        }
         Ok(Self {
             group: value.group.try_into()?,
             nonces: value
@@ -413,5 +537,71 @@ impl From<OnboardResponse> for OnboardResponseWire {
             group: value.group.into(),
             nonces: value.nonces.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_session_wire_rejects_empty_hashes() {
+        let wire = SignSessionPackageWire {
+            gid: hex::encode([1u8; 32]),
+            sid: hex::encode([2u8; 32]),
+            members: vec![1, 2],
+            hashes: vec![],
+            content: None,
+            kind: "message".to_string(),
+            stamp: 1,
+            nonces: None,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<SignSessionPackage>::try_into(wire).expect_err("must reject");
+        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn sign_session_wire_rejects_empty_hash_group() {
+        let wire = SignSessionPackageWire {
+            gid: hex::encode([1u8; 32]),
+            sid: hex::encode([2u8; 32]),
+            members: vec![1, 2],
+            hashes: vec![vec![]],
+            content: None,
+            kind: "message".to_string(),
+            stamp: 1,
+            nonces: None,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<SignSessionPackage>::try_into(wire).expect_err("must reject");
+        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn partial_sig_wire_rejects_empty_psigs() {
+        let wire = PartialSigPackageWire {
+            idx: 1,
+            sid: hex::encode([2u8; 32]),
+            pubkey: hex::encode([3u8; 33]),
+            psigs: Vec::new(),
+            nonce_code: None,
+            replenish: None,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<PartialSigPackage>::try_into(wire).expect_err("must reject");
+        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn ecdh_wire_rejects_empty_entries() {
+        let wire = EcdhPackageWire {
+            idx: 1,
+            members: vec![1, 2],
+            entries: Vec::new(),
+        };
+        let err: crate::error::CodecError =
+            TryInto::<EcdhPackage>::try_into(wire).expect_err("must reject");
+        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
     }
 }

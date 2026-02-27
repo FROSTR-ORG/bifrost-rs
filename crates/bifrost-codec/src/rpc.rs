@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::CodecResult;
+use crate::error::{CodecError, CodecResult};
 use crate::wire::{
     EcdhPackageWire, OnboardRequestWire, OnboardResponseWire, PartialSigPackageWire,
     PingPayloadWire, SignSessionPackageWire,
@@ -41,7 +41,38 @@ pub fn encode_envelope(msg: &RpcEnvelope) -> CodecResult<String> {
 }
 
 pub fn decode_envelope(msg: &str) -> CodecResult<RpcEnvelope> {
-    Ok(serde_json::from_str(msg)?)
+    let envelope: RpcEnvelope = serde_json::from_str(msg)?;
+    validate_envelope(&envelope)?;
+    Ok(envelope)
+}
+
+fn validate_envelope(envelope: &RpcEnvelope) -> CodecResult<()> {
+    if envelope.id.is_empty() {
+        return Err(CodecError::InvalidPayload("envelope id must not be empty"));
+    }
+    if envelope.sender.is_empty() {
+        return Err(CodecError::InvalidPayload(
+            "envelope sender must not be empty",
+        ));
+    }
+    if envelope.id.len() > 256 {
+        return Err(CodecError::InvalidPayload("envelope id exceeds max length"));
+    }
+    if envelope.sender.len() > 256 {
+        return Err(CodecError::InvalidPayload(
+            "envelope sender exceeds max length",
+        ));
+    }
+    match &envelope.payload {
+        RpcPayload::Echo(value) if value.len() > 8192 => {
+            return Err(CodecError::InvalidPayload(
+                "echo payload exceeds max length",
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -63,5 +94,31 @@ mod tests {
         assert_eq!(decoded.id, "abc");
         assert_eq!(decoded.sender, "peer1");
         assert!(matches!(decoded.payload, RpcPayload::Echo(_)));
+    }
+
+    #[test]
+    fn decode_envelope_rejects_empty_id() {
+        let raw = encode_envelope(&RpcEnvelope {
+            version: 1,
+            id: String::new(),
+            sender: "peer1".to_string(),
+            payload: RpcPayload::Echo("ok".to_string()),
+        })
+        .expect("encode");
+        let err = decode_envelope(&raw).expect_err("must reject empty id");
+        assert!(matches!(err, CodecError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn decode_envelope_rejects_oversized_echo() {
+        let raw = encode_envelope(&RpcEnvelope {
+            version: 1,
+            id: "abc".to_string(),
+            sender: "peer1".to_string(),
+            payload: RpcPayload::Echo("x".repeat(8200)),
+        })
+        .expect("encode");
+        let err = decode_envelope(&raw).expect_err("must reject oversized echo");
+        assert!(matches!(err, CodecError::InvalidPayload(_)));
     }
 }
