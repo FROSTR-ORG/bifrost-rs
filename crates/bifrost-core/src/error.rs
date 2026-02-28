@@ -16,6 +16,8 @@ pub enum CoreError {
     EmptyMembers,
     #[error("session must include at least one member")]
     EmptySessionMembers,
+    #[error("session members contain duplicates")]
+    DuplicateSessionMember,
     #[error("session must include at least one hash")]
     EmptySessionHashes,
     #[error("batch item count mismatch")]
@@ -26,6 +28,8 @@ pub enum CoreError {
     SessionGroupIdMismatch,
     #[error("session sid mismatch")]
     SessionIdMismatch,
+    #[error("session hash mismatch")]
+    SessionHashMismatch,
     #[error("missing member in group")]
     MissingMember,
     #[error("session missing nonces")]
@@ -34,6 +38,12 @@ pub enum CoreError {
     NonceNotFound,
     #[error("signing nonce code already claimed/consumed")]
     NonceAlreadyClaimed,
+    #[error("hash index out of range")]
+    HashIndexOutOfRange,
+    #[error("duplicate hash index")]
+    HashIndexDuplicate,
+    #[error("missing hash index contribution")]
+    MissingHashIndexContribution,
     #[error("frost error: {0}")]
     Frost(String),
 }

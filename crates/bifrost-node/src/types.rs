@@ -8,18 +8,31 @@ pub enum PeerStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PeerPolicy {
-    pub send: bool,
-    pub recv: bool,
+pub struct MethodPolicy {
+    pub echo: bool,
+    pub ping: bool,
+    pub onboard: bool,
+    pub sign: bool,
+    pub ecdh: bool,
 }
 
-impl Default for PeerPolicy {
+impl Default for MethodPolicy {
     fn default() -> Self {
         Self {
-            send: true,
-            recv: true,
+            echo: true,
+            ping: true,
+            onboard: true,
+            sign: true,
+            ecdh: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PeerPolicy {
+    pub block_all: bool,
+    pub request: MethodPolicy,
+    pub respond: MethodPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

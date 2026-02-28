@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CodecError, CodecResult};
 use crate::wire::{
-    EcdhPackageWire, OnboardRequestWire, OnboardResponseWire, PartialSigPackageWire,
+    EcdhPackageWire, OnboardRequestWire, OnboardResponseWire, PartialSigPackageWire, PeerErrorWire,
     PingPayloadWire, SignSessionPackageWire,
 };
 
@@ -14,6 +14,7 @@ pub enum RpcMethod {
     Sign,
     Ecdh,
     Onboard,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +27,7 @@ pub enum RpcPayload {
     Ecdh(EcdhPackageWire),
     OnboardRequest(OnboardRequestWire),
     OnboardResponse(OnboardResponseWire),
+    Error(PeerErrorWire),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

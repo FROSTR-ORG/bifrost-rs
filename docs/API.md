@@ -7,6 +7,7 @@ Concrete API map for the current `bifrost-rs` surface.
 Primary domain types (`crates/bifrost-core/src/types.rs`):
 
 - `GroupPackage`, `SharePackage`, `SignSessionTemplate`, `SignSessionPackage`
+- `IndexedPublicNonceCommitment`, `MemberNonceCommitmentSet`
 - `PartialSigPackage`, `EcdhPackage`, `PingPayload`, `OnboardRequest`, `OnboardResponse`
 
 Primary functions:
@@ -17,8 +18,8 @@ Primary functions:
   - `verify_session_package(group, session) -> CoreResult<()>`
   - `get_session_id(group_id, template) -> CoreResult<[u8;32]>`
 - Signing:
-  - `create_partial_sig_package(group, share, session, nonce_code)`
-  - `create_partial_sig_packages_batch(group, share, sessions, nonce_codes)`
+  - `create_partial_sig_package(group, share, session, signing_nonces_by_hash_index)`
+  - `create_partial_sig_packages_batch(group, share, sessions, signing_nonces_by_session)`
   - `verify_partial_sig_package(group, session, package)`
   - `combine_signatures(group, session, partials)`
   - `combine_signatures_batch(group, sessions, partials)`
@@ -26,6 +27,9 @@ Primary functions:
   - `create_ecdh_package(group, share, members, pubkeys)`
   - `combine_ecdh_packages(pkgs, ecdh_pk)`
   - `local_pubkey_from_share(share)`
+- Utility parity helpers:
+  - `validate::{decode_hex32, decode_hex33, decode_sig64, decode_fixed_hex, validate_pubkey33, validate_signature64}`
+  - `sighash::{message_sighash, bind_sighash}`
 
 Errors: `CoreError` includes nonce safety and session integrity variants (`MissingNonces`, `NonceAlreadyClaimed`, `SessionIdMismatch`, etc.).
 
@@ -40,7 +44,7 @@ RPC envelope (`crates/bifrost-codec/src/rpc.rs`):
 
 Wire payloads (`crates/bifrost-codec/src/wire.rs`):
 
-- Group/share/session/partial-signature/ecdh/ping/onboard wire structs
+- Group/share/session/partial-signature/ecdh/ping/onboard wire structs (including indexed sign-session nonce commitments and indexed partial signatures)
 - strict `TryFrom` validation with bounded sizes
 
 Parse helpers (`crates/bifrost-codec/src/parse.rs`):
@@ -48,6 +52,28 @@ Parse helpers (`crates/bifrost-codec/src/parse.rs`):
 - `parse_ping`, `parse_session`, `parse_psig`, `parse_ecdh`
 - `parse_onboard_request`, `parse_onboard_response`
 - `parse_group_package`, `parse_share_package`
+- package helpers (`crates/bifrost-codec/src/package.rs`):
+  - `encode_group_package_json`, `decode_group_package_json`
+  - `encode_share_package_json`, `decode_share_package_json`
+
+## `frostr-utils`
+
+Utility APIs for integration/tooling use cases:
+
+- Keyset lifecycle:
+  - `create_keyset(CreateKeysetConfig)`
+  - `verify_keyset(&KeysetBundle)`
+  - `rotate_keyset_dealer(&GroupPackage, RotateKeysetRequest)`
+  - `recover_key(&RecoverKeyInput)`
+- Verification helpers:
+  - `verify_group_config(&GroupPackage)`
+  - `verify_share(&SharePackage, &GroupPackage)`
+- Onboarding package helpers:
+  - `build_onboarding_package(share, peer_pk, relays)`
+  - `encode_onboarding_package(&OnboardingPackage)` (`bfonboard` bech32m)
+  - `decode_onboarding_package(&str)`
+  - `serialize_onboarding_data(&OnboardingPackage)`
+  - `deserialize_onboarding_data(&[u8])`
 
 ## `bifrost-transport`
 
@@ -80,6 +106,10 @@ Operations:
 - `sign(message32)`
 - `ecdh(pubkey33)`
 - queue/batch helpers for sign/ecdh
+- facades:
+  - `NodeClient` (middleware-aware lifecycle/operations)
+  - `Signer` (sign/sign_batch façade)
+  - `NoncePoolView` (nonce health/config façade)
 
 Security/runtime controls in `BifrostNodeOptions`:
 
@@ -100,7 +130,9 @@ Daemon RPC schema (`crates/bifrost-rpc/src/types.rs`):
 - Request envelope: `RpcRequestEnvelope { id, request }`
 - Response envelope: `RpcResponseEnvelope { id, response }`
 - Request enum `BifrostRpcRequest` methods:
-  - `Health`, `Status`, `Events`, `Echo`, `Ping`, `Onboard`, `Sign`, `Ecdh`, `Shutdown`
+  - `Health`, `Status`, `Events`, `Echo`, `Ping`, `Onboard`, `Sign`, `Ecdh`
+  - peer policy administration: `GetPeerPolicies`, `GetPeerPolicy`, `SetPeerPolicy`, `RefreshPeerPolicy`
+  - `Shutdown`
 - Response enum `BifrostRpcResponse`:
   - `Ok(Value)` or `Err { code, message }`
 
@@ -109,14 +141,16 @@ Client helpers:
 - `next_request_id()`
 - `request(id, req)`
 - `send_request_to(path, req)` / `send_request(stream, req)`
+- `DaemonClient` high-level helper (`call`, typed convenience methods)
 
 ## Runtime binaries
 
 - `bifrostd`: local Unix socket JSON-RPC daemon wrapping node + WS transport
 - `bifrost-cli`: command-oriented RPC client
 - `bifrost-tui`: interactive `ratatui` dashboard with scripted mode
-- `bifrost-relay-dev`: development relay for REQ/EVENT/CLOSE flows
-- `bifrost-devnet`: local key/config generation for multi-node runtime
+- `bifrost-devtools`: development tooling binary with:
+  - `relay` for REQ/EVENT/CLOSE dev relay flow
+  - `keygen` for local key/config generation
 
 Change management reference:
 

@@ -1,6 +1,6 @@
 use bifrost_core::types::{
-    EcdhPackage, GroupPackage, OnboardRequest, OnboardResponse, PartialSigPackage, PingPayload,
-    SharePackage, SignSessionPackage,
+    EcdhPackage, GroupPackage, OnboardRequest, OnboardResponse, PartialSigPackage, PeerError,
+    PingPayload, SharePackage, SignSessionPackage,
 };
 
 use crate::error::{CodecError, CodecResult};
@@ -51,6 +51,13 @@ pub fn parse_onboard_response(envelope: &RpcEnvelope) -> CodecResult<OnboardResp
         ));
     };
     wire.clone().try_into()
+}
+
+pub fn parse_error(envelope: &RpcEnvelope) -> CodecResult<PeerError> {
+    let RpcPayload::Error(wire) = &envelope.payload else {
+        return Err(CodecError::InvalidPayload("expected error payload"));
+    };
+    Ok(wire.clone().into())
 }
 
 pub fn parse_group_package(raw: &str) -> CodecResult<GroupPackage> {
@@ -106,6 +113,7 @@ mod tests {
             sid: hex::encode([3u8; 32]),
             pubkey: hex::encode([4u8; 33]),
             psigs: vec![PartialSigEntryWire {
+                hash_index: 0,
                 sighash: hex::encode([5u8; 32]),
                 partial_sig: hex::encode([6u8; 32]),
             }],
@@ -145,6 +153,7 @@ mod tests {
         let ping_envelope = base_envelope(RpcPayload::Ping(PingPayloadWire {
             version: 1,
             nonces: None,
+            policy_profile: None,
         }));
         let ping = parse_ping(&ping_envelope).expect("ping parse");
         assert_eq!(ping.version, 1);

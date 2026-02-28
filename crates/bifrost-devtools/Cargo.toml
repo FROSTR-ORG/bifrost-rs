@@ -1,5 +1,5 @@
 [package]
-name = "bifrost-relay-dev"
+name = "bifrost-devtools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,9 @@ hex.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite.workspace = true
 tracing.workspace = true
+bifrost-core = { path = "../bifrost-core" }
+bifrost-codec = { path = "../bifrost-codec" }
+frostr-utils = { path = "../frostr-utils" }
 
 [dev-dependencies]
 rand_core.workspace = true

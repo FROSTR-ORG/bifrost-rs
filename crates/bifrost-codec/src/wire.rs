@@ -1,7 +1,8 @@
 use bifrost_core::types::{
-    DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, MemberPackage, MemberPublicNonce,
-    OnboardRequest, OnboardResponse, PartialSigEntry, PartialSigPackage, PingPayload, SharePackage,
-    SignSessionPackage,
+    DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, IndexedPublicNonceCommitment,
+    MemberNonceCommitmentSet, MemberPackage, MemberPublicNonce, MethodPolicy, OnboardRequest,
+    OnboardResponse, PartialSigEntry, PartialSigPackage, PeerError, PeerScopedPolicyProfile,
+    PingPayload, SharePackage, SignSessionPackage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -48,19 +49,34 @@ pub struct MemberPublicNonceWire {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexedPublicNonceCommitmentWire {
+    pub hash_index: u16,
+    pub binder_pn: String,
+    pub hidden_pn: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberNonceCommitmentSetWire {
+    pub idx: u16,
+    pub entries: Vec<IndexedPublicNonceCommitmentWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignSessionPackageWire {
     pub gid: String,
     pub sid: String,
     pub members: Vec<u16>,
-    pub hashes: Vec<Vec<String>>,
+    pub hashes: Vec<String>,
     pub content: Option<String>,
     pub kind: String,
     pub stamp: u32,
-    pub nonces: Option<Vec<MemberPublicNonceWire>>,
+    pub nonces: Option<Vec<MemberNonceCommitmentSetWire>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartialSigEntryWire {
+    pub hash_index: u16,
     pub sighash: String,
     pub partial_sig: String,
 }
@@ -92,6 +108,32 @@ pub struct EcdhPackageWire {
 pub struct PingPayloadWire {
     pub version: u16,
     pub nonces: Option<Vec<DerivedPublicNonceWire>>,
+    pub policy_profile: Option<PeerScopedPolicyProfileWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MethodPolicyWire {
+    pub echo: bool,
+    pub ping: bool,
+    pub onboard: bool,
+    pub sign: bool,
+    pub ecdh: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerScopedPolicyProfileWire {
+    pub for_peer: String,
+    pub revision: u64,
+    pub updated: u64,
+    pub block_all: bool,
+    pub request: MethodPolicyWire,
+    pub respond: MethodPolicyWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerErrorWire {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +272,64 @@ impl From<MemberPublicNonce> for MemberPublicNonceWire {
     }
 }
 
+impl TryFrom<IndexedPublicNonceCommitmentWire> for IndexedPublicNonceCommitment {
+    type Error = crate::error::CodecError;
+
+    fn try_from(value: IndexedPublicNonceCommitmentWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            hash_index: value.hash_index,
+            binder_pn: hexbytes::decode(&value.binder_pn)?,
+            hidden_pn: hexbytes::decode(&value.hidden_pn)?,
+            code: hexbytes::decode(&value.code)?,
+        })
+    }
+}
+
+impl From<IndexedPublicNonceCommitment> for IndexedPublicNonceCommitmentWire {
+    fn from(value: IndexedPublicNonceCommitment) -> Self {
+        Self {
+            hash_index: value.hash_index,
+            binder_pn: hexbytes::encode(&value.binder_pn),
+            hidden_pn: hexbytes::encode(&value.hidden_pn),
+            code: hexbytes::encode(&value.code),
+        }
+    }
+}
+
+impl TryFrom<MemberNonceCommitmentSetWire> for MemberNonceCommitmentSet {
+    type Error = crate::error::CodecError;
+
+    fn try_from(value: MemberNonceCommitmentSetWire) -> Result<Self, Self::Error> {
+        if value.entries.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "member nonce entries must not be empty",
+            ));
+        }
+        if value.entries.len() > MAX_SIGN_BATCH_SIZE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "member nonce entries exceed max size",
+            ));
+        }
+        Ok(Self {
+            idx: value.idx,
+            entries: value
+                .entries
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<CodecResult<Vec<_>>>()?,
+        })
+    }
+}
+
+impl From<MemberNonceCommitmentSet> for MemberNonceCommitmentSetWire {
+    fn from(value: MemberNonceCommitmentSet) -> Self {
+        Self {
+            idx: value.idx,
+            entries: value.entries.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
     type Error = crate::error::CodecError;
 
@@ -251,28 +351,15 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
         }
         if value.hashes.len() > MAX_SIGN_BATCH_SIZE {
             return Err(crate::error::CodecError::InvalidPayload(
-                "sign session hash groups exceed max size",
+                "sign session hashes exceed max size",
             ));
         }
 
-        let mut hashes = Vec::with_capacity(value.hashes.len());
-        for vec in value.hashes {
-            if vec.is_empty() {
-                return Err(crate::error::CodecError::InvalidPayload(
-                    "sign session hash group must not be empty",
-                ));
-            }
-            if vec.len() > MAX_SIGN_BATCH_SIZE {
-                return Err(crate::error::CodecError::InvalidPayload(
-                    "sign session hash group exceeds max size",
-                ));
-            }
-            hashes.push(
-                vec.into_iter()
-                    .map(|h| hexbytes::decode::<32>(&h))
-                    .collect::<CodecResult<Vec<_>>>()?,
-            );
-        }
+        let hashes = value
+            .hashes
+            .into_iter()
+            .map(|h| hexbytes::decode::<32>(&h))
+            .collect::<CodecResult<Vec<_>>>()?;
 
         let nonces = value
             .nonces
@@ -291,7 +378,10 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
             sid: hexbytes::decode(&value.sid)?,
             members: value.members,
             hashes,
-            content: value.content.map(|c| c.into_bytes()),
+            content: value
+                .content
+                .map(|c| hexbytes::decode_vec(&c))
+                .transpose()?,
             kind: value.kind,
             stamp: value.stamp,
             nonces,
@@ -308,11 +398,9 @@ impl From<SignSessionPackage> for SignSessionPackageWire {
             hashes: value
                 .hashes
                 .into_iter()
-                .map(|v| v.into_iter().map(|h| hexbytes::encode(&h)).collect())
+                .map(|h| hexbytes::encode(&h))
                 .collect(),
-            content: value
-                .content
-                .map(|c| String::from_utf8_lossy(&c).to_string()),
+            content: value.content.map(|c| hexbytes::encode(&c)),
             kind: value.kind,
             stamp: value.stamp,
             nonces: value
@@ -327,6 +415,7 @@ impl TryFrom<PartialSigEntryWire> for PartialSigEntry {
 
     fn try_from(value: PartialSigEntryWire) -> Result<Self, Self::Error> {
         Ok(Self {
+            hash_index: value.hash_index,
             sighash: hexbytes::decode(&value.sighash)?,
             partial_sig: hexbytes::decode(&value.partial_sig)?,
         })
@@ -336,6 +425,7 @@ impl TryFrom<PartialSigEntryWire> for PartialSigEntry {
 impl From<PartialSigEntry> for PartialSigEntryWire {
     fn from(value: PartialSigEntry) -> Self {
         Self {
+            hash_index: value.hash_index,
             sighash: hexbytes::encode(&value.sighash),
             partial_sig: hexbytes::encode(&value.partial_sig),
         }
@@ -476,6 +566,7 @@ impl TryFrom<PingPayloadWire> for PingPayload {
         Ok(Self {
             version: value.version,
             nonces,
+            policy_profile: value.policy_profile.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -487,6 +578,79 @@ impl From<PingPayload> for PingPayloadWire {
             nonces: value
                 .nonces
                 .map(|n| n.into_iter().map(Into::into).collect()),
+            policy_profile: value.policy_profile.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<MethodPolicyWire> for MethodPolicy {
+    type Error = crate::error::CodecError;
+
+    fn try_from(value: MethodPolicyWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            echo: value.echo,
+            ping: value.ping,
+            onboard: value.onboard,
+            sign: value.sign,
+            ecdh: value.ecdh,
+        })
+    }
+}
+
+impl From<MethodPolicy> for MethodPolicyWire {
+    fn from(value: MethodPolicy) -> Self {
+        Self {
+            echo: value.echo,
+            ping: value.ping,
+            onboard: value.onboard,
+            sign: value.sign,
+            ecdh: value.ecdh,
+        }
+    }
+}
+
+impl TryFrom<PeerScopedPolicyProfileWire> for PeerScopedPolicyProfile {
+    type Error = crate::error::CodecError;
+
+    fn try_from(value: PeerScopedPolicyProfileWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            for_peer: hexbytes::decode(&value.for_peer)?,
+            revision: value.revision,
+            updated: value.updated,
+            block_all: value.block_all,
+            request: value.request.try_into()?,
+            respond: value.respond.try_into()?,
+        })
+    }
+}
+
+impl From<PeerScopedPolicyProfile> for PeerScopedPolicyProfileWire {
+    fn from(value: PeerScopedPolicyProfile) -> Self {
+        Self {
+            for_peer: hexbytes::encode(&value.for_peer),
+            revision: value.revision,
+            updated: value.updated,
+            block_all: value.block_all,
+            request: value.request.into(),
+            respond: value.respond.into(),
+        }
+    }
+}
+
+impl From<PeerErrorWire> for PeerError {
+    fn from(value: PeerErrorWire) -> Self {
+        Self {
+            code: value.code,
+            message: value.message,
+        }
+    }
+}
+
+impl From<PeerError> for PeerErrorWire {
+    fn from(value: PeerError) -> Self {
+        Self {
+            code: value.code,
+            message: value.message,
         }
     }
 }
@@ -562,12 +726,12 @@ mod tests {
     }
 
     #[test]
-    fn sign_session_wire_rejects_empty_hash_group() {
+    fn sign_session_wire_rejects_invalid_hash_hex() {
         let wire = SignSessionPackageWire {
             gid: hex::encode([1u8; 32]),
             sid: hex::encode([2u8; 32]),
             members: vec![1, 2],
-            hashes: vec![vec![]],
+            hashes: vec!["zz".to_string()],
             content: None,
             kind: "message".to_string(),
             stamp: 1,
@@ -575,7 +739,10 @@ mod tests {
         };
         let err: crate::error::CodecError =
             TryInto::<SignSessionPackage>::try_into(wire).expect_err("must reject");
-        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
+        assert!(matches!(
+            err,
+            crate::error::CodecError::Hex | crate::error::CodecError::InvalidLength { .. }
+        ));
     }
 
     #[test]
@@ -603,5 +770,39 @@ mod tests {
         let err: crate::error::CodecError =
             TryInto::<EcdhPackage>::try_into(wire).expect_err("must reject");
         assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn sign_session_wire_content_roundtrip_is_binary_safe() {
+        let session = SignSessionPackage {
+            gid: [1u8; 32],
+            sid: [2u8; 32],
+            members: vec![1, 2],
+            hashes: vec![[3u8; 32]],
+            content: Some(vec![0, 255, 1, 2, 3, 128]),
+            kind: "message".to_string(),
+            stamp: 1,
+            nonces: None,
+        };
+        let wire = SignSessionPackageWire::from(session.clone());
+        let parsed: SignSessionPackage = wire.try_into().expect("content parse");
+        assert_eq!(parsed.content, session.content);
+    }
+
+    #[test]
+    fn sign_session_wire_rejects_non_hex_content() {
+        let wire = SignSessionPackageWire {
+            gid: hex::encode([1u8; 32]),
+            sid: hex::encode([2u8; 32]),
+            members: vec![1, 2],
+            hashes: vec![hex::encode([3u8; 32])],
+            content: Some("not-hex".to_string()),
+            kind: "message".to_string(),
+            stamp: 1,
+            nonces: None,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<SignSessionPackage>::try_into(wire).expect_err("must reject");
+        assert!(matches!(err, crate::error::CodecError::Hex));
     }
 }

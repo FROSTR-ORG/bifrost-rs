@@ -4,8 +4,7 @@ This document tracks the Rust runtime surface that mirrors and extends the `bifr
 
 ## Targets
 
-- `bifrost-relay-dev`: local Nostr relay for development/testing.
-- `bifrost-devnet`: local key/config generator for multi-node daemon setups.
+- `bifrost-devtools`: consolidated development tooling (`relay` + `keygen`).
 - `bifrostd`: headless Bifrost daemon exposing local JSON-RPC over a Unix socket.
 - `bifrost-cli`: script/agent-friendly RPC client.
 - `bifrost-tui`: interactive operator shell connected to `bifrostd`.
@@ -13,7 +12,7 @@ This document tracks the Rust runtime surface that mirrors and extends the `bifr
 ## Build
 
 ```bash
-cargo check -p bifrost-devnet -p bifrost-relay-dev -p bifrostd -p bifrost-cli -p bifrost-tui --offline
+cargo check -p bifrost-devtools -p bifrostd -p bifrost-cli -p bifrost-tui --offline
 ```
 
 ## One-Command Devnet
@@ -49,9 +48,9 @@ scripts/devnet-tmux.sh stop
 ## Relay
 
 ```bash
-cargo run -p bifrost-relay-dev -- 8194
+cargo run -p bifrost-devtools -- relay 8194
 # or
-cargo run -p bifrost-relay-dev -- --port 8194
+cargo run -p bifrost-devtools -- relay --port 8194
 ```
 
 Environment:
@@ -133,6 +132,6 @@ scripts/test-node-e2e.sh
 ## Notes
 
 - Current RPC is local, newline-delimited JSON over Unix sockets.
-- Inter-node transport is now Nostr-native (`REQ`/`EVENT`/`CLOSE`) through `bifrost-transport-ws` and `bifrost-relay-dev` (no raw JSON websocket envelope mode).
+- Inter-node transport is now Nostr-native (`REQ`/`EVENT`/`CLOSE`) through `bifrost-transport-ws` and `bifrost-devtools` (no raw JSON websocket envelope mode).
 - Inter-node event content is encrypted with NIP-44-v2-compatible payload processing (secp256k1 ECDH + HKDF + ChaCha20 + HMAC).
 - Production hardening tasks remain: authz, schema versioning policy, and stronger lifecycle supervision.

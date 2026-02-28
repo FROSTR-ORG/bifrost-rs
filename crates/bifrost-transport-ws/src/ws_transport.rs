@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use bifrost_codec::rpc::{decode_envelope, encode_envelope};
 use bifrost_transport::{
     IncomingMessage, OutgoingMessage, ResponseHandle, Transport, TransportError, TransportResult,
 };
-use base64::Engine;
-use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use futures_util::stream::FuturesUnordered;
@@ -86,6 +86,13 @@ struct SignedEvent {
 }
 
 #[derive(Debug)]
+struct PendingRequest {
+    expected_peer: String,
+    request_id: String,
+    tx: oneshot::Sender<IncomingMessage>,
+}
+
+#[derive(Debug)]
 pub struct WebSocketTransport {
     relays: Vec<String>,
     config: WsTransportConfig,
@@ -97,7 +104,7 @@ pub struct WebSocketTransport {
     outbound_tx: Arc<Mutex<Option<mpsc::UnboundedSender<Message>>>>,
     inbound_rx: Mutex<mpsc::UnboundedReceiver<IncomingMessage>>,
     inbound_tx: mpsc::UnboundedSender<IncomingMessage>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<IncomingMessage>>>>,
+    pending: Arc<Mutex<HashMap<String, PendingRequest>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -106,7 +113,11 @@ impl WebSocketTransport {
         Self::with_config(relays, WsTransportConfig::default(), nostr)
     }
 
-    pub fn with_config(relays: Vec<String>, config: WsTransportConfig, nostr: WsNostrConfig) -> Self {
+    pub fn with_config(
+        relays: Vec<String>,
+        config: WsTransportConfig,
+        nostr: WsNostrConfig,
+    ) -> Self {
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
         let relay_health = relays
             .iter()
@@ -206,16 +217,25 @@ impl WebSocketTransport {
 
     fn tag_value<'a>(tags: &'a [Vec<String>], key: &str) -> Option<&'a str> {
         for tag in tags {
-            if tag.first().map(String::as_str) == Some(key) {
-                if let Some(value) = tag.get(1) {
-                    return Some(value.as_str());
-                }
+            if tag.first().map(String::as_str) == Some(key)
+                && let Some(value) = tag.get(1)
+            {
+                return Some(value.as_str());
             }
         }
         None
     }
 
-    fn threshold_unreachable(successes: usize, attempted: usize, total: usize, required: usize) -> bool {
+    fn pending_key(request_id: &str, expected_peer: &str) -> String {
+        format!("{request_id}|{expected_peer}")
+    }
+
+    fn threshold_unreachable(
+        successes: usize,
+        attempted: usize,
+        total: usize,
+        required: usize,
+    ) -> bool {
         let remaining = total.saturating_sub(attempted);
         successes.saturating_add(remaining) < required
     }
@@ -261,7 +281,7 @@ impl WebSocketTransport {
     async fn mark_disconnected(
         active_relay: Arc<Mutex<Option<String>>>,
         outbound_tx: Arc<Mutex<Option<mpsc::UnboundedSender<Message>>>>,
-        pending: Arc<Mutex<HashMap<String, oneshot::Sender<IncomingMessage>>>>,
+        pending: Arc<Mutex<HashMap<String, PendingRequest>>>,
         connected: Arc<AtomicBool>,
         state: Arc<AtomicU8>,
     ) {
@@ -407,7 +427,11 @@ impl WebSocketTransport {
             .map_err(|e| TransportError::Backend(format!("invalid utf8 payload: {e}")))
     }
 
-    fn hmac_aad(hmac_key: &[u8; 32], nonce32: &[u8; 32], ciphertext: &[u8]) -> TransportResult<[u8; 32]> {
+    fn hmac_aad(
+        hmac_key: &[u8; 32],
+        nonce32: &[u8; 32],
+        ciphertext: &[u8],
+    ) -> TransportResult<[u8; 32]> {
         let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key)
             .map_err(|e| TransportError::Backend(format!("hmac init failed: {e}")))?;
         mac.update(nonce32);
@@ -451,13 +475,21 @@ impl WebSocketTransport {
         Ok(STANDARD_NO_PAD.encode(encoded))
     }
 
-    fn encrypt_content_for_peer(&self, peer_pubkey33: &str, plaintext: &str) -> TransportResult<String> {
+    fn encrypt_content_for_peer(
+        &self,
+        peer_pubkey33: &str,
+        plaintext: &str,
+    ) -> TransportResult<String> {
         let mut nonce32 = [0u8; 32];
         OsRng.fill_bytes(&mut nonce32);
         self.encrypt_content_for_peer_with_nonce(peer_pubkey33, plaintext, nonce32)
     }
 
-    fn decrypt_content_from_peer(&self, peer_pubkey33: &str, payload: &str) -> TransportResult<String> {
+    fn decrypt_content_from_peer(
+        &self,
+        peer_pubkey33: &str,
+        payload: &str,
+    ) -> TransportResult<String> {
         if payload.is_empty() || payload.starts_with('#') {
             return Err(TransportError::Backend(
                 "unknown encryption version".to_string(),
@@ -476,7 +508,9 @@ impl WebSocketTransport {
             .map_err(|e| TransportError::Backend(format!("invalid base64: {e}")))?;
         let dlen = data.len();
         if !(99..=65603).contains(&dlen) {
-            return Err(TransportError::Backend(format!("invalid data length: {dlen}")));
+            return Err(TransportError::Backend(format!(
+                "invalid data length: {dlen}"
+            )));
         }
         if data[0] != 2 {
             return Err(TransportError::Backend(format!(
@@ -523,7 +557,15 @@ impl WebSocketTransport {
             vec!["b".to_string(), sender_pubkey33],
         ];
 
-        let preimage = json!([0, sender_xonly, created_at, self.config.rpc_kind, tags, content]).to_string();
+        let preimage = json!([
+            0,
+            sender_xonly,
+            created_at,
+            self.config.rpc_kind,
+            tags,
+            content
+        ])
+        .to_string();
         let digest = Sha256::digest(preimage.as_bytes());
         let id = hex::encode(digest);
 
@@ -556,7 +598,7 @@ impl WebSocketTransport {
         };
 
         let frame = json!(["EVENT", signed]).to_string();
-        tx.send(Message::Text(frame.into()))
+        tx.send(Message::Text(frame))
             .map_err(|e| TransportError::Backend(e.to_string()))
     }
 
@@ -610,7 +652,7 @@ impl WebSocketTransport {
 
         let sub_msg = self.build_subscribe_message().to_string();
         out_tx
-            .send(Message::Text(sub_msg.into()))
+            .send(Message::Text(sub_msg))
             .map_err(|e| TransportError::Backend(e.to_string()))?;
 
         let inbound_tx = self.inbound_tx.clone();
@@ -685,7 +727,8 @@ impl WebSocketTransport {
                         let Some(event_value) = parts.get(2) else {
                             continue;
                         };
-                        let Ok(event) = serde_json::from_value::<SignedEvent>(event_value.clone()) else {
+                        let Ok(event) = serde_json::from_value::<SignedEvent>(event_value.clone())
+                        else {
                             continue;
                         };
 
@@ -693,7 +736,10 @@ impl WebSocketTransport {
                             continue;
                         }
 
-                        if !WebSocketTransport::event_mentions_recipient(&event.tags, &recipient_xonly) {
+                        if !WebSocketTransport::event_mentions_recipient(
+                            &event.tags,
+                            &recipient_xonly,
+                        ) {
                             continue;
                         }
 
@@ -703,14 +749,17 @@ impl WebSocketTransport {
                         if !known_peers.iter().any(|p| p == sender33) {
                             continue;
                         }
-                        let Some(sender_xonly) = WebSocketTransport::peer33_to_xonly(sender33) else {
+                        let Some(sender_xonly) = WebSocketTransport::peer33_to_xonly(sender33)
+                        else {
                             continue;
                         };
                         if sender_xonly != event.pubkey {
                             continue;
                         }
 
-                        let Ok(plaintext) = decryptor.decrypt_content_from_peer(sender33, &event.content) else {
+                        let Ok(plaintext) =
+                            decryptor.decrypt_content_from_peer(sender33, &event.content)
+                        else {
                             continue;
                         };
 
@@ -727,8 +776,15 @@ impl WebSocketTransport {
                         };
 
                         let mut pending_map = pending_reader.lock().await;
-                        if let Some(sender) = pending_map.remove(&incoming.envelope.id) {
-                            let _ = sender.send(incoming);
+                        let pending_key =
+                            WebSocketTransport::pending_key(&incoming.envelope.id, &incoming.peer);
+                        if let Some(pending) = pending_map.remove(&pending_key) {
+                            if pending.expected_peer != incoming.peer
+                                || pending.request_id != incoming.envelope.id
+                            {
+                                continue;
+                            }
+                            let _ = pending.tx.send(incoming);
                             continue;
                         }
                         drop(pending_map);
@@ -745,10 +801,9 @@ impl WebSocketTransport {
                     "OK" => {
                         if let (Some(Value::String(event_id)), Some(Value::Bool(ok))) =
                             (parts.get(1), parts.get(2))
+                            && !ok
                         {
-                            if !ok {
-                                debug!("relay rejected event {}", event_id);
-                            }
+                            debug!("relay rejected event {}", event_id);
                         }
                     }
                     _ => {}
@@ -827,7 +882,7 @@ impl Transport for WebSocketTransport {
         self.connected.store(false, Ordering::Relaxed);
 
         if let Some(tx) = self.outbound_tx.lock().await.clone() {
-            let _ = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string().into()));
+            let _ = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string()));
         }
 
         {
@@ -854,18 +909,30 @@ impl Transport for WebSocketTransport {
         Ok(())
     }
 
-    async fn request(&self, msg: OutgoingMessage, timeout_ms: u64) -> TransportResult<IncomingMessage> {
+    async fn request(
+        &self,
+        msg: OutgoingMessage,
+        timeout_ms: u64,
+    ) -> TransportResult<IncomingMessage> {
         self.ensure_connected()?;
 
         let (tx, rx) = oneshot::channel::<IncomingMessage>();
+        let pending_key = Self::pending_key(&msg.envelope.id, &msg.peer);
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(msg.envelope.id.clone(), tx);
+            pending.insert(
+                pending_key.clone(),
+                PendingRequest {
+                    expected_peer: msg.peer.clone(),
+                    request_id: msg.envelope.id.clone(),
+                    tx,
+                },
+            );
         }
 
         if let Err(err) = self.send_envelope(msg.clone()).await {
             let mut pending = self.pending.lock().await;
-            pending.remove(&msg.envelope.id);
+            pending.remove(&pending_key);
             return Err(err);
         }
 
@@ -876,7 +943,7 @@ impl Transport for WebSocketTransport {
             )),
             Err(_) => {
                 let mut pending = self.pending.lock().await;
-                pending.remove(&msg.envelope.id);
+                pending.remove(&pending_key);
                 Err(TransportError::Timeout)
             }
         }
@@ -901,10 +968,9 @@ impl Transport for WebSocketTransport {
         let mut last_err: Option<TransportError> = None;
 
         let mut inflight = FuturesUnordered::new();
-        for (i, peer) in peers.iter().enumerate() {
+        for peer in peers.iter() {
             let mut req = msg.clone();
             req.peer = peer.clone();
-            req.envelope.id = format!("{}:{}", req.envelope.id, i);
             inflight.push(async move { self.request(req, timeout_ms).await });
         }
 
@@ -1107,8 +1173,8 @@ mod tests {
 
     #[test]
     fn nip44_fixture_vectors() {
-        let file: VectorFile =
-            serde_json::from_str(include_str!("../tests/nip44_vectors.json")).expect("fixture json");
+        let file: VectorFile = serde_json::from_str(include_str!("../tests/nip44_vectors.json"))
+            .expect("fixture json");
         for v in file.vectors {
             let sender_sk = parse_hex32(&v.sec_sender_hex);
             let receiver_sk = parse_hex32(&v.sec_receiver_hex);
@@ -1138,9 +1204,10 @@ mod tests {
                             assert_eq!(plaintext, *expected, "{}", v.name);
                         }
                         Err(err) => {
-                            let expect_contains = v.expected_error_contains.as_ref().unwrap_or_else(
-                                || panic!("{} unexpected decrypt error: {err}", v.name),
-                            );
+                            let expect_contains =
+                                v.expected_error_contains.as_ref().unwrap_or_else(|| {
+                                    panic!("{} unexpected decrypt error: {err}", v.name)
+                                });
                             assert!(
                                 err.to_string().contains(expect_contains),
                                 "{} error mismatch: got '{err}' expected contains '{}'",
@@ -1239,5 +1306,59 @@ mod tests {
     fn threshold_unreachable_detects_impossible_quorum() {
         assert!(WebSocketTransport::threshold_unreachable(1, 3, 4, 3));
         assert!(!WebSocketTransport::threshold_unreachable(2, 3, 4, 3));
+    }
+
+    #[test]
+    fn connect_failover_forced_fault_records_relay_health() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let transport = WebSocketTransport::with_config(
+                vec![
+                    "not-a-valid-url".to_string(),
+                    "ws://127.0.0.1:0".to_string(),
+                ],
+                WsTransportConfig {
+                    max_retries: 1,
+                    backoff_initial_ms: 1,
+                    backoff_max_ms: 2,
+                    rpc_kind: 20_000,
+                },
+                WsNostrConfig {
+                    sender_pubkey33: pubkey33_hex(SEC1),
+                    sender_seckey32: SEC1,
+                    peer_pubkeys33: vec![pubkey33_hex(SEC2)],
+                },
+            );
+
+            let err = transport.connect().await.expect_err("connect should fail");
+            let err_text = err.to_string();
+            assert!(
+                err_text.contains("all relays failed")
+                    || err_text.contains("invalid relay URL")
+                    || err_text.contains("failed to connect")
+                    || err_text.contains("Connection refused")
+                    || err_text.contains("IO error"),
+                "unexpected connect error: {err_text}"
+            );
+
+            let health = transport.relay_health_snapshot().await;
+            let bad_url = health.get("not-a-valid-url").expect("bad-url relay health");
+            let bad_port = health
+                .get("ws://127.0.0.1:0")
+                .expect("bad-port relay health");
+            assert!(
+                bad_url.failures > 0,
+                "expected bad-url failures to increment"
+            );
+            assert!(
+                bad_port.failures > 0,
+                "expected bad-port failures to increment"
+            );
+            assert_eq!(transport.state(), ConnectionState::Disconnected);
+            assert!(transport.active_relay().await.is_none());
+        });
     }
 }

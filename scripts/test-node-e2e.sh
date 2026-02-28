@@ -3,14 +3,18 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVNET_SCRIPT="${ROOT_DIR}/scripts/devnet.sh"
+TOOLCHAIN_PREFLIGHT="${ROOT_DIR}/dev/scripts/toolchain_preflight.sh"
 DEVNET_DIR="${ROOT_DIR}/dev/data"
 ALICE_SOCKET="/tmp/bifrostd-alice.sock"
 ALICE_CFG="${DEVNET_DIR}/daemon-alice.json"
 OUT_DIR="${DEVNET_DIR}/logs"
 OUT_FILE="${OUT_DIR}/node-e2e-output.txt"
+SOCKET_WAIT_TIMEOUT_SECS="${SOCKET_WAIT_TIMEOUT_SECS:-60}"
+SOCKET_WAIT_INTERVAL_SECS="${SOCKET_WAIT_INTERVAL_SECS:-0.2}"
 
 mkdir -p "${OUT_DIR}"
 : >"${OUT_FILE}"
+"${TOOLCHAIN_PREFLIGHT}" --require-cargo >/dev/null
 
 log() {
   echo "[node-e2e] $*"
@@ -62,21 +66,35 @@ assert_any_contains() {
 extract_first_peer() {
   awk -F'"' '
     /"peers"[[:space:]]*:/ { in_peers=1; next }
-    in_peers && /"[0-9a-fA-F]+"/ { print $2; exit }
+    in_peers && /"pubkey"[[:space:]]*:/ { print $4; exit }
   ' "${ALICE_CFG}"
 }
 
 wait_for_socket() {
   local socket="$1"
-  local attempts=120
+  local timeout_secs="${2:-${SOCKET_WAIT_TIMEOUT_SECS}}"
+  local interval_secs="${3:-${SOCKET_WAIT_INTERVAL_SECS}}"
+  local attempts
+  attempts="$(awk "BEGIN { printf \"%d\", (${timeout_secs} / ${interval_secs}) }")"
+  if [[ "${attempts}" -lt 1 ]]; then
+    attempts=1
+  fi
   while (( attempts > 0 )); do
     if [[ -S "${socket}" ]]; then
       return 0
     fi
-    sleep 0.1
+    sleep "${interval_secs}"
     attempts=$((attempts - 1))
   done
-  echo "timed out waiting for socket: ${socket}" >&2
+  echo "timed out waiting for socket: ${socket} (timeout=${timeout_secs}s interval=${interval_secs}s)" >&2
+  if [[ -f "${OUT_DIR}/bifrostd-alice.log" ]]; then
+    echo "--- tail: ${OUT_DIR}/bifrostd-alice.log ---" >&2
+    tail -n 80 "${OUT_DIR}/bifrostd-alice.log" >&2 || true
+  fi
+  if [[ -f "${OUT_DIR}/relay.log" ]]; then
+    echo "--- tail: ${OUT_DIR}/relay.log ---" >&2
+    tail -n 80 "${OUT_DIR}/relay.log" >&2 || true
+  fi
   exit 1
 }
 
@@ -87,6 +105,10 @@ trap cleanup EXIT INT TERM
 
 log "generating keyset + share distribution"
 "${DEVNET_SCRIPT}" gen
+"${DEVNET_SCRIPT}" stop >/dev/null 2>&1 || true
+
+log "warming runtime binaries (cold-start stabilization)"
+cargo build -p bifrost-devtools -p bifrostd -p bifrost-cli --offline >/dev/null
 
 # Distribution/material checks
 assert_file_exists "${DEVNET_DIR}/group.json"

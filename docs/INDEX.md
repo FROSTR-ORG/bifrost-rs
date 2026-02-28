@@ -1,33 +1,51 @@
-# Documentation Index
+# Bifrost RS Manual
 
-`docs/` is the product manual and technical knowledgebase for `bifrost-rs`.
+`docs/` is the canonical product manual for operating, integrating, and maintaining `bifrost-rs`.
 
-## Recommended Read Order
+## Fast Paths
+
+- New operator: read `GUIDE.md` -> `OPERATIONS.md` -> `TROUBLESHOOTING.md`
+- Integrator/client author: read `GUIDE.md` -> `API.md` -> `PROTOCOL.md` -> `CONFIGURATION.md`
+- Security/release owner: read `SECURITY-MODEL.md` -> `CRYPTOGRAPHY.md` -> `OPERATIONS.md`
+
+## Manual Contents
 
 1. `GUIDE.md`
-2. `ARCHITECTURE.md`
-3. `API.md`
-4. `PROTOCOL.md`
-5. `CRYPTOGRAPHY.md`
-6. `SECURITY-MODEL.md`
-7. `GLOSSARY.md`
+- End-to-end local bootstrap and first successful operations.
 
-## Scope Boundaries
+2. `OPERATIONS.md`
+- Day-2 runbook: start/stop/status, health checks, e2e scripts, audit runs.
 
-- Keep package/runtime documentation in `docs/`.
-- Keep project governance at repo root:
-  - `CONTRIBUTING.md`
-  - `TESTING.md`
-  - `RELEASES.md`
-  - `SECURITY.md`
-  - `CHANGELOG.md`
-- Keep agent planning/execution material outside `docs/`:
-  - planner source-of-truth: `dev/planner/`
-  - execution/context artifacts: `dev/artifacts/`
+3. `CONFIGURATION.md`
+- Daemon config schema and practical defaults.
 
-## Related Project Areas
+4. `TROUBLESHOOTING.md`
+- Failure modes, diagnostics, and recovery commands.
 
-- `contrib/`: examples and helpful operational contributions (for example service profiles/scripts).
-- Root agent instructions:
-  - `AGENTS.md`
-  - `CLAUDE.md`
+5. `API.md`
+- Rust crate-level API map and daemon RPC method inventory.
+
+6. `frostr-utils/INDEX.md`
+- Shared utility manual for keyset lifecycle and onboarding package helpers.
+
+7. `PROTOCOL.md`
+- Peer and local RPC envelope formats and validation boundaries.
+
+8. `ARCHITECTURE.md`
+- Crate responsibilities, critical boundaries, and request data flow.
+
+9. `CRYPTOGRAPHY.md`
+- Signing/ECDH lifecycle and nonce safety model.
+
+10. `SECURITY-MODEL.md`
+- Threat model, control matrix, and residual risks.
+
+11. `GLOSSARY.md`
+- Shared terminology.
+
+## Out Of Scope For `docs/`
+
+The following are intentionally outside this manual:
+- Governance/process policy: `CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`, `CHANGELOG.md`
+- Migration planning state: `dev/planner/`
+- Execution artifacts and audits: `dev/artifacts/`, `dev/audit/`

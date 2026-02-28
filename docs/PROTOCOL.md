@@ -27,12 +27,16 @@ Payload methods:
 - `Ecdh`
 - `OnboardRequest`
 - `OnboardResponse`
+- `Error` (explicit peer policy deny/error response payload)
 
 Current validation boundaries:
 
 - envelope id non-empty, max length 256
+- envelope id canonical format: `<unix_ts>-<member_idx>-<seq>`
 - sender non-empty, max length 256
+- envelope version must equal `1`
 - echo max length 8192
+- outbound request responses are bound to expected peer identity
 
 Wire payload bounds (selected, from `wire.rs`):
 
@@ -40,6 +44,14 @@ Wire payload bounds (selected, from `wire.rs`):
 - `MAX_SIGN_BATCH_SIZE = 100`
 - `MAX_ECDH_BATCH_SIZE = 100`
 - `MAX_NONCE_PACKAGE = 1000`
+
+`Ping` payload includes:
+- optional nonce replenishment material
+- optional scoped peer-policy profile (`for_peer`, `revision`, `updated`, `block_all`, method-level `request/respond`)
+
+Encoding notes:
+
+- `SignSessionPackage.content` is binary-safe hex bytes (`Option<String>` on wire, `Option<Vec<u8>>` in core).
 
 Examples of enforced rejects:
 

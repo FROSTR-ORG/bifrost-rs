@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKLOG_FILE="${ROOT_DIR}/dev/planner/04-backlog.md"
 MILESTONES_FILE="${ROOT_DIR}/dev/planner/03-milestones.md"
+TOOLCHAIN_PREFLIGHT="${ROOT_DIR}/dev/scripts/toolchain_preflight.sh"
 
 usage() {
   cat <<'EOF'
@@ -213,11 +214,14 @@ set_status() {
 }
 
 verify() {
+  "${TOOLCHAIN_PREFLIGHT}" --require-cargo
   echo "Running baseline verification..."
+  (cd "${ROOT_DIR}" && cargo fmt --all -- --check)
+  (cd "${ROOT_DIR}" && cargo clippy --workspace --all-targets --offline --no-deps)
   (cd "${ROOT_DIR}" && cargo check -p bifrost-codec -p bifrost-core -p bifrost-node --offline)
   (cd "${ROOT_DIR}" && cargo test -p bifrost-codec -p bifrost-core -p bifrost-node --offline)
-  (cd "${ROOT_DIR}" && cargo check -p bifrost-devnet -p bifrost-relay-dev -p bifrostd -p bifrost-cli -p bifrost-tui --offline)
-  (cd "${ROOT_DIR}" && cargo test -p bifrost-relay-dev -p bifrost-rpc --offline)
+  (cd "${ROOT_DIR}" && cargo check -p bifrost-devtools -p bifrostd -p bifrost-cli -p bifrost-tui --offline)
+  (cd "${ROOT_DIR}" && cargo test -p bifrost-devtools -p bifrost-rpc --offline)
   echo "Verification complete."
 }
 

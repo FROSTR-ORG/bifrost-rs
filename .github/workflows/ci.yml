@@ -13,13 +13,17 @@ jobs:
       matrix:
         task:
           - fmt
+          - clippy
           - check
           - test-core
           - test-node
           - test-ws
           - test-ws-nip44
           - test-integration
+          - runtime-e2e
           - check-example
+          - coverage
+          - security-audit
 
     steps:
       - name: Checkout
@@ -38,6 +42,10 @@ jobs:
       - name: Cargo check workspace
         if: matrix.task == 'check'
         run: cargo check --workspace
+
+      - name: Cargo clippy
+        if: matrix.task == 'clippy'
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
       - name: Test core+codec
         if: matrix.task == 'test-core'
@@ -60,7 +68,54 @@ jobs:
         run: |
           cargo test -p bifrost-node --test happy_paths
           cargo test -p bifrost-node --test adversarial
+          cargo test -p bifrost-node --test fault_injection
+
+      - name: Runtime smoke and e2e
+        if: matrix.task == 'runtime-e2e'
+        run: |
+          scripts/devnet.sh smoke
+          scripts/test-node-e2e.sh
+          scripts/test-tui-e2e.sh
 
       - name: Check example package
         if: matrix.task == 'check-example'
         run: cargo check -p node_ws_multi_peer_example
+
+      - name: Install llvm-cov tooling
+        if: matrix.task == 'coverage'
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+
+      - name: Workspace coverage (llvm-cov)
+        if: matrix.task == 'coverage'
+        run: |
+          mkdir -p artifacts
+          cargo llvm-cov --workspace --lcov --output-path artifacts/lcov.info --summary-only
+          cargo llvm-cov report --summary-only | tee artifacts/coverage-summary.txt
+
+      - name: Upload coverage artifacts
+        if: matrix.task == 'coverage'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            artifacts/lcov.info
+            artifacts/coverage-summary.txt
+
+      - name: Install cargo-audit
+        if: matrix.task == 'security-audit'
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        if: matrix.task == 'security-audit'
+        run: |
+          mkdir -p artifacts
+          cargo audit 2>&1 | tee artifacts/cargo-audit.txt
+
+      - name: Upload cargo-audit artifact
+        if: matrix.task == 'security-audit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: artifacts/cargo-audit.txt

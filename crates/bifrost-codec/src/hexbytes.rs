@@ -17,3 +17,7 @@ pub fn decode<const N: usize>(value: &str) -> CodecResult<[u8; N]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
+
+pub fn decode_vec(value: &str) -> CodecResult<Vec<u8>> {
+    hex::decode(value).map_err(|_| CodecError::Hex)
+}

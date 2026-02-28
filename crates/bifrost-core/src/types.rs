@@ -41,10 +41,24 @@ pub struct MemberPublicNonce {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignSessionTemplate {
     pub members: Vec<u16>,
-    pub hashes: Vec<Vec<Bytes32>>,
+    pub hashes: Vec<Bytes32>,
     pub content: Option<Vec<u8>>,
     pub kind: String,
     pub stamp: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedPublicNonceCommitment {
+    pub hash_index: u16,
+    pub binder_pn: Bytes33,
+    pub hidden_pn: Bytes33,
+    pub code: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberNonceCommitmentSet {
+    pub idx: u16,
+    pub entries: Vec<IndexedPublicNonceCommitment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,11 +66,11 @@ pub struct SignSessionPackage {
     pub gid: Bytes32,
     pub sid: Bytes32,
     pub members: Vec<u16>,
-    pub hashes: Vec<Vec<Bytes32>>,
+    pub hashes: Vec<Bytes32>,
     pub content: Option<Vec<u8>>,
     pub kind: String,
     pub stamp: u32,
-    pub nonces: Option<Vec<MemberPublicNonce>>,
+    pub nonces: Option<Vec<MemberNonceCommitmentSet>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +80,7 @@ pub struct SignRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialSigEntry {
+    pub hash_index: u16,
     pub sighash: Bytes32,
     pub partial_sig: Bytes32,
 }
@@ -100,16 +115,55 @@ pub struct EcdhPackage {
     pub entries: Vec<EcdhEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PeerPolicy {
-    pub send: bool,
-    pub recv: bool,
+    pub block_all: bool,
+    pub request: MethodPolicy,
+    pub respond: MethodPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodPolicy {
+    pub echo: bool,
+    pub ping: bool,
+    pub onboard: bool,
+    pub sign: bool,
+    pub ecdh: bool,
+}
+
+impl Default for MethodPolicy {
+    fn default() -> Self {
+        Self {
+            echo: true,
+            ping: true,
+            onboard: true,
+            sign: true,
+            ecdh: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerScopedPolicyProfile {
+    pub for_peer: Bytes33,
+    pub revision: u64,
+    pub updated: u64,
+    pub block_all: bool,
+    pub request: MethodPolicy,
+    pub respond: MethodPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerError {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PingPayload {
     pub version: u16,
     pub nonces: Option<Vec<DerivedPublicNonce>>,
+    pub policy_profile: Option<PeerScopedPolicyProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

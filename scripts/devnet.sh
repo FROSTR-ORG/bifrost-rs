@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLCHAIN_PREFLIGHT="${ROOT_DIR}/dev/scripts/toolchain_preflight.sh"
 DEVNET_DIR="${ROOT_DIR}/dev/data"
 STATE_DIR="${DEVNET_DIR}/.state"
 LOG_DIR="${DEVNET_DIR}/logs"
@@ -10,6 +11,10 @@ RELAY_PORT="${RELAY_PORT:-8194}"
 RELAY_URL="ws://127.0.0.1:${RELAY_PORT}"
 
 mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+
+require_runtime_tools() {
+  "${TOOLCHAIN_PREFLIGHT}" --require-cargo >/dev/null
+}
 
 usage() {
   cat <<USAGE
@@ -25,7 +30,8 @@ USAGE
 }
 
 run_gen() {
-  cargo run -p bifrost-devnet --offline -- keygen \
+  require_runtime_tools
+  cargo run -p bifrost-devtools --offline -- keygen \
     --out-dir "${DEVNET_DIR}" \
     --threshold 2 \
     --count 3 \
@@ -35,13 +41,13 @@ run_gen() {
 
 start_relay() {
   local existing
-  existing="$(pgrep -f "bifrost-relay-dev.*${RELAY_PORT}" | head -n 1 || true)"
+  existing="$(pgrep -f "bifrost-devtools.*relay.*${RELAY_PORT}" | head -n 1 || true)"
   if [[ -n "${existing}" ]]; then
     RELAY_PID="${existing}"
     echo "relay already running on ${RELAY_PORT}"
     return
   fi
-  cargo run -p bifrost-relay-dev --offline -- "${RELAY_PORT}" \
+  cargo run -p bifrost-devtools --offline -- relay "${RELAY_PORT}" \
     >"${LOG_DIR}/relay.log" 2>&1 &
   RELAY_PID=$!
   echo "started relay pid=${RELAY_PID}"
@@ -58,6 +64,7 @@ start_daemon() {
 }
 
 run_start() {
+  require_runtime_tools
   : >"${PID_FILE}"
   start_relay
   echo "RELAY_PID=${RELAY_PID}" >>"${PID_FILE}"
@@ -114,6 +121,7 @@ run_status() {
 }
 
 run_smoke() {
+  require_runtime_tools
   run_gen
   run_start
 

@@ -12,11 +12,13 @@ serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 k256.workspace = true
+rand_core.workspace = true
 futures.workspace = true
 tokio.workspace = true
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 bifrost-transport = { path = "../bifrost-transport" }
+frostr-utils = { path = "../frostr-utils" }
 
 [dev-dependencies]
 frost-secp256k1-tr-unofficial.workspace = true

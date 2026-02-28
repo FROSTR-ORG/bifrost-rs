@@ -21,6 +21,16 @@ struct Case {
 fn cli_e2e_covers_all_rpc_commands() {
     let cases = vec![
         Case {
+            name: "negotiate",
+            cli_args: vec!["negotiate", "bifrost-cli-test", "1"],
+            expected_request: BifrostRpcRequest::Negotiate {
+                client_name: "bifrost-cli-test".to_string(),
+                client_version: 1,
+            },
+            response_data: serde_json::json!({"compatible": true, "server_version": 1}),
+            expected_stdout: "\"compatible\": true",
+        },
+        Case {
             name: "health",
             cli_args: vec!["health"],
             expected_request: BifrostRpcRequest::Health,

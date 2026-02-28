@@ -50,18 +50,16 @@ Required files:
 Run from repo root:
 
 ```bash
+dev/scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline --no-deps
 cargo check --workspace --offline
 cargo test -p bifrost-core -p bifrost-codec -p bifrost-node -p bifrost-transport-ws --offline
-cargo test -p bifrost-relay-dev -p bifrost-rpc --offline
+cargo test -p bifrost-devtools -p bifrost-rpc --offline
 scripts/test-node-e2e.sh
 scripts/test-tui-e2e.sh
 dev/scripts/planner_runbook.sh summary
-```
-
-Optional security scan (if installed and network policy allows):
-
-```bash
-cargo audit
+cargo audit | tee dev/audit/work/evidence/cargo-audit.log
 ```
 
 ## Execution Rules

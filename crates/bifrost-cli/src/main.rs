@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use bifrost_rpc::{
-    BifrostRpcRequest, BifrostRpcResponse, next_request_id, request, send_request_to,
-};
+use bifrost_rpc::{BifrostRpcRequest, DaemonClient, PeerPolicyView};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,6 +38,17 @@ async fn main() -> Result<()> {
     let tail = &args[(idx + 1)..];
 
     let req = match command.as_str() {
+        "negotiate" => {
+            let client_name = tail
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "bifrost-cli".to_string());
+            let client_version = tail.get(1).and_then(|v| v.parse::<u16>().ok()).unwrap_or(1);
+            BifrostRpcRequest::Negotiate {
+                client_name,
+                client_version,
+            }
+        }
         "health" => BifrostRpcRequest::Health,
         "status" => BifrostRpcRequest::Status,
         "events" => {
@@ -84,21 +93,56 @@ async fn main() -> Result<()> {
                 pubkey33_hex: pubkey33_hex.clone(),
             }
         }
+        "policy" => {
+            let sub = tail
+                .first()
+                .ok_or_else(|| anyhow!("usage: policy <list|get|set|refresh> ..."))?;
+            match sub.as_str() {
+                "list" => BifrostRpcRequest::GetPeerPolicies,
+                "get" => {
+                    let peer = tail
+                        .get(1)
+                        .ok_or_else(|| anyhow!("usage: policy get <peer>"))?;
+                    BifrostRpcRequest::GetPeerPolicy { peer: peer.clone() }
+                }
+                "refresh" => {
+                    let peer = tail
+                        .get(1)
+                        .ok_or_else(|| anyhow!("usage: policy refresh <peer>"))?;
+                    BifrostRpcRequest::RefreshPeerPolicy { peer: peer.clone() }
+                }
+                "set" => {
+                    let peer = tail
+                        .get(1)
+                        .ok_or_else(|| anyhow!("usage: policy set <peer> <json-policy>"))?;
+                    let raw = tail
+                        .get(2)
+                        .ok_or_else(|| anyhow!("usage: policy set <peer> <json-policy>"))?;
+                    let policy: PeerPolicyView = serde_json::from_str(raw)
+                        .map_err(|e| anyhow!("invalid policy json: {e}"))?;
+                    BifrostRpcRequest::SetPeerPolicy {
+                        peer: peer.clone(),
+                        policy,
+                    }
+                }
+                _ => return Err(anyhow!("usage: policy <list|get|set|refresh> ...")),
+            }
+        }
         "shutdown" => BifrostRpcRequest::Shutdown,
         _ => return Err(anyhow!("unknown command: {command}")),
     };
 
-    let resp = send_request_to(&socket, request(next_request_id(), req)).await?;
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-        return Ok(());
-    }
-
-    match resp.response {
-        BifrostRpcResponse::Ok(data) => println!("{}", serde_json::to_string_pretty(&data)?),
-        BifrostRpcResponse::Err { code, message } => {
-            eprintln!("rpc error ({code}): {message}");
+    let client = DaemonClient::new(socket);
+    match client.call(req).await {
+        Ok(data) => {
+            if json_output {
+                println!("{}", serde_json::to_string(&data)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&data)?);
+            }
+        }
+        Err(err) => {
+            eprintln!("{err}");
             std::process::exit(1);
         }
     }
@@ -108,6 +152,6 @@ async fn main() -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "bifrost-cli [--socket PATH] [--json] <command> [args]\n\ncommands:\n  health\n  status\n  events [limit]\n  echo <peer> <message>\n  ping <peer>\n  onboard <peer>\n  sign <32-byte-hex>\n  ecdh <33-byte-hex>\n  shutdown"
+        "bifrost-cli [--socket PATH] [--json] <command> [args]\n\ncommands:\n  negotiate [client_name] [client_version]\n  health\n  status\n  events [limit]\n  echo <peer> <message>\n  ping <peer>\n  onboard <peer>\n  sign <32-byte-hex>\n  ecdh <33-byte-hex>\n  policy list\n  policy get <peer>\n  policy set <peer> <json-policy>\n  policy refresh <peer>\n  shutdown"
     );
 }

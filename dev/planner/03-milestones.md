@@ -121,3 +121,17 @@
 - Blocking dependencies:
 - Exact NIP-44 payload compatibility vectors remain follow-up parity hardening.
 - Effort band: `M`
+
+## M13: Final Parity Closure
+- Status: `done`
+- Deliverables:
+- Option-A-only single-session multi-hash signing architecture across core/node/codec.
+- Validation+sighash utility parity helpers in `bifrost-core`.
+- Rust facade parity surface (`NodeClient`, `Signer`, `NoncePoolView`) and middleware hooks.
+- Schema/types/package helper parity closure and matrix evidence updates.
+- Acceptance checks:
+- Remaining `in_progress`/`todo` rows in `02-parity-matrix.md` moved to `done` with evidence.
+- Full gate pass: fmt/clippy/check/tests + node/tui e2e + planner verify + cargo audit.
+- Blocking dependencies:
+- None.
+- Effort band: `L`

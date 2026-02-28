@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 use crate::error::{CoreError, CoreResult};
 use crate::group::get_group_id;
@@ -8,23 +9,27 @@ pub fn create_session_package(
     group: &GroupPackage,
     template: SignSessionTemplate,
 ) -> CoreResult<SignSessionPackage> {
-    if template.members.is_empty() {
-        return Err(CoreError::EmptySessionMembers);
-    }
+    let members = canonicalize_and_validate_members(group, &template.members)?;
     if template.hashes.is_empty() {
-        return Err(CoreError::EmptySessionHashes);
-    }
-    if template.hashes.iter().any(Vec::is_empty) {
         return Err(CoreError::EmptySessionHashes);
     }
 
     let gid = get_group_id(group)?;
-    let sid = get_session_id(gid, &template)?;
+    let sid = get_session_id(
+        gid,
+        &SignSessionTemplate {
+            members: members.clone(),
+            hashes: template.hashes.clone(),
+            content: template.content.clone(),
+            kind: template.kind.clone(),
+            stamp: template.stamp,
+        },
+    )?;
 
     Ok(SignSessionPackage {
         gid,
         sid,
-        members: template.members,
+        members,
         hashes: template.hashes,
         content: template.content,
         kind: template.kind,
@@ -42,8 +47,13 @@ pub fn verify_session_package(
         return Err(CoreError::SessionGroupIdMismatch);
     }
 
+    let members = canonicalize_and_validate_members(group, &session.members)?;
+    if session.members != members {
+        return Err(CoreError::SessionIdMismatch);
+    }
+
     let template = SignSessionTemplate {
-        members: session.members.clone(),
+        members,
         hashes: session.hashes.clone(),
         content: session.content.clone(),
         kind: session.kind.clone(),
@@ -59,29 +69,20 @@ pub fn verify_session_package(
 }
 
 pub fn get_session_id(group_id: Bytes32, template: &SignSessionTemplate) -> CoreResult<Bytes32> {
-    if template.members.is_empty() {
-        return Err(CoreError::EmptySessionMembers);
-    }
+    validate_canonical_members(&template.members)?;
     if template.hashes.is_empty() {
-        return Err(CoreError::EmptySessionHashes);
-    }
-    if template.hashes.iter().any(Vec::is_empty) {
         return Err(CoreError::EmptySessionHashes);
     }
 
     let mut hasher = Sha256::new();
     hasher.update(group_id);
 
-    let mut members = template.members.clone();
-    members.sort_unstable();
-    for idx in members {
-        hasher.update((idx as u32).to_le_bytes());
+    for idx in &template.members {
+        hasher.update((*idx as u32).to_le_bytes());
     }
 
-    for vec in &template.hashes {
-        for sighash in vec {
-            hasher.update(sighash);
-        }
+    for sighash in &template.hashes {
+        hasher.update(sighash);
     }
 
     match &template.content {
@@ -93,6 +94,43 @@ pub fn get_session_id(group_id: Bytes32, template: &SignSessionTemplate) -> Core
     hasher.update(template.stamp.to_le_bytes());
 
     Ok(hasher.finalize().into())
+}
+
+fn canonicalize_and_validate_members(
+    group: &GroupPackage,
+    members: &[u16],
+) -> CoreResult<Vec<u16>> {
+    if members.is_empty() {
+        return Err(CoreError::EmptySessionMembers);
+    }
+    if members.len() < group.threshold as usize {
+        return Err(CoreError::InvalidThreshold);
+    }
+
+    let group_members: HashSet<u16> = group.members.iter().map(|m| m.idx).collect();
+    let mut canonical = members.to_vec();
+    canonical.sort_unstable();
+    validate_canonical_members(&canonical)?;
+    if !canonical.iter().all(|m| group_members.contains(m)) {
+        return Err(CoreError::MissingMember);
+    }
+
+    Ok(canonical)
+}
+
+fn validate_canonical_members(members: &[u16]) -> CoreResult<()> {
+    if members.is_empty() {
+        return Err(CoreError::EmptySessionMembers);
+    }
+    for pair in members.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(CoreError::DuplicateSessionMember);
+        }
+        if pair[0] > pair[1] {
+            return Err(CoreError::SessionIdMismatch);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -122,7 +160,7 @@ mod tests {
         let group = sample_group();
         let template = SignSessionTemplate {
             members: vec![2, 1],
-            hashes: vec![vec![[9; 32]]],
+            hashes: vec![[9; 32]],
             content: Some(b"hello".to_vec()),
             kind: "message".to_string(),
             stamp: 100,
@@ -138,7 +176,7 @@ mod tests {
         let group = sample_group();
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![[10; 32]]],
+            hashes: vec![[10; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 42,
@@ -149,11 +187,41 @@ mod tests {
     }
 
     #[test]
-    fn create_session_rejects_empty_inner_hashes() {
+    fn create_session_rejects_duplicate_members() {
+        let group = sample_group();
+        let template = SignSessionTemplate {
+            members: vec![1, 1],
+            hashes: vec![[10; 32]],
+            content: None,
+            kind: "message".to_string(),
+            stamp: 42,
+        };
+        let err = create_session_package(&group, template).expect_err("must reject duplicates");
+        assert!(matches!(err, CoreError::DuplicateSessionMember));
+    }
+
+    #[test]
+    fn verify_session_rejects_non_canonical_members() {
         let group = sample_group();
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![]],
+            hashes: vec![[10; 32]],
+            content: None,
+            kind: "message".to_string(),
+            stamp: 42,
+        };
+        let mut pkg = create_session_package(&group, template).expect("session package");
+        pkg.members = vec![2, 1];
+        let err = verify_session_package(&group, &pkg).expect_err("must reject non-canonical");
+        assert!(matches!(err, CoreError::SessionIdMismatch));
+    }
+
+    #[test]
+    fn create_session_rejects_empty_hashes() {
+        let group = sample_group();
+        let template = SignSessionTemplate {
+            members: vec![1, 2],
+            hashes: vec![],
             content: None,
             kind: "message".to_string(),
             stamp: 7,

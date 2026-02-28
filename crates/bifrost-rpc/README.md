@@ -4,4 +4,8 @@ Shared local RPC schema and client helpers for `bifrostd`, `bifrost-cli`, and `b
 
 - Transport: newline-delimited JSON over Unix sockets.
 - Envelope: `RpcRequestEnvelope` / `RpcResponseEnvelope`.
-- Methods: health/status/events/echo/ping/onboard/sign/ecdh/shutdown.
+- Envelope fields include:
+  - `rpc_version` (defaults to `1`)
+  - `auth_token` (optional; sourced from `BIFROST_RPC_TOKEN` by client helper)
+- Methods: negotiate/health/status/events/echo/ping/onboard/sign/ecdh/shutdown.
+- High-level app client: `DaemonClient` for CLI/TUI-style request workflows.

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::types::{BifrostRpcRequest, RpcRequestEnvelope, RpcResponseEnvelope};
+use crate::types::{BifrostRpcRequest, RPC_VERSION, RpcRequestEnvelope, RpcResponseEnvelope};
 
 pub async fn send_request_to(
     socket_path: &Path,
@@ -51,5 +51,13 @@ pub fn next_request_id() -> u64 {
 }
 
 pub fn request(id: u64, request: BifrostRpcRequest) -> RpcRequestEnvelope {
-    RpcRequestEnvelope { id, request }
+    let auth_token = std::env::var("BIFROST_RPC_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty());
+    RpcRequestEnvelope {
+        id,
+        rpc_version: RPC_VERSION,
+        auth_token,
+        request,
+    }
 }

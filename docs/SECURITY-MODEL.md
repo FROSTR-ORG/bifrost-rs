@@ -32,12 +32,15 @@ Threat model and control map for `bifrost-rs`.
 | replay/stale request IDs | replay cache + TTL checks | `bifrost-node` |
 | nonce misuse | nonce claim/consume guardrails | `bifrost-core`, `bifrost-node` |
 | quorum underflow misuse | explicit threshold and insufficient-peer errors | `bifrost-node`, transport |
-| daemon RPC misuse | local Unix socket boundary | `bifrostd` deployment controls |
+| daemon RPC misuse | token-based authn/authz policy + local Unix socket boundary | `bifrostd` |
+| daemon RPC frame exhaustion | bounded RPC line framing | `bifrostd` |
 
 ## Runtime Security Notes
 
-- `bifrostd` currently uses local socket access control by filesystem permissions; explicit RPC authn/authz is not yet implemented.
-- `Shutdown` RPC exists; operators should restrict socket path permissions and process ownership.
+- `bifrostd` enforces token auth when `auth.token` is configured.
+- If `auth.token` is omitted, startup fails unless `auth.insecure_no_auth=true` is explicitly set (dev-only mode).
+- RPC request lines are bounded (`64 KiB`) to reduce local resource-exhaustion exposure.
+- `Shutdown` RPC remains privileged; operators should restrict socket path and process ownership.
 
 ## Deployment Guidance
 
@@ -48,7 +51,7 @@ Threat model and control map for `bifrost-rs`.
 
 ## Residual Risks / Open Work
 
-- RPC authentication/authorization layer
+- dev environments that choose `auth.insecure_no_auth=true` accept a local control-plane trust risk
 - formal protocol version negotiation policy
 - deeper adversarial transport tests (fault injection, prolonged reconnect stress)
 

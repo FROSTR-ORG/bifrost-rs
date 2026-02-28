@@ -88,10 +88,6 @@ impl NostrRelay {
         }
     }
 
-    pub fn connection_count(&self) -> usize {
-        self.state.blocking_lock().conn
-    }
-
     pub async fn start(&self) -> Result<()> {
         let addr = format!("{}:{}", self.host, self.port);
         let listener = TcpListener::bind(&addr)
@@ -261,14 +257,14 @@ impl NostrRelay {
                     }
                     if match_filter(event, filter) {
                         let msg = json!(["EVENT", sub_id, event]);
-                        let _ = tx.send(Message::Text(msg.to_string().into()));
+                        let _ = tx.send(Message::Text(msg.to_string()));
                         if let Some(rem) = remaining.as_mut() {
                             *rem = rem.saturating_sub(1);
                         }
                     }
                 }
             }
-            let _ = tx.send(Message::Text(json!(["EOSE", sub_id]).to_string().into()));
+            let _ = tx.send(Message::Text(json!(["EOSE", sub_id]).to_string()));
         }
     }
 
@@ -319,7 +315,7 @@ impl NostrRelay {
             }
             if let Some(tx) = clients.get(&sub.client_id) {
                 let msg = json!(["EVENT", sub.sub_id, event]);
-                let _ = tx.send(Message::Text(msg.to_string().into()));
+                let _ = tx.send(Message::Text(msg.to_string()));
             }
         }
     }
@@ -330,7 +326,7 @@ impl NostrRelay {
             state.clients.get(&client_id).cloned()
         };
         if let Some(tx) = sender {
-            let _ = tx.send(Message::Text(json!(["NOTICE", notice]).to_string().into()));
+            let _ = tx.send(Message::Text(json!(["NOTICE", notice]).to_string()));
         }
     }
 
@@ -341,37 +337,37 @@ impl NostrRelay {
         };
         if let Some(tx) = sender {
             let _ = tx.send(Message::Text(
-                json!(["OK", event_id, ok, reason]).to_string().into(),
+                json!(["OK", event_id, ok, reason]).to_string(),
             ));
         }
     }
 }
 
 pub fn match_filter(event: &SignedEvent, filter: &EventFilter) -> bool {
-    if let Some(ids) = &filter.ids {
-        if !ids.iter().any(|i| i == &event.id) {
-            return false;
-        }
+    if let Some(ids) = &filter.ids
+        && !ids.iter().any(|i| i == &event.id)
+    {
+        return false;
     }
-    if let Some(since) = filter.since {
-        if event.created_at < since {
-            return false;
-        }
+    if let Some(since) = filter.since
+        && event.created_at < since
+    {
+        return false;
     }
-    if let Some(until) = filter.until {
-        if event.created_at > until {
-            return false;
-        }
+    if let Some(until) = filter.until
+        && event.created_at > until
+    {
+        return false;
     }
-    if let Some(authors) = &filter.authors {
-        if !authors.iter().any(|a| a == &event.pubkey) {
-            return false;
-        }
+    if let Some(authors) = &filter.authors
+        && !authors.iter().any(|a| a == &event.pubkey)
+    {
+        return false;
     }
-    if let Some(kinds) = &filter.kinds {
-        if !kinds.iter().any(|k| *k == event.kind) {
-            return false;
-        }
+    if let Some(kinds) = &filter.kinds
+        && !kinds.contains(&event.kind)
+    {
+        return false;
     }
 
     let tag_filters = filter

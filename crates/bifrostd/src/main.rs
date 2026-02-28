@@ -1,21 +1,24 @@
 use std::collections::VecDeque;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_codec::wire::{OnboardResponseWire, PingPayloadWire};
 use bifrost_codec::{parse_group_package, parse_share_package};
-use bifrost_core::local_pubkey_from_share;
-use bifrost_node::{BifrostNode, BifrostNodeOptions, NodeEvent, PeerStatus};
+use bifrost_core::{decode_fixed_hex, local_pubkey_from_share};
+use bifrost_node::{
+    BifrostNode, BifrostNodeOptions, MethodPolicy, NodeEvent, PeerPolicy, PeerStatus,
+};
 use bifrost_rpc::{
-    BifrostRpcRequest, BifrostRpcResponse, DaemonStatus, PeerView, RpcRequestEnvelope,
-    RpcResponseEnvelope,
+    BifrostRpcRequest, BifrostRpcResponse, DaemonStatus, MethodPolicyView, PeerPolicyView,
+    PeerView, RpcRequestEnvelope, RpcResponseEnvelope,
 };
 use bifrost_transport::Clock;
 use bifrost_transport_ws::{WebSocketTransport, WsNostrConfig, WsTransportConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
@@ -24,12 +27,20 @@ struct DaemonConfig {
     socket_path: String,
     group_path: String,
     share_path: String,
-    peers: Vec<String>,
+    peers: Vec<DaemonPeerConfig>,
     relays: Vec<String>,
     #[serde(default)]
     options: Option<BifrostNodeOptions>,
     #[serde(default)]
     transport: DaemonTransportConfig,
+    #[serde(default)]
+    auth: DaemonAuthConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonPeerConfig {
+    pubkey: String,
+    policy: PeerPolicyView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +58,22 @@ struct DaemonTransportConfig {
     #[serde(default)]
     sender_seckey32_hex: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DaemonAuthConfig {
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    allow_unauthenticated_read: bool,
+    #[serde(default)]
+    insecure_no_auth: bool,
+}
+
+const RPC_SERVER_NAME: &str = "bifrostd";
+const RPC_VERSION_MIN_SUPPORTED: u16 = 1;
+const RPC_VERSION_MAX_SUPPORTED: u16 = 1;
+const RPC_MAX_LINE_BYTES: usize = 64 * 1024;
+const SOCKET_MODE_SECURE: u32 = 0o600;
 
 impl Default for DaemonTransportConfig {
     fn default() -> Self {
@@ -94,6 +121,7 @@ struct DaemonState {
     node: Arc<BifrostNode<WebSocketTransport, SystemClock>>,
     events: Arc<Mutex<VecDeque<String>>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    auth: DaemonAuthConfig,
 }
 
 #[tokio::main]
@@ -129,10 +157,15 @@ async fn main() -> Result<()> {
         ));
     }
 
+    let peer_pubkeys = cfg
+        .peers
+        .iter()
+        .map(|p| p.pubkey.clone())
+        .collect::<Vec<_>>();
     let nostr_cfg = WsNostrConfig {
         sender_pubkey33,
         sender_seckey32,
-        peer_pubkeys33: cfg.peers.clone(),
+        peer_pubkeys33: peer_pubkeys.clone(),
     };
     let transport = Arc::new(WebSocketTransport::with_config(
         cfg.relays.clone(),
@@ -147,11 +180,14 @@ async fn main() -> Result<()> {
     let node = Arc::new(BifrostNode::new(
         group,
         share,
-        cfg.peers.clone(),
+        peer_pubkeys,
         transport,
         Arc::new(SystemClock),
         cfg.options,
     )?);
+    for peer in &cfg.peers {
+        node.set_peer_policy(&peer.pubkey, rpc_policy_to_node(peer.policy.clone()))?;
+    }
 
     node.connect().await.context("node connect")?;
 
@@ -161,6 +197,7 @@ async fn main() -> Result<()> {
         node: node.clone(),
         events: events.clone(),
         stop: stop.clone(),
+        auth: cfg.auth.clone(),
     };
 
     spawn_event_collector(node.clone(), events.clone(), stop.clone());
@@ -172,6 +209,11 @@ async fn main() -> Result<()> {
 
     let listener = UnixListener::bind(&cfg.socket_path)
         .with_context(|| format!("bind unix socket {}", cfg.socket_path))?;
+    std::fs::set_permissions(
+        &cfg.socket_path,
+        std::fs::Permissions::from_mode(SOCKET_MODE_SECURE),
+    )
+    .with_context(|| format!("set socket permissions {}", cfg.socket_path))?;
     println!("bifrostd listening on {}", cfg.socket_path);
 
     loop {
@@ -249,20 +291,44 @@ async fn load_config(path: &Path) -> Result<DaemonConfig> {
     if cfg.peers.is_empty() {
         return Err(anyhow!("daemon config must include at least one peer"));
     }
+    if cfg.auth.token.is_none() && !cfg.auth.insecure_no_auth {
+        return Err(anyhow!(
+            "daemon auth requires auth.token unless auth.insecure_no_auth=true"
+        ));
+    }
+    if cfg.auth.token.is_none() && cfg.auth.allow_unauthenticated_read {
+        return Err(anyhow!(
+            "auth.allow_unauthenticated_read requires auth.token to be configured"
+        ));
+    }
     Ok(cfg)
 }
 
 async fn handle_client(state: DaemonState, stream: UnixStream) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
 
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await.context("read rpc line")?;
-        if n == 0 {
-            break;
-        }
+        let line = match read_rpc_line(&mut reader, RPC_MAX_LINE_BYTES).await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                let code = if err.to_string().contains("line exceeds") {
+                    413
+                } else {
+                    400
+                };
+                let resp = RpcResponseEnvelope {
+                    id: 0,
+                    response: BifrostRpcResponse::Err {
+                        code,
+                        message: format!("invalid request: {err}"),
+                    },
+                };
+                write_response(&mut write_half, &resp).await?;
+                break;
+            }
+        };
 
         let req: RpcRequestEnvelope = match serde_json::from_str(line.trim()) {
             Ok(v) => v,
@@ -286,16 +352,82 @@ async fn handle_client(state: DaemonState, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
+async fn read_rpc_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_len: usize,
+) -> Result<Option<String>> {
+    let mut raw = Vec::new();
+    let n = reader
+        .take((max_len + 1) as u64)
+        .read_until(b'\n', &mut raw)
+        .await
+        .context("read rpc line")?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if raw.len() > max_len {
+        return Err(anyhow!("rpc line exceeds maximum of {max_len} bytes"));
+    }
+
+    if raw.last() == Some(&b'\n') {
+        raw.pop();
+    }
+    if raw.last() == Some(&b'\r') {
+        raw.pop();
+    }
+
+    let line = String::from_utf8(raw).context("rpc payload must be utf-8")?;
+    Ok(Some(line))
+}
+
 async fn execute_request(state: &DaemonState, req: RpcRequestEnvelope) -> RpcResponseEnvelope {
     let id = req.id;
+    if !is_rpc_version_supported(req.rpc_version) {
+        return RpcResponseEnvelope {
+            id,
+            response: BifrostRpcResponse::Err {
+                code: 426,
+                message: format!(
+                    "unsupported rpc_version={} (supported={}..={})",
+                    req.rpc_version, RPC_VERSION_MIN_SUPPORTED, RPC_VERSION_MAX_SUPPORTED
+                ),
+            },
+        };
+    }
+
+    if !is_request_authorized(&state.auth, &req) {
+        return RpcResponseEnvelope {
+            id,
+            response: BifrostRpcResponse::Err {
+                code: 401,
+                message: "unauthorized rpc request".to_string(),
+            },
+        };
+    }
+
     let result: Result<serde_json::Value, anyhow::Error> = async {
         match req.request {
+            BifrostRpcRequest::Negotiate {
+                client_name,
+                client_version,
+            } => {
+                let compatible = is_rpc_version_supported(client_version);
+                Ok(json!({
+                    "server_name": RPC_SERVER_NAME,
+                    "server_version": RPC_VERSION_MAX_SUPPORTED,
+                    "min_supported": RPC_VERSION_MIN_SUPPORTED,
+                    "max_supported": RPC_VERSION_MAX_SUPPORTED,
+                    "client_name": client_name,
+                    "client_version": client_version,
+                    "compatible": compatible
+                }))
+            }
             BifrostRpcRequest::Health => Ok(json!({"ok": true})),
             BifrostRpcRequest::Status => {
                 let nonce_cfg = state.node.nonce_pool_config();
                 let peers = state
                     .node
-                    .peers()
+                    .peers_snapshot()
                     .iter()
                     .map(|p| {
                         let nonce = state.node.peer_nonce_health(&p.pubkey).ok();
@@ -306,8 +438,9 @@ async fn execute_request(state: &DaemonState, req: RpcRequestEnvelope) -> RpcRes
                                 PeerStatus::Online => "online".to_string(),
                                 PeerStatus::Offline => "offline".to_string(),
                             },
-                            send: p.policy.send,
-                            recv: p.policy.recv,
+                            block_all: p.policy.block_all,
+                            request: node_method_to_rpc(p.policy.request),
+                            respond: node_method_to_rpc(p.policy.respond),
                             updated: p.updated,
                             nonce_incoming_available: nonce
                                 .as_ref()
@@ -367,6 +500,29 @@ async fn execute_request(state: &DaemonState, req: RpcRequestEnvelope) -> RpcRes
                 let key = state.node.ecdh(bytes).await?;
                 Ok(json!({ "shared_secret": hex::encode(key) }))
             }
+            BifrostRpcRequest::GetPeerPolicies => {
+                let policies = state
+                    .node
+                    .peer_policies()?
+                    .into_iter()
+                    .map(|(peer, policy)| json!({"peer": peer, "policy": node_policy_to_rpc(policy)}))
+                    .collect::<Vec<_>>();
+                Ok(json!({ "policies": policies }))
+            }
+            BifrostRpcRequest::GetPeerPolicy { peer } => {
+                let policy = state.node.peer_policy(&peer)?;
+                Ok(json!({ "peer": peer, "policy": node_policy_to_rpc(policy) }))
+            }
+            BifrostRpcRequest::SetPeerPolicy { peer, policy } => {
+                state
+                    .node
+                    .set_peer_policy(&peer, rpc_policy_to_node(policy))?;
+                Ok(json!({ "ok": true }))
+            }
+            BifrostRpcRequest::RefreshPeerPolicy { peer } => {
+                let out = state.node.ping(&peer).await?;
+                Ok(json!({ "ok": true, "ping": PingPayloadWire::from(out) }))
+            }
             BifrostRpcRequest::Shutdown => {
                 state.stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok(json!({ "shutting_down": true }))
@@ -390,6 +546,34 @@ async fn execute_request(state: &DaemonState, req: RpcRequestEnvelope) -> RpcRes
     }
 }
 
+fn is_rpc_version_supported(version: u16) -> bool {
+    (RPC_VERSION_MIN_SUPPORTED..=RPC_VERSION_MAX_SUPPORTED).contains(&version)
+}
+
+fn is_read_only_request(req: &BifrostRpcRequest) -> bool {
+    matches!(
+        req,
+        BifrostRpcRequest::Negotiate { .. }
+            | BifrostRpcRequest::Health
+            | BifrostRpcRequest::Status
+            | BifrostRpcRequest::Events { .. }
+            | BifrostRpcRequest::GetPeerPolicies
+            | BifrostRpcRequest::GetPeerPolicy { .. }
+    )
+}
+
+fn is_request_authorized(auth: &DaemonAuthConfig, req: &RpcRequestEnvelope) -> bool {
+    let Some(expected) = auth.token.as_ref() else {
+        return auth.insecure_no_auth;
+    };
+
+    if req.auth_token.as_deref() == Some(expected.as_str()) {
+        return true;
+    }
+
+    auth.allow_unauthenticated_read && is_read_only_request(&req.request)
+}
+
 async fn write_response<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
     resp: &RpcResponseEnvelope,
@@ -405,13 +589,43 @@ async fn write_response<W: AsyncWriteExt + Unpin>(
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str) -> Result<[u8; N]> {
-    let bytes = hex::decode(value).with_context(|| format!("invalid hex input: {value}"))?;
-    if bytes.len() != N {
-        return Err(anyhow!("expected {N} bytes but got {}", bytes.len()));
+    decode_fixed_hex::<N>(value).map_err(|e| anyhow!("invalid hex input: {e}"))
+}
+
+fn rpc_policy_to_node(policy: PeerPolicyView) -> PeerPolicy {
+    PeerPolicy {
+        block_all: policy.block_all,
+        request: rpc_method_to_node(policy.request),
+        respond: rpc_method_to_node(policy.respond),
     }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+}
+
+fn node_policy_to_rpc(policy: PeerPolicy) -> PeerPolicyView {
+    PeerPolicyView {
+        block_all: policy.block_all,
+        request: node_method_to_rpc(policy.request),
+        respond: node_method_to_rpc(policy.respond),
+    }
+}
+
+fn rpc_method_to_node(policy: MethodPolicyView) -> MethodPolicy {
+    MethodPolicy {
+        echo: policy.echo,
+        ping: policy.ping,
+        onboard: policy.onboard,
+        sign: policy.sign,
+        ecdh: policy.ecdh,
+    }
+}
+
+fn node_method_to_rpc(policy: MethodPolicy) -> MethodPolicyView {
+    MethodPolicyView {
+        echo: policy.echo,
+        ping: policy.ping,
+        onboard: policy.onboard,
+        sign: policy.sign,
+        ecdh: policy.ecdh,
+    }
 }
 
 fn arg_value(flag: &str) -> Option<String> {
@@ -425,11 +639,97 @@ fn arg_value(flag: &str) -> Option<String> {
 }
 
 fn parse_hex32(value: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(value).with_context(|| format!("invalid hex input: {value}"))?;
-    if bytes.len() != 32 {
-        return Err(anyhow!("expected 32 bytes but got {}", bytes.len()));
+    decode_fixed_hex::<32>(value).map_err(|e| anyhow!("invalid hex input: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bifrost_rpc::RPC_VERSION;
+
+    #[test]
+    fn rpc_version_range_is_enforced() {
+        assert!(is_rpc_version_supported(RPC_VERSION));
+        assert!(!is_rpc_version_supported(0));
+        assert!(!is_rpc_version_supported(RPC_VERSION_MAX_SUPPORTED + 1));
     }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+
+    #[test]
+    fn auth_policy_enforces_token_with_read_only_exception() {
+        let auth = DaemonAuthConfig {
+            token: Some("secret".to_string()),
+            allow_unauthenticated_read: true,
+            insecure_no_auth: false,
+        };
+
+        let read_req = RpcRequestEnvelope {
+            id: 1,
+            rpc_version: RPC_VERSION,
+            auth_token: None,
+            request: BifrostRpcRequest::Status,
+        };
+        assert!(is_request_authorized(&auth, &read_req));
+
+        let write_req = RpcRequestEnvelope {
+            id: 2,
+            rpc_version: RPC_VERSION,
+            auth_token: None,
+            request: BifrostRpcRequest::Shutdown,
+        };
+        assert!(!is_request_authorized(&auth, &write_req));
+
+        let authed_write = RpcRequestEnvelope {
+            auth_token: Some("secret".to_string()),
+            ..write_req
+        };
+        assert!(is_request_authorized(&auth, &authed_write));
+    }
+
+    #[test]
+    fn auth_policy_denies_all_when_token_missing_and_not_insecure() {
+        let auth = DaemonAuthConfig {
+            token: None,
+            allow_unauthenticated_read: false,
+            insecure_no_auth: false,
+        };
+        let req = RpcRequestEnvelope {
+            id: 1,
+            rpc_version: RPC_VERSION,
+            auth_token: None,
+            request: BifrostRpcRequest::Health,
+        };
+        assert!(!is_request_authorized(&auth, &req));
+    }
+
+    #[test]
+    fn auth_policy_allows_all_when_explicitly_insecure() {
+        let auth = DaemonAuthConfig {
+            token: None,
+            allow_unauthenticated_read: false,
+            insecure_no_auth: true,
+        };
+        let req = RpcRequestEnvelope {
+            id: 1,
+            rpc_version: RPC_VERSION,
+            auth_token: None,
+            request: BifrostRpcRequest::Shutdown,
+        };
+        assert!(is_request_authorized(&auth, &req));
+    }
+
+    #[tokio::test]
+    async fn read_rpc_line_rejects_oversized_input() {
+        let (client, server) = tokio::io::duplex(RPC_MAX_LINE_BYTES + 32);
+        let mut reader = BufReader::new(server);
+        let oversized = vec![b'a'; RPC_MAX_LINE_BYTES + 1];
+        tokio::spawn(async move {
+            let mut client = client;
+            let _ = client.write_all(&oversized).await;
+            let _ = client.write_all(b"\n").await;
+        });
+        let err = read_rpc_line(&mut reader, RPC_MAX_LINE_BYTES)
+            .await
+            .expect_err("oversized frame must be rejected");
+        assert!(err.to_string().contains("line exceeds"));
+    }
 }

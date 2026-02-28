@@ -1,0 +1,811 @@
+ws soak started: 2026-02-27T23:58:18Z
+iterations: 25
+$ dev/scripts/toolchain_preflight.sh --require-cargo
+toolchain preflight ok: cargo=cargo 1.93.1 (083ac5135 2025-12-15) rustc=rustc 1.93.1 (01f6ddf75 2026-02-11)
+--- ws failover forced-fault iteration 1/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 2/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 3/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 4/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 5/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 6/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+
+--- ws failover forced-fault iteration 7/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+
+--- ws failover forced-fault iteration 8/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+
+--- ws failover forced-fault iteration 9/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 10/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 11/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 12/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 13/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 14/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 15/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 16/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 17/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 18/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 19/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 20/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 21/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 22/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 23/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 24/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws failover forced-fault iteration 25/25 ---
+$ cargo test -p bifrost-transport-ws --offline connect_failover_forced_fault_records_relay_health
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::connect_failover_forced_fault_records_relay_health ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+--- ws nip44 deterministic regression ---
+$ cargo test -p bifrost-transport-ws --offline nip44_deterministic_matrix_and_mutation_rejects
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_transport_ws-6147d6ac77a417bb)
+
+running 1 test
+test ws_transport::tests::nip44_deterministic_matrix_and_mutation_rejects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.08s
+
+--- runtime node e2e regression ---
+$ scripts/test-node-e2e.sh (attempt 1/3)
+[node-e2e] generating keyset + share distribution
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running `target/debug/bifrost-devnet keygen --out-dir /home/cmd/repos/bifrost-rs/dev/data --threshold 2 --count 3 --relay 'ws://127.0.0.1:8194' --socket-dir /tmp`
+devnet material generated in /home/cmd/repos/bifrost-rs/dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+[node-e2e] warming runtime binaries (cold-start stabilization)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+[node-e2e] starting devnet daemons
+started relay pid=313629
+started bifrostd-alice pid=313636
+started bifrostd-bob pid=313637
+started bifrostd-carol pid=313638
+devnet started
+[node-e2e] running bifrost-node e2e RPC flow through bifrostd
+assertion failed: missing '"signature"' in /home/cmd/repos/bifrost-rs/dev/data/logs/node-e2e-output.txt
+      "code": "ffdba0ac0dc6328fdf6e35c2503a0e584023b1347a23db019085bc61929f2792",
+      "hidden_pn": "03426ec0be8def7a038994289c5764020c7a070b5cb5b2a3d21458d0c19c5fca64"
+    },
+    {
+      "binder_pn": "03571cd4b659dd5d0c24b578aea37cfa1dc1e04e9d68e342954d334f3f50d16b97",
+      "code": "9e466e5b44e32bba787394651b529f2b217b4dae31704691067b495d38829ca0",
+      "hidden_pn": "0211dc13d56053b487e8a0504a5e7a9c249f1bd107fddf548e0d950c3f7048bbcf"
+    },
+    {
+      "binder_pn": "034057f0ab204cd1a94775363b11be5bc4e7a313450b33b1de8623e0fa6639aa12",
+      "code": "5716de9d3eb6055b74fa112d872ce350ea6a79bb6e35d397a48d05d9a79bdab4",
+      "hidden_pn": "0378a80581664f9094d3a7250bec49688804e3eee04c40465cf9b943822a59f988"
+    },
+    {
+      "binder_pn": "02694735b300de40ec57aa032b1baf540fbac0b3663cba7a9e45927abb0148f40f",
+      "code": "9d38dfafffa5ce148f9295c7ed1b79acded53cef7e6e7bbe0f5d4865c0accf88",
+      "hidden_pn": "03626a574d5c19b48ddc9936936624cb08aa9d5b2808965afcbaff211ee100f788"
+    },
+    {
+      "binder_pn": "023baee9ff6975c26880454f88995dfa4c38326710412e65d07c4b3f00928a6ba0",
+      "code": "6200658ad63681660575d98a8021cf4131cf6c63c2ca26f00e0bd3802ff7cf7c",
+      "hidden_pn": "02b1697ef48131718ebada55feb70bb4929fa453d621d2d6b644d2ad1ce8baf6a5"
+    },
+    {
+      "binder_pn": "0273b807a81a817afa80f510b8a444bee5090c331dbe89afbb52b3374c064f2c56",
+      "code": "cc482c7baac1d0ce768a02bfe2cad268396758728ea2e86bb6aafc8b52be3ab5",
+      "hidden_pn": "03fcbdf8b3a44bb3ba1ad151d54b5be92437a2668275e26ae3b49ba52af66f9720"
+    },
+    {
+      "binder_pn": "0279d886be77c924a2d61760c382dcf2b6cc42c9d063b71e64d9932bb76ef5c1db",
+      "code": "1673c0752668b7ab093ad6ae26b6820a14f9d332c86cbfaafb52dfb20267c34b",
+      "hidden_pn": "02043642e3f756db408fa978e65b909c1942ff84a1e423bc4537a694f487b2fc40"
+    },
+    {
+      "binder_pn": "0217a9565398363b880c0791003dafcf4081ebadc5960be7c60575237f078dc887",
+      "code": "c4e51ee28532b0a5ca51b1873b986a07f44a2ff3ba8eded286e344ce0db591fd",
+      "hidden_pn": "0327ff8a0f549a8144898de141f58b785a9959278ac7e992c202377f93f60171b6"
+    },
+    {
+      "binder_pn": "02e33d1b3788dc82b597ab2d866ba86a1c232085c6979acb2eda8c803fc6d4f7fd",
+      "code": "97fd667788bb197c5e8b7d08962fdfb173c37b9aec67cfac4bb545fdf1322066",
+      "hidden_pn": "031cfc7d8646268ed6f85e928939c1e01c6c063fcf37e7122cdf61c8cffd53c407"
+    },
+    {
+      "binder_pn": "03011775de868447e64b3bc951cad9419e9c6db7baee0272d432b80e6588e4aaad",
+      "code": "e24298deffce80b5a9de04df7cf3163bd607c74c3f1e1270147c92880eb41ee5",
+      "hidden_pn": "030b1c26ba2708ac7aaf061e2bd2edb29fc01a2dcf250d4038e035dc3fb66eaa6a"
+    },
+    {
+      "binder_pn": "029893f0e32ed57683057ac861ff9f1fe726bb974f89089c8fd61db2b02415c1e8",
+      "code": "e413ffbb5fe86b94bc8bbe8fb579a3947806f5c41427b6693e3b70016d6ceb03",
+      "hidden_pn": "03fadd06dc6598bebdec704574505ece7a2bd12c77b105fd391d5e9a0301ea0ca7"
+    },
+    {
+      "binder_pn": "02da87c5f21e3d7654255ae041b1a937d81689bed3f39bd47869f6dcceb4f8ef3d",
+      "code": "2042a37bbe0775107e8ea0ff7a5a690e7a11444ec8a6b6d72f973e7548556f83",
+      "hidden_pn": "03583bf85241e294273d821a2e136eb9ee62c8f0626e11a2fa5ab9659aa9fc4c69"
+    },
+    {
+      "binder_pn": "0289304f12bdfddaf600af127434eb2dc72fd84f3698cf9ede3ddddfd8fd4ef911",
+      "code": "1d6d2ebd033212226dfc3bbf0b0226918b4af8839b5bd686016ff2475bbf1f7e",
+      "hidden_pn": "02c9fcedca8348dd7fac5c93d364709420b36bd9b3be32198167d22035ea2cc3e8"
+    },
+    {
+      "binder_pn": "03dc94d33be06a59d99691770468eb26a8236f19227b7414a5dcf8c5a57fe26de6",
+      "code": "1c404c69447a1940f04a1796ce6c48ae66e26cf7745dd8ceb5c062f9e447619c",
+      "hidden_pn": "0294a08dd721f40035bb3d3eef609e70e33a8df92f3c6786284ee79a8e4434c395"
+    },
+    {
+      "binder_pn": "03627a40340a29ee29be8f9afa76e960b49026481ecbc505e7401de87fcc2f6010",
+      "code": "0ea10d63317ace7dde6a9edd516bcddbf8ef84c242cbffb5decf5021eaa845d1",
+      "hidden_pn": "03ace27f5d2a42e187e4e15438885319d7530d474e17bd57580c1f61c3f563a6ca"
+    },
+    {
+      "binder_pn": "02053cb6562de649e167c42c0effe4b311aac6722e3cd7ff1e68edb87c7e08878e",
+      "code": "717198e5cb3f301d13ed57c33de6cf91123598e8cedd71d5b1a57a9916d19e1d",
+      "hidden_pn": "023ad2cb90bc533c1cbea9d5f6b75b075a73315e39c9f64f2ac09648fcb655204d"
+    },
+    {
+      "binder_pn": "021036ee6f9aadec499373bc963fb2b301b6dde80d475812aa33f41ddc4baae8ba",
+      "code": "7e4b1f046d1d3bdfbf607d74e952f2f2f2c3018ceafcd834ac7b569b1833cb5d",
+      "hidden_pn": "03cdbecf9d432de8d364ad914268a45096203685dc6868c4fb1652e7331088184e"
+    },
+    {
+      "binder_pn": "0314ba9965385d8bc39f0fe82a5c5164c7e7e24506db5b4c30e396c994024ef2ad",
+      "code": "f6adb4bf4f1792abab69d16a95ed8f061994ce768955a63c163f0c5e7fc2577f",
+      "hidden_pn": "02eb0e5eba87c55a456c41137cb6b5c23342189024dd833f5d894fc4bf267494f0"
+    },
+    {
+      "binder_pn": "03704bf2c8e6baa526bd9c687b6523a8b2e30578090c9af4fc8cffb37e99f45605",
+      "code": "a32cf352ddd3328a36d8a0d88a49efaa6cdff8d877ef742162736b76e95ebc04",
+      "hidden_pn": "033ff4cd84fe1afc9b517871047c333dacb4c71477152695a0f8f8891a3cd26978"
+    },
+    {
+      "binder_pn": "02e76cd442f7c5cd96cec80f5e50574bd7f519016bff339da39f8eb6ff239e888f",
+      "code": "b8cd8e15a13ff2f2d74749d3b730b708b0c5b355282ae0fd9bec696583d9dac5",
+      "hidden_pn": "020f5d28dd8fcfac330f048be4affe8887fc4013444097f3513fb4a89f21c36557"
+    },
+    {
+      "binder_pn": "025a0a69e1acf1a866b0bb4820eb8e1a1ecab636babac09ef81ae7bb5b5156ab1a",
+      "code": "06d41516a3a3c8602d20825c445efcc0910c13d1df99071bd52ec88732b5f821",
+      "hidden_pn": "03052c68a5bfaf914949f9dbc88c87a36dcbc8ec47a07fd93bbbe0e0986ee45854"
+    },
+    {
+      "binder_pn": "03f97b1aa82e390d4d2281b9b20f41132c02bddde88cdea4ab22a9aa60cf6a48f4",
+      "code": "347d0be475be2d345d2a3ab4a53c1a3b255d73a324926b8ed92de6b1744a60aa",
+      "hidden_pn": "031e54442ac7dfe77edeab08c7e3bb4e49eabbb4a048ccec533602aafafa9c3b72"
+    },
+    {
+      "binder_pn": "03ce8b16e60a96411dca6ee4f2474b8aa9bf14b48ba0e401abd7b8525b654bb0f9",
+      "code": "877ca346e4ff2fad6b82d58d736ce69a3a4a9bea592bcad4b9c452a1358cec44",
+      "hidden_pn": "0303264e0b0e3f30ff8c09f726122b7cf9f806cc348358ef1c4f70bb3b9b5b1657"
+    },
+    {
+      "binder_pn": "03a354317c746adfe888770a5e745e2f11c3ed8f20132c738fcb53398dccdc5cdd",
+      "code": "8e004d922e1d30f7c93a40966d42e35125aa502417ef52a20c9a1714eb01e41a",
+      "hidden_pn": "021e9416514ce9dc46afdcf9e5bac1d4b04d8dee99106254b286201c240a8711b1"
+    },
+    {
+      "binder_pn": "02846bd27fbc955c22bbacc6c411878029dfee7b980c34cecb122ae535756fd31d",
+      "code": "f865024459a33f10b25ce9018d729f5c171469520750c614571285f67a4d21f0",
+      "hidden_pn": "0216107bda999c3db67455f3d8eaeef6bd10504bf7bdafa179e4e0e4193774527f"
+    },
+    {
+      "binder_pn": "03264fa89d8446c8368ded4cea70e5621cf130690b72a541613d81a7faecfcd1fb",
+      "code": "7eba682db01dbdab37dba5f5e5072d5628ce9629f33500cbf63075bdcc7b0266",
+      "hidden_pn": "0356407320c2c6b37f5cdbf8f469b2828134b3fee0f4c85f8fb2be64dc49c90c59"
+    },
+    {
+      "binder_pn": "03794248963d55b588a19c76a2d2b3d4ca2ecf686776e8da9558403a8405ff0abc",
+      "code": "a60a709adbae66cce74d4ce98c0b2fe4ee4a01d67da920b67d25ddc0985384fc",
+      "hidden_pn": "028dad89e4b51539e3ff0b9673b3ed6d51261ad5daae754fc70e50e7d0cc36e0cb"
+    },
+    {
+      "binder_pn": "025fc6b195baed3b1a7a15dac0bea37ac61ed37ec17f380026215dbbea067cf858",
+      "code": "2fce3cc894e817d5c71a6e090a0ef4bdbf506b301f5ab8f697117bc313236809",
+      "hidden_pn": "031ff6a4a74a717407ce8d2e38a77732b7bf42bf2c78e1ba355ff63f4b6a0130eb"
+    },
+    {
+      "binder_pn": "023f586a0b2f450b1833852acfc2f7d559c78adf94ee30e2a8aada2132764b3932",
+      "code": "683c81cd946078003919e5544eaac2539ca1277ccc30fae9c2feee231da2e4c4",
+      "hidden_pn": "0257a209e56c38187f352e02cda8cf23fc358d444cabf6206ed8ab70cebad0d3ac"
+    },
+    {
+      "binder_pn": "026598334dcd11dc43398c5ff08caaad30bf002813c1b93b4b877c9a754dea0276",
+      "code": "35caa4ae37f7e93f26a31159171fe969e9bb4efe1d4c536c3d562c41fd28daa3",
+      "hidden_pn": "020e79e00d5d696ede3c4b6a67092a583c9db8bf582597746e3ee2ed7cfa427cec"
+    }
+  ]
+}
+\n### sign
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+rpc error (500): transport error: timeout
+\n### ecdh
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock ecdh 0216c074ea08cd0a84356dc54adcff67b8e327fe0b6d331a106e46de729fc178f9
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock ecdh 0216c074ea08cd0a84356dc54adcff67b8e327fe0b6d331a106e46de729fc178f9`
+rpc error (500): transport error: timeout
+stopped RELAY_PID (313629)
+stopped BIFROSTD_ALICE_PID (313636)
+stopped BIFROSTD_BOB_PID (313637)
+stopped BIFROSTD_CAROL_PID (313638)
+$ scripts/test-node-e2e.sh (attempt 2/3)
+[node-e2e] generating keyset + share distribution
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/bifrost-devnet keygen --out-dir /home/cmd/repos/bifrost-rs/dev/data --threshold 2 --count 3 --relay 'ws://127.0.0.1:8194' --socket-dir /tmp`
+devnet material generated in /home/cmd/repos/bifrost-rs/dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+[node-e2e] warming runtime binaries (cold-start stabilization)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+[node-e2e] starting devnet daemons
+started relay pid=314203
+started bifrostd-alice pid=314226
+started bifrostd-bob pid=314227
+started bifrostd-carol pid=314228
+devnet started
+[node-e2e] running bifrost-node e2e RPC flow through bifrostd
+assertion failed: missing '"signature"' in /home/cmd/repos/bifrost-rs/dev/data/logs/node-e2e-output.txt
+      "code": "111b1afe568ce3a229be3399057d100d6ba0f0ce91978f94b2f6716932c77587",
+      "hidden_pn": "028c1e3bf8751bc56b9181fd0e7b385952c7ad21317932592f215559d196b4d3ad"
+    },
+    {
+      "binder_pn": "0360e41488d39a5849a3e7d805d60982ffc9ed0c6d8912fa9f4fd68e0311d2017a",
+      "code": "7e2fb685b532ca3794f7cccc6827b54d7939246206598fe9982123abee336646",
+      "hidden_pn": "03c4a2b873629c9cffdc982b8871f5ef11a65c6beecbeaaef5b09e356e89f86541"
+    },
+    {
+      "binder_pn": "02a0fb419e0d730e3b4881cc1d4087a6cc4aa6d3606f206c70ecacebae256b25b7",
+      "code": "2d048c67ca73023a1354414e9591a593a27e6bf49c4473c24800c351e4299a0d",
+      "hidden_pn": "03076f54b84c3c303986fc5f31cadc926724021a2cdbcd3c6fc42ba179ca71d8b8"
+    },
+    {
+      "binder_pn": "03955ce1d5d4b2216fed5c4a94be6d9fe9799e2fac70a9f821567a91cd62b88c80",
+      "code": "05d4caedd2fc19dbdc7eb44b0eba409b8e9a4460346890adf41eacbbfb8ed0f4",
+      "hidden_pn": "03927fed3af60efd123a7d4141dba5a942f0cb58f643f6360de442bef3a41c1a13"
+    },
+    {
+      "binder_pn": "026702e8ae4cc4fd8767abd7ff8f970717befc9ac1c2bbabad6ee7dc67efe3ae1d",
+      "code": "bcf164e201986ea85da242cb5b9041cfcac12df1141125a54c564312dff7ccc7",
+      "hidden_pn": "03524c898aaff091fb41477c3d0918f491329c1f17479409beab4c2f75f8c108b7"
+    },
+    {
+      "binder_pn": "031b74787960536d73df324d05952bcea19984faa3eb4fc1badc99610ddf6625dd",
+      "code": "b93c51e67032803e3fcfcff470e118f0d6e8cb668d0cafad3b4fe2e82b725c92",
+      "hidden_pn": "0276901a975e1a42b08efb6243ea3428f2a3036d74def4e1688d462bb08eebc848"
+    },
+    {
+      "binder_pn": "03498afe88ca9295f8da16d2b7ce6a1575306dc0bb3d37a2a372c0147a70868d2a",
+      "code": "c238968e25202ed894e717864afb467f65c747fc2dd6f1ce5b37546b5016955a",
+      "hidden_pn": "02168f28a23684b51b9b5a93777f14cafc47338984f24ec12388d18cecf69a76a3"
+    },
+    {
+      "binder_pn": "039884a007337f676dee41b9aab581ee98f4b4aa7544677546c4ad6ad113df618d",
+      "code": "09142acc0fb211895bb6b6fe2f08f097413075cbed80ec40d36d7eafb53d2ee5",
+      "hidden_pn": "038b7dd7d6f9721f0b1a73f12f70c9d5010972c878feb0df366590e36c00e94f37"
+    },
+    {
+      "binder_pn": "033cbf5619764dd96e8cf781388cf5dc3bd428792551b1e8e301b14419255d5806",
+      "code": "38028b6f9dc0cf5907f88eb5fdc1203ba6aab13eeacbc0ac130bb1719a64bcb2",
+      "hidden_pn": "02838e3b1aefc0e8b082c67778561506ae20dd1b4d95170d1cff8e420c5f13a50f"
+    },
+    {
+      "binder_pn": "033f7e8bcdaf1b7583bef2b936ef1438aca48e88ab005431f4348084a4bafb1f89",
+      "code": "fb8c3360c2a1c2cdd6c844a1a6943c58498311baec500727e11bcb11a6b1adfb",
+      "hidden_pn": "03bb42a890326df651239cee46266912cda209853dc8fad25abdd90201b4160afd"
+    },
+    {
+      "binder_pn": "0278f0e6827df5686ead451fb0c4b19564a8cc52fbc4f950b6ee4171eb26f86d59",
+      "code": "542d592f4742f333a1f11650f0a563895cb7add187e10746f01a88c3f2e1d848",
+      "hidden_pn": "0364da045c9570c5df8f3418492b7f91717113b25b9435046de5124f5b40ca9622"
+    },
+    {
+      "binder_pn": "036e42df7d13cd506425f207a8bbad300150ead6f29fe3a04058dd08474dd72586",
+      "code": "5538adbd1a144ff91e778b0a46a412119d82615121b686403e4282c7191af537",
+      "hidden_pn": "02eaefb415c067377c79ef7b401d669a0ca5b84cf50b9d0ac31c2d19681f7b34e9"
+    },
+    {
+      "binder_pn": "03d7d6a57ebe1e3b5e8ffe31c75e36af2d914b4d3b4c901832500ce86e812a082f",
+      "code": "757a64960acda4225c15115d7afb1e81b8c2f7bc2ae70c59706fda2df2d1522f",
+      "hidden_pn": "03032a653353a6f32bc3d70212b0c0786d533286089aa85e38ae4d2dea3b86cc80"
+    },
+    {
+      "binder_pn": "03bbb3e55c9bf8a3a4dc020e089a5246108362a2acf864f7de5bffd8e7fc2aa4dd",
+      "code": "a91be184501801107e34fd8aedf000fdd9d11024b2fda0264f387870ffb07da5",
+      "hidden_pn": "03bcf0e120b7db8dd553d70dc05e1d19035e46d7e202922231ac313a1c531f05a2"
+    },
+    {
+      "binder_pn": "0275acf91e745d0f4e70bf5fe7b69416f6b49574419bf0226575aa1b1bd31e422c",
+      "code": "371b83b6afedcbddce639c3c41991b289a22e79756c745138f0a08daba35f0aa",
+      "hidden_pn": "03bde9932edaa3b07eaa8a925e34f6a000ac99e53d91741fbea0f3a0bede706f20"
+    },
+    {
+      "binder_pn": "032a8269060fd689311a6506a48d2a35a4409ad8d20c7b1761eb2b56f859887987",
+      "code": "e79b6b59bc3112a3d5fbfd4756b7a5b4dc1b637d4b4ad2c115879e81e10612a4",
+      "hidden_pn": "0330b6a2e0d3f683a917ba35bd3e44105c8d227b3585fec6b0b9871a367e72bf88"
+    },
+    {
+      "binder_pn": "0372c2f7097b2dd932cb04b742fc637dc244e58b9198cdefa8da5e45df9f9ee551",
+      "code": "44d63bf54fc735fb3d32af94fc37f6142417096f1b8d0049e8221671992ecc4e",
+      "hidden_pn": "02f0d1c9c797e10244de0515926e3be0f453057246dda927c3168e3b4b1dbc1f9d"
+    },
+    {
+      "binder_pn": "030991b3de45ab6658ad85b3bf426a2225a372ae08eecac6d9fc6c4d7b581cf077",
+      "code": "031f38bc2a31cc68e95fb10c9e1942e65265b7c48ca1aaecac207a8b61875e2f",
+      "hidden_pn": "0226c39e047fcaa4de96e9a4b284a751a00eb0353f32ac97b1ef0ec7b46a03ee9a"
+    },
+    {
+      "binder_pn": "0264b0e285c905a1b4a607229caea454951cceb891ee7dadd80b262bf7e2b3263f",
+      "code": "7eae7b0ef14dc998e8e29160561b186052d57ff5fc540666cf6680daf1d3d270",
+      "hidden_pn": "03cbcabb6e718b4d81564e5e67e664038fdda61a2b24411a3cc3722d10ea15533d"
+    },
+    {
+      "binder_pn": "02f14375180eee6b1991438ad3168b0458e7199e1c7cc0092fe14af108574f8c21",
+      "code": "e19e7da24bf0aba646bbe468046ae79f240df9be952d44d3ddbc368cfa04cfd5",
+      "hidden_pn": "023f2872bc491cb6379dc203a98ceaf9047c283e29f2a63d02a32deed6f8507c97"
+    },
+    {
+      "binder_pn": "03640664bf572f0a8066f5f2ffa0ea810df6603c3b6857aee51ccac7622bb56336",
+      "code": "8290b7c82261b8fb226fac6def75e30edb254e5ddf13a37f5c2ac54c41edb6e5",
+      "hidden_pn": "02c61af1666920a306441c0ad619db8859360093c4696ddbf2074e5922f7ffc4ad"
+    },
+    {
+      "binder_pn": "02a179841b684f3cab656ce7fd29ea7645ca199c1ee311d67cbb3c807cc61687ae",
+      "code": "608c2facdf62c0ae155254d100c187b256b28437482fd4ce9531029087de621c",
+      "hidden_pn": "02ec66528d373f1e7f91926b05e1d5773aa9c1e4c0738a2420895a55aeb402ae44"
+    },
+    {
+      "binder_pn": "030c2c6a7e41be6e520a55489755a5161c821dcd34759d47976c93b3fc1e48531b",
+      "code": "9c215598260c33ebe2750600b19d28e6e53cbf764ccea5636c1c5e2973bcb442",
+      "hidden_pn": "02e58b6205a1d55fcc50f0db97284563574a98ff7dd8a84585dbe67b394909b4d5"
+    },
+    {
+      "binder_pn": "022782849fe4b0fbebd036a1a18351c982d1b6be579149278bf15099ef9a4173a1",
+      "code": "833da48c5c688d1be9f95cb408101dd07986b07376d8972b07505a27fd5b63d3",
+      "hidden_pn": "022f4f3aca7e0af10fa3a60f4ba42b5ae6fd9d6c3d14ed9a29def9321057865cb3"
+    },
+    {
+      "binder_pn": "02a0c4c024cd8d2756c4c7f36fb29967195abb7125d0b3ae7292f8b90fd3ca58bc",
+      "code": "0213b919291e4936e8af8944e1b7d9b533988e2f1050f0a7690fa33955b5080f",
+      "hidden_pn": "034d21167f22e4d3e7aa5d83ffc8166333715c1e068249660ca508884f22b0c8c1"
+    },
+    {
+      "binder_pn": "034b96af51aad8a1b3ad13e250dc3f725666f122bc7ce86f2fb1714d02ee06085d",
+      "code": "c7553ef92bb77f1e058e8ad5caf240a2eec06db5a79d7c26008eb46d9e06520b",
+      "hidden_pn": "020ee55c6c6d9cb81d65e02691c3da8bd5ec2db90960d29b6a30278ee716889dcb"
+    },
+    {
+      "binder_pn": "03a971a7dcfb1c5464c31865809c3857e5804a33348b90a4989ca01a3814f04922",
+      "code": "db2657fc54a2ae91859c58fb1c5f449da8323585e4969559affd622ca92707e2",
+      "hidden_pn": "02e02b7df1a145599408aa20b564ffa10e9b64ff9a71c098d3ba8bb6702482c28d"
+    },
+    {
+      "binder_pn": "0307ab0c293a5df6dc1d94f474e70eb3a42b351a4ac863a9c3e6a06430a0e5a221",
+      "code": "9f96858b265713919dcd6579910cc112b6e566a92d42b1b26704ca2edfa6b80b",
+      "hidden_pn": "03dc94259686b00271c71bcd0cb44789f0246bab5947fee7d1d1baab020f51b156"
+    },
+    {
+      "binder_pn": "038b7fda91f7baed75064b373b9bef8fec5e1c1fce45fa9c3366f57c4cff63ec6e",
+      "code": "16725141a1fe8a95f0af59c521bb3f3a472be11e3511122ab9121c511bca8dbc",
+      "hidden_pn": "025ee2b82ce5df7e4f94b53f8c3a633c0a8946c52e657a55153b88fe5292b71c5f"
+    },
+    {
+      "binder_pn": "02f5ff242d5ce6723e15584e04d1116c97c0ac2deb1213bff7d2212be67e1d4cf9",
+      "code": "e81b4690110b65bb2ead7f339c5e9b690ce9fbf95380e0ccc2a41f70da81b8a5",
+      "hidden_pn": "027276d35ae48f6c52483c7d96b89f53261f167d397c78c5d81e9e64d0a852fb9a"
+    }
+  ]
+}
+\n### sign
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+rpc error (500): transport error: timeout
+\n### ecdh
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock ecdh 021baa7ea6b70fd37a4a1faca5cc12d830d4c2b1d060547f3d0afe011e5b554df7
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock ecdh 021baa7ea6b70fd37a4a1faca5cc12d830d4c2b1d060547f3d0afe011e5b554df7`
+rpc error (500): transport error: timeout
+stopped RELAY_PID (314203)
+stopped BIFROSTD_ALICE_PID (314226)
+stopped BIFROSTD_BOB_PID (314227)
+stopped BIFROSTD_CAROL_PID (314228)
+$ scripts/test-node-e2e.sh (attempt 3/3)
+[node-e2e] generating keyset + share distribution
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/bifrost-devnet keygen --out-dir /home/cmd/repos/bifrost-rs/dev/data --threshold 2 --count 3 --relay 'ws://127.0.0.1:8194' --socket-dir /tmp`
+devnet material generated in /home/cmd/repos/bifrost-rs/dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+[node-e2e] warming runtime binaries (cold-start stabilization)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+[node-e2e] starting devnet daemons
+started relay pid=325571
+started bifrostd-alice pid=325931
+started bifrostd-bob pid=325934
+started bifrostd-carol pid=325935
+devnet started
+[node-e2e] running bifrost-node e2e RPC flow through bifrostd
+assertion failed: missing '"signature"' in /home/cmd/repos/bifrost-rs/dev/data/logs/node-e2e-output.txt
+      "code": "c10a8a6341377d264474a3b0d4443e854474623301a509139874a008c8f41d7f",
+      "hidden_pn": "0351b03d459f4700324428a826541f03d9fe2a179475d3407d8b93a39032cef55e"
+    },
+    {
+      "binder_pn": "039b675624a4e050adc81ae318829ea53b109abc23cdc8eeda19fa7a93f19dc372",
+      "code": "1ef39f6878165f829846fcba53068b97a8cf1673d6ef8ba30b6fcc50d1adf511",
+      "hidden_pn": "034af4b0dec58ec38077caa7ba1981a7c0689dde53418569f91839fa1f19747f7c"
+    },
+    {
+      "binder_pn": "026ef0ed379cbc412db484d07a88231293763eddc55f4a02ff0c719d63dbd5dbcf",
+      "code": "3c5f9b3a284f2c6d4a4c9c99d5c3e170196f9e8b04931fb1d7850dbd1689cede",
+      "hidden_pn": "02cc6cebf422e203b0302280341f7d8ef82768675aa8c1cbc6675a415833be0c7f"
+    },
+    {
+      "binder_pn": "02a67b9c61c73b281814d3d4b6bb4db639220778829ff8b16ffafd0343de9a31f7",
+      "code": "163c92a091a24790a4d4b4c69b313ebcf9036ea022df8f17ca2647a84dcd8bca",
+      "hidden_pn": "0353e5fbe6acaca7250ec81ea3fd329b101bc15a56bb5767a2231ddb547f803b86"
+    },
+    {
+      "binder_pn": "03b7a3f47441d1f938663c785de1490c693c6c19a3a4be9ce34c900e0da66662e4",
+      "code": "0ccf7567919e71a61a5d6a242daf638a207a40e6882860cdd4d67beab8657509",
+      "hidden_pn": "02e21b6ee6ee209976e30cd0bbe26ad1b796961930e86b8e1a03e14e11ea6f99c6"
+    },
+    {
+      "binder_pn": "035c07ed5e238f2a3cdec00ea1a8e3283d807e5e0a06e5e791871ef645abe900f8",
+      "code": "edd2e5c7fc279571ee110996896ef2d4795405f60160cb252446733f5d823475",
+      "hidden_pn": "0366b362d4c87e80b577aaa9229889c54ca44ff7a926c0c4f80d9217d83a1e5e76"
+    },
+    {
+      "binder_pn": "02ecfe8c6a00155817bd7eda5fd026d4a028dcac2e844ceaa2feef1fdd2977e7ad",
+      "code": "4a00e3fa1e2399c3ff4149b545bac4008369c61799d10a2ea14b0dc88448a7da",
+      "hidden_pn": "027f815f8cf7b928f56f6761fa29ccfce9cea71ef4f1417d33bab9dd57ce1de9f4"
+    },
+    {
+      "binder_pn": "03dc9fadbc3ca95ebcc4e0408c6c84adc12f5f14313b04453d21ef8d06fabd6fea",
+      "code": "161e8e3216adf9c9d96a75b346cac975c9b6ce3ff50359812487251e5452300c",
+      "hidden_pn": "0217df9a48cc1217b81d3ee46414609bd638f9292523d9984583969f89f205ad04"
+    },
+    {
+      "binder_pn": "0345985b00853ff22830021fc235d2c28c280ec25a7952ab6a0da603b46f88ad4e",
+      "code": "fd8166f72d293cff11e293cf76b9941916a470e7657f78355559fc8f53f0d56f",
+      "hidden_pn": "0273f4665d774b9d01f9ba15501cbdf84c25652f5a94d8b79ab6852a7bb0f6e06d"
+    },
+    {
+      "binder_pn": "02c423a7ab2304f2e3ada5a46a7a2ead8944d4c41e1a922ceb8d44f5bd09c90627",
+      "code": "440702ec6a1b01482dec10eda22795285b54f080d1e0a665a0099695516846a6",
+      "hidden_pn": "0233d4a7f5a7ed9bf74b028d93c4781de0395a8956ec18d78dc82b0b4583e77ac5"
+    },
+    {
+      "binder_pn": "0215085bf23ba706fd54edf85d86688de65af147e5fac29c454f7bd04ca132838c",
+      "code": "6a6d2777ff7f917852e7a3fe4a31942c86bcbfb39930eaf4d1f062519ddbb1c9",
+      "hidden_pn": "0268152bad5872942ec719618f3ac1ddd116f3a96b003f44005754ced2a3efd082"
+    },
+    {
+      "binder_pn": "024ff8c2191f054fe1beb26ff5913eb2be018806fe7c23d76927e81ec04631e1e2",
+      "code": "43b451c302517dde86185818474891cf68e00854e48be29126efe01b009fcfe4",
+      "hidden_pn": "0361e53114dea2dd33ca9f9e88acfc9b2d0fe968abd011838b123c23035305d5f8"
+    },
+    {
+      "binder_pn": "02af16d27f3ab668e08549b420595246928e74f1b0619196313ec9aa68aa2ddbb7",
+      "code": "d9450ca3ad59c47645d6d2186930984247718e2fbadd01e7712ef94d70d6da25",
+      "hidden_pn": "03c15426e7a13bb273667510324fd7259bbc550252dcb61cb87f2ea2c4878547a8"
+    },
+    {
+      "binder_pn": "02e5bf62e7f806fbef3184d016a669ecbb3a62f73004f3ce7416fa3c8c61d9f575",
+      "code": "64800b17d70803a91d969bb3f5354d6a8c10fe51ef50fa51c116cbca1e1ccc9c",
+      "hidden_pn": "0230cbc3a400b030306d58a8b24fa10d1ecc5c5436f3634d6e4f435ae067b87e23"
+    },
+    {
+      "binder_pn": "0375954d2ff8a84aca76771983fa34a154df463f886b74bf0438b42437011befe8",
+      "code": "3e76f041a259f9e2853d1dcfbfa95939195d68002f7953fdbc4dbef2d7e7fd7f",
+      "hidden_pn": "0248993fba6f31908a9cd07aec71b2e1df807bafef21e02341c09d09287e9bd6a0"
+    },
+    {
+      "binder_pn": "0265908cf73dc8e4f0d3ad9d5440566eb2312d2ac77ac296c959a5ac70ea093d7a",
+      "code": "ad669cb99b8b98654507b6c363ffee3442d948e8c32bf6f3e90a45afa3f539c1",
+      "hidden_pn": "03a7d3938c67ce397469ba69eb6ea930c8e50d457e56547c290478650f61ee0ffd"
+    },
+    {
+      "binder_pn": "03b836306b1c610273dd0c0fdf15178ae592a05986d2dc48df7d675a5688700a07",
+      "code": "90bfc3dfcc043a8be82f712180858a1898f1cdfa3a2b98a4954cf4c90da23405",
+      "hidden_pn": "020039c6028380395c3501227453a103f139ccf99ee66e49b182a2f11d398c8be2"
+    },
+    {
+      "binder_pn": "03b9fce2235b67995ff012e8455941bba05541d0e2006ce576b338f8df1cd7d961",
+      "code": "2d91cee71fc856f21b606fe964e47b15d8588a2c47f4b09a16984d0caaba9905",
+      "hidden_pn": "028f351d04f04d9de2425deecdc5e6cf2c88fdd213387d50b076b9418fe4e0dc69"
+    },
+    {
+      "binder_pn": "02d1feecfc1c64961bf078adaa8605df2cc684d47dbedcf74fbaa372159b72ab47",
+      "code": "2ab09343b0d4263af9136be766e3a6084a51b174f15ee65962a6088337e7262b",
+      "hidden_pn": "02e05020649dc30d34517bde408ced38a2ed1c4ef075ee0ba8c0aae5f2fdcdb1e9"
+    },
+    {
+      "binder_pn": "03fb9f80423b482316d6895bb37d518a276b51015033577a2b32ed78770637974e",
+      "code": "4d74ed9586f9fc3a16ea2b51009206b908fbed2c1f82a29ff50f28bf656869a4",
+      "hidden_pn": "02fa0a7669c5c479e1cd1abf5bfc09568eeea8c55fc84534544e90dc45a5d1d5ae"
+    },
+    {
+      "binder_pn": "0211edcc61ed4468f507e147effccd1e42535fb809081d320c0769a9082481ee0f",
+      "code": "eebbe9727578b1c2a7b36270d1e602c0c5a327b5dff84bd638719f55b8e91bb2",
+      "hidden_pn": "023de0cf52456cc073dc4bfe3935582e7449fec272f526f861292b77bfc212e721"
+    },
+    {
+      "binder_pn": "0274c7f54902738fc666481b68887f8ed7cb106ca37c4ca0a3b6c0a61456a1f0fa",
+      "code": "4997ef6700e1f659a8350df08b02285decc16fcc08455e16308b03cd58e7dbcc",
+      "hidden_pn": "031f4816eb3be83e7b9ef18a68e610a8a74fb9bfd88d53277c16d413d5513051fe"
+    },
+    {
+      "binder_pn": "0234c3e4bce46300ed05f86d3cda3228e6d8232697d2373f5976183a500c84de87",
+      "code": "079bae946de0c489b633874dc8362cf19dd1bb380c2ab6158dd12367f5203f4c",
+      "hidden_pn": "03c28c050d57ad81e70ed0d4e9ca4f665c5ba3ae52e6ce33627362ff7460d53290"
+    },
+    {
+      "binder_pn": "027e95eaf5b357b37672c0a99fb1ce92285b2d907a0751c4458b4cd880941b4edb",
+      "code": "56b98ea4a7a7ae845d59658118749488ca9b6f42762c1cfa5af7576a7f73c7b7",
+      "hidden_pn": "0335a19a84759726557b6cc2843178495d33df0ecb7fa4612a07f984cc0bae9e9c"
+    },
+    {
+      "binder_pn": "0251b8fa05bd19efb3a26c25fa96fc16941fafa2dc56f477d73d6376d594596d45",
+      "code": "e920c2001369b9daf180ffa5389904cfd4e4f38a893935f3d3dee41b56ec6061",
+      "hidden_pn": "02c3027945846339786d285e8f2eb773c316b56674ba812fab1b5e3a3fd1032858"
+    },
+    {
+      "binder_pn": "023d4ed5811de34619d07ab0d93b20040bcacfb42e6df5d68030ada2935e52a734",
+      "code": "d3e1d6cadfc8f4cfaca0c280b93521a54c980fd6fda4b8492021e44c2b892018",
+      "hidden_pn": "029c2dc5cc07d7fed6650cd82cb077162a50aa8e8b92ddafe82505175d41492e07"
+    },
+    {
+      "binder_pn": "021583bdc723ecd73d4ae5df8b07ce785a4327dfcf7ef6e285df4b2c6aa2ad7541",
+      "code": "5526d8b84fb399101bc5b506c9035ec4bb3d27fd150c78396fc75251bef72e86",
+      "hidden_pn": "02a37c349666ad30873b246db96e0dcd36c0dc68c6a7dde9ba29e4310a93a00d90"
+    },
+    {
+      "binder_pn": "030a0757ac4900dca0e3eaacd200a4537af5d7a568c60500ff8bfcb771d9df9e72",
+      "code": "51886833330ec852beaf5680de5d707cba3f7f21fefa16076d35ba23fd3ab6e6",
+      "hidden_pn": "0370a839080a00160f003ae012147e398034efedabc450cec32a116d329de5f802"
+    },
+    {
+      "binder_pn": "02347c06754529fba9bae0a2b20ed738ccfe5efe617fe5d4e9692a5e8b7d834885",
+      "code": "f39e9c3e7016fa14c960141d940db4c9d8ac66babf46acee19b633d6ab09bb86",
+      "hidden_pn": "033e634fd4d7a83ee2a34b73e7e7538eccb89d54581d9b9141757b89027f0f43c4"
+    },
+    {
+      "binder_pn": "02156664f2f1d188755da2d29f9b6ec807dcab51af1fca08d74fc429f574a241a1",
+      "code": "5dc7b83e9f447d38c1665396e19065e9574085cf9808ad21cf13fc132ff99ef3",
+      "hidden_pn": "03ae9fe7b2a38aff92147d92b30423fcf5fefb4605f2e6832e802f00f5eaed2b84"
+    }
+  ]
+}
+\n### sign
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock sign aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+rpc error (500): transport error: timeout
+\n### ecdh
+$ cargo run -p bifrost-cli --offline -- --socket /tmp/bifrostd-alice.sock ecdh 03745dc2860bac96ff638f8a8cfad920d14943fd8e3832c2554dc996fde9f6d2d6
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/bifrost-cli --socket /tmp/bifrostd-alice.sock ecdh 03745dc2860bac96ff638f8a8cfad920d14943fd8e3832c2554dc996fde9f6d2d6`
+rpc error (500): transport error: timeout
+stopped RELAY_PID (325571)
+stopped BIFROSTD_ALICE_PID (325931)
+stopped BIFROSTD_BOB_PID (325934)
+stopped BIFROSTD_CAROL_PID (325935)

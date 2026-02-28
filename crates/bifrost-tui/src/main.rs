@@ -5,10 +5,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use bifrost_rpc::{
-    BifrostRpcRequest, BifrostRpcResponse, DaemonStatus, PeerView, next_request_id, request,
-    send_request_to,
-};
+use bifrost_core::{decode_hex32, message_sighash};
+use bifrost_rpc::{BifrostRpcRequest, DaemonClient, DaemonStatus, PeerPolicyView, PeerView};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crossterm::{execute, terminal};
@@ -25,12 +23,14 @@ const REFRESH_EVERY: Duration = Duration::from_secs(2);
 #[derive(Debug)]
 struct App {
     alias: String,
-    socket: PathBuf,
+    client: DaemonClient,
     input: String,
     messages: VecDeque<String>,
     status_lines: Vec<String>,
     event_lines: Vec<String>,
     peers: Vec<PeerView>,
+    active_peer: Option<String>,
+    active_peer_label: Option<String>,
     quit: bool,
     last_refresh: Instant,
 }
@@ -41,12 +41,14 @@ impl App {
         messages.push_back("welcome: type 'help' for commands".to_string());
         Self {
             alias: alias_from_socket(&socket),
-            socket,
+            client: DaemonClient::new(socket),
             input: String::new(),
             messages,
             status_lines: vec!["loading status...".to_string()],
             event_lines: Vec::new(),
             peers: Vec::new(),
+            active_peer: None,
+            active_peer_label: None,
             quit: false,
             last_refresh: Instant::now() - REFRESH_EVERY,
         }
@@ -57,6 +59,39 @@ impl App {
         while self.messages.len() > MAX_MESSAGES {
             self.messages.pop_front();
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Theme {
+    header_bg: Color,
+    header_fg: Color,
+    header_label: Color,
+    dim: Color,
+    panel_status: Color,
+    panel_output: Color,
+    panel_input: Color,
+    output_command: Color,
+    output_event: Color,
+    output_error: Color,
+    output_success: Color,
+    output_info: Color,
+}
+
+fn high_contrast_theme() -> Theme {
+    Theme {
+        header_bg: Color::LightBlue,
+        header_fg: Color::Black,
+        header_label: Color::LightYellow,
+        dim: Color::Gray,
+        panel_status: Color::LightCyan,
+        panel_output: Color::LightGreen,
+        panel_input: Color::LightYellow,
+        output_command: Color::Yellow,
+        output_event: Color::LightBlue,
+        output_error: Color::Red,
+        output_success: Color::LightGreen,
+        output_info: Color::LightCyan,
     }
 }
 
@@ -88,7 +123,12 @@ async fn run_script_mode(socket: PathBuf, script_path: PathBuf) -> Result<()> {
         }
         let before = app.messages.len();
         execute_command(&mut app, line).await;
-        let new_lines = app.messages.iter().skip(before).cloned().collect::<Vec<_>>();
+        let new_lines = app
+            .messages
+            .iter()
+            .skip(before)
+            .cloned()
+            .collect::<Vec<_>>();
         for msg in new_lines {
             println!("{msg}");
         }
@@ -152,7 +192,7 @@ async fn execute_command(app: &mut App, cmd: &str) {
         "quit" | "exit" => app.quit = true,
         "clear" => app.messages.clear(),
         "help" => app.push_message(
-            "commands: help, status, events [n], health, ping <peer>, echo <peer> <msg>, sign <hex32>, ecdh <hex33>, onboard <peer>, clear, quit  (peer selector: alice|bob|carol|index|pubkey-prefix)",
+            "commands: help, status, events [n], health, use <peer>, ping <peer>, onboard <peer>, echo <peer> <msg> | echo <msg>, sign <text> | sign hex:<hex32> | sign 0x<hex32>, ecdh <peer>, policy list|get <peer>|set <peer> <json>|refresh <peer>, clear, quit  (peer selector: alice|bob|carol|index|pubkey-prefix)",
         ),
         "status" => {
             rpc_and_log(app, BifrostRpcRequest::Status, Some("status")).await;
@@ -167,163 +207,285 @@ async fn execute_command(app: &mut App, cmd: &str) {
             refresh_panels(app).await;
         }
         "health" => rpc_and_log(app, BifrostRpcRequest::Health, None).await,
+        "use" => {
+            if let Some(selector) = parts.get(1) {
+                match resolve_peer_selector(&app.peers, selector) {
+                    Ok(resolved) => {
+                        set_active_peer(app, resolved, (*selector).to_string());
+                    }
+                    Err(err) => app.push_message(err),
+                }
+            } else {
+                app.push_message("usage: use <peer>");
+            }
+        }
         "ping" => {
-            if let Some(peer) = parts.get(1) {
-                let resolved = match resolve_peer_selector(&app.peers, peer) {
+            if let Some(selector) = parts.get(1) {
+                let resolved = match resolve_peer_selector(&app.peers, selector) {
                     Ok(v) => v,
                     Err(err) => {
                         app.push_message(err);
                         return;
                     }
                 };
-                rpc_and_log(
-                    app,
-                    BifrostRpcRequest::Ping {
-                        peer: resolved,
-                    },
-                    None,
-                )
-                .await;
+                set_active_peer(app, resolved.clone(), (*selector).to_string());
+                rpc_and_log(app, BifrostRpcRequest::Ping { peer: resolved }, None).await;
                 refresh_panels(app).await;
             } else {
                 app.push_message("usage: ping <peer>");
             }
         }
         "onboard" => {
-            if let Some(peer) = parts.get(1) {
-                let resolved = match resolve_peer_selector(&app.peers, peer) {
+            if let Some(selector) = parts.get(1) {
+                let resolved = match resolve_peer_selector(&app.peers, selector) {
                     Ok(v) => v,
                     Err(err) => {
                         app.push_message(err);
                         return;
                     }
                 };
-                rpc_and_log(
-                    app,
-                    BifrostRpcRequest::Onboard {
-                        peer: resolved,
-                    },
-                    None,
-                )
-                .await;
+                set_active_peer(app, resolved.clone(), (*selector).to_string());
+                rpc_and_log(app, BifrostRpcRequest::Onboard { peer: resolved }, None).await;
                 refresh_panels(app).await;
             } else {
                 app.push_message("usage: onboard <peer>");
             }
         }
         "echo" => {
-            if parts.len() >= 3 {
-                let resolved = match resolve_peer_selector(&app.peers, parts[1]) {
+            let args = parts.get(1..).unwrap_or(&[]);
+            match resolve_echo_target_and_message(&app.peers, app.active_peer.as_deref(), args) {
+                Ok((peer, message, explicit_selector)) => {
+                    if explicit_selector {
+                        set_active_peer(app, peer.clone(), args[0].to_string());
+                    }
+                    rpc_and_log(app, BifrostRpcRequest::Echo { peer, message }, None).await;
+                    refresh_panels(app).await;
+                }
+                Err(err) => app.push_message(err),
+            }
+        }
+        "sign" => {
+            let args = parts.get(1..).unwrap_or(&[]);
+            match parse_sign_digest(args) {
+                Ok((digest, explain)) => {
+                    app.push_message(explain);
+                    rpc_and_log(
+                        app,
+                        BifrostRpcRequest::Sign {
+                            message32_hex: hex::encode(digest),
+                        },
+                        None,
+                    )
+                    .await;
+                }
+                Err(err) => app.push_message(err),
+            }
+        }
+        "ecdh" => {
+            if let Some(selector) = parts.get(1) {
+                let resolved = match resolve_peer_selector(&app.peers, selector) {
                     Ok(v) => v,
                     Err(err) => {
                         app.push_message(err);
                         return;
                     }
                 };
-                rpc_and_log(
-                    app,
-                    BifrostRpcRequest::Echo {
-                        peer: resolved,
-                        message: parts[2..].join(" "),
-                    },
-                    None,
-                )
-                .await;
-                refresh_panels(app).await;
-            } else {
-                app.push_message("usage: echo <peer> <message>");
-            }
-        }
-        "sign" => {
-            if let Some(hex) = parts.get(1) {
-                rpc_and_log(
-                    app,
-                    BifrostRpcRequest::Sign {
-                        message32_hex: (*hex).to_string(),
-                    },
-                    None,
-                )
-                .await;
-            } else {
-                app.push_message("usage: sign <32-byte-hex>");
-            }
-        }
-        "ecdh" => {
-            if let Some(hex) = parts.get(1) {
+                set_active_peer(app, resolved.clone(), (*selector).to_string());
                 rpc_and_log(
                     app,
                     BifrostRpcRequest::Ecdh {
-                        pubkey33_hex: (*hex).to_string(),
+                        pubkey33_hex: resolved,
                     },
                     None,
                 )
                 .await;
             } else {
-                app.push_message("usage: ecdh <33-byte-hex>");
+                app.push_message("usage: ecdh <peer>");
+            }
+        }
+        "policy" => {
+            let sub = parts.get(1).copied().unwrap_or("");
+            match sub {
+                "list" => rpc_and_log(app, BifrostRpcRequest::GetPeerPolicies, None).await,
+                "get" => {
+                    if let Some(selector) = parts.get(2) {
+                        let resolved = match resolve_peer_selector(&app.peers, selector) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                app.push_message(err);
+                                return;
+                            }
+                        };
+                        rpc_and_log(app, BifrostRpcRequest::GetPeerPolicy { peer: resolved }, None)
+                            .await;
+                    } else {
+                        app.push_message("usage: policy get <peer>");
+                    }
+                }
+                "refresh" => {
+                    if let Some(selector) = parts.get(2) {
+                        let resolved = match resolve_peer_selector(&app.peers, selector) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                app.push_message(err);
+                                return;
+                            }
+                        };
+                        rpc_and_log(
+                            app,
+                            BifrostRpcRequest::RefreshPeerPolicy { peer: resolved },
+                            None,
+                        )
+                        .await;
+                    } else {
+                        app.push_message("usage: policy refresh <peer>");
+                    }
+                }
+                "set" => {
+                    if parts.len() >= 4 {
+                        let resolved = match resolve_peer_selector(&app.peers, parts[2]) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                app.push_message(err);
+                                return;
+                            }
+                        };
+                        let raw = parts[3..].join(" ");
+                        let policy: PeerPolicyView = match serde_json::from_str(&raw) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                app.push_message(format!("invalid policy json: {err}"));
+                                return;
+                            }
+                        };
+                        rpc_and_log(
+                            app,
+                            BifrostRpcRequest::SetPeerPolicy {
+                                peer: resolved,
+                                policy,
+                            },
+                            None,
+                        )
+                        .await;
+                    } else {
+                        app.push_message("usage: policy set <peer> <json-policy>");
+                    }
+                }
+                _ => app.push_message("usage: policy <list|get|set|refresh> ..."),
             }
         }
         _ => app.push_message("unknown command (type 'help')"),
     }
 }
 
+fn parse_sign_digest(args: &[&str]) -> std::result::Result<([u8; 32], String), String> {
+    let Some(first) = args.first() else {
+        return Err(
+            "usage: sign <text> | sign hex:<32-byte-hex> | sign 0x<32-byte-hex>".to_string(),
+        );
+    };
+
+    if let Some(value) = first.strip_prefix("hex:") {
+        let digest = decode_hex32(value).map_err(|_| "invalid sign digest hex".to_string())?;
+        return Ok((
+            digest,
+            format!("sign: using explicit digest {}", hex::encode(digest)),
+        ));
+    }
+
+    if let Some(value) = first.strip_prefix("0x") {
+        let digest = decode_hex32(value).map_err(|_| "invalid sign digest hex".to_string())?;
+        return Ok((
+            digest,
+            format!("sign: using explicit digest {}", hex::encode(digest)),
+        ));
+    }
+
+    let text = args.join(" ");
+    if text.is_empty() {
+        return Err(
+            "usage: sign <text> | sign hex:<32-byte-hex> | sign 0x<32-byte-hex>".to_string(),
+        );
+    }
+
+    let digest = message_sighash(text.as_bytes());
+    Ok((
+        digest,
+        format!(
+            "sign: sha256(utf8)={} (text='{}')",
+            hex::encode(digest),
+            text
+        ),
+    ))
+}
+
+fn resolve_echo_target_and_message(
+    peers: &[PeerView],
+    active_peer: Option<&str>,
+    args: &[&str],
+) -> std::result::Result<(String, String, bool), String> {
+    if args.is_empty() {
+        return Err(
+            "usage: echo <peer> <message> | echo <message> (requires 'use <peer>')".to_string(),
+        );
+    }
+
+    if args.len() >= 2
+        && let Ok(peer) = resolve_peer_selector(peers, args[0])
+    {
+        return Ok((peer, args[1..].join(" "), true));
+    }
+
+    let Some(active) = active_peer else {
+        return Err(
+            "echo target is not set; use 'use <peer>' first or run 'echo <peer> <message>'"
+                .to_string(),
+        );
+    };
+
+    Ok((active.to_string(), args.join(" "), false))
+}
+
+fn set_active_peer(app: &mut App, peer: String, label: String) {
+    app.active_peer = Some(peer.clone());
+    app.active_peer_label = Some(label.clone());
+    app.push_message(format!("active peer: {} ({})", label, short_pubkey(&peer)));
+}
+
 async fn rpc_and_log(app: &mut App, req: BifrostRpcRequest, panel_hint: Option<&str>) {
-    let id = next_request_id();
-    match send_request_to(&app.socket, request(id, req)).await {
-        Ok(resp) => match resp.response {
-            BifrostRpcResponse::Ok(data) => {
-                if let Ok(pretty) = serde_json::to_string_pretty(&data) {
-                    for line in pretty.lines() {
-                        app.push_message(line.to_string());
-                    }
-                    if panel_hint == Some("status") {
-                        if let Some(status) = decode_status(&data) {
-                            app.peers = status.peers.clone();
-                            app.status_lines = format_status_lines(&status);
-                        } else {
-                            app.status_lines = pretty.lines().map(ToString::to_string).collect();
-                        }
-                    }
-                    if panel_hint == Some("events") {
-                        merge_events_into_output(app, extract_events(&data));
+    match app.client.call(req).await {
+        Ok(data) => {
+            if let Ok(pretty) = serde_json::to_string_pretty(&data) {
+                for line in pretty.lines() {
+                    app.push_message(line.to_string());
+                }
+                if panel_hint == Some("status") {
+                    if let Some(status) = decode_status(&data) {
+                        app.peers = status.peers.clone();
+                        app.status_lines = format_status_lines(&status);
+                    } else {
+                        app.status_lines = pretty.lines().map(ToString::to_string).collect();
                     }
                 }
+                if panel_hint == Some("events") {
+                    merge_events_into_output(app, extract_events(&data));
+                }
             }
-            BifrostRpcResponse::Err { code, message } => {
-                app.push_message(format!("rpc error ({code}): {message}"));
-            }
-        },
-        Err(err) => app.push_message(format!("rpc transport error: {err}")),
+        }
+        Err(err) => app.push_message(format!("error: {err}")),
     }
 }
 
 async fn refresh_panels(app: &mut App) {
     app.last_refresh = Instant::now();
 
-    if let Ok(resp) = send_request_to(
-        &app.socket,
-        request(next_request_id(), BifrostRpcRequest::Status),
-    )
-    .await
-    {
-        if let BifrostRpcResponse::Ok(data) = resp.response {
-            if let Some(status) = decode_status(&data) {
-                app.peers = status.peers.clone();
-                app.status_lines = format_status_lines(&status);
-            } else if let Ok(pretty) = serde_json::to_string_pretty(&data) {
-                app.status_lines = pretty.lines().map(ToString::to_string).collect();
-            }
-        }
+    if let Ok(status) = app.client.status().await {
+        app.peers = status.peers.clone();
+        app.status_lines = format_status_lines(&status);
     }
 
-    if let Ok(resp) = send_request_to(
-        &app.socket,
-        request(next_request_id(), BifrostRpcRequest::Events { limit: 30 }),
-    )
-    .await
-    {
-        if let BifrostRpcResponse::Ok(data) = resp.response {
-            merge_events_into_output(app, extract_events(&data));
-        }
+    if let Ok(data) = app.client.events(30).await {
+        merge_events_into_output(app, extract_events(&data));
     }
 }
 
@@ -359,16 +521,22 @@ fn format_status_lines(status: &DaemonStatus) -> Vec<String> {
         let theirs_bar = progress_bar(peer.nonce_incoming_available, pool_max, 10);
         let ours_bar = progress_bar(peer.nonce_outgoing_available, pool_max, 10);
         lines.push(format!(
-            "{} ({}) m{} {} {} policy:{}{} sign:{} send:{}",
+            "{} ({}) m{} {} {} block:{} req(sign/ecdh):{}/{} resp(sign/ecdh):{}/{} nonce:{}",
             idx + 1,
             alias,
             peer.member_idx,
             short_pubkey(&peer.pubkey),
             peer.status,
-            if peer.nonce_can_sign { "yes" } else { "no" },
-            if peer.nonce_should_send { "yes" } else { "no" },
-            if peer.send { "S" } else { "-" },
-            if peer.recv { "R" } else { "-" },
+            if peer.block_all { "yes" } else { "no" },
+            if peer.request.sign { "Y" } else { "N" },
+            if peer.request.ecdh { "Y" } else { "N" },
+            if peer.respond.sign { "Y" } else { "N" },
+            if peer.respond.ecdh { "Y" } else { "N" },
+            if peer.nonce_can_sign {
+                "ready"
+            } else {
+                "empty"
+            },
         ));
         lines.push(format!(
             "  theirs [{}] {}/{} | ours [{}] {}/{} | spent {}",
@@ -458,7 +626,7 @@ fn resolve_peer_selector(
     Err(format!("unknown peer selector: {selector}"))
 }
 
-fn alias_from_socket(socket: &PathBuf) -> String {
+fn alias_from_socket(socket: &std::path::Path) -> String {
     let lower = socket.display().to_string().to_ascii_lowercase();
     if lower.contains("alice") {
         return "alice".to_string();
@@ -496,84 +664,132 @@ fn tail_lines(lines: &[String], max_rows: usize) -> Vec<String> {
 }
 
 fn render(frame: &mut Frame<'_>, app: &App) {
+    let theme = high_contrast_theme();
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
-            Constraint::Length(8),
             Constraint::Length(3),
         ])
         .split(frame.area());
+    let middle = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(root[1]);
+
+    let active_peer = app
+        .active_peer
+        .as_ref()
+        .map(|peer| {
+            format!(
+                "target: {} ({})",
+                app.active_peer_label.as_deref().unwrap_or("peer"),
+                short_pubkey(peer)
+            )
+        })
+        .unwrap_or_else(|| "target: (unset; use <peer>)".to_string());
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " BIFROST TUI ",
-            Style::default().fg(Color::Black).bg(Color::Cyan),
+            Style::default().fg(theme.header_fg).bg(theme.header_bg),
         ),
         Span::raw("  "),
         Span::styled(
             format!("alias: {}", app.alias),
-            Style::default().fg(Color::LightYellow),
+            Style::default()
+                .fg(theme.header_label)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
+        Span::styled(active_peer, Style::default().fg(Color::Cyan)),
+        Span::raw("  "),
         Span::styled(
-            format!("sock: {}", app.socket.display()),
-            Style::default().fg(Color::Gray),
+            "hint: sign hello | ecdh bob | echo hello",
+            Style::default().fg(theme.dim),
         ),
     ]))
     .block(Block::default().borders(Borders::ALL));
     frame.render_widget(header, root[0]);
 
-    let status_visible_rows = root[1].height.saturating_sub(2) as usize;
+    let status_visible_rows = middle[0].height.saturating_sub(2) as usize;
     let status_items = tail_lines(&app.status_lines, status_visible_rows)
         .iter()
-        .map(|line| ListItem::new(line.clone()))
+        .map(|line| {
+            ListItem::new(Line::styled(
+                line.clone(),
+                Style::default().fg(Color::White),
+            ))
+        })
         .collect::<Vec<_>>();
     let status = List::new(status_items).block(
         Block::default()
             .title(Span::styled(
                 "Peers",
                 Style::default()
-                    .fg(Color::LightBlue)
+                    .fg(theme.panel_status)
                     .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL),
     );
-    frame.render_widget(status, root[1]);
+    frame.render_widget(status, middle[0]);
 
-    let output_visible_rows = root[2].height.saturating_sub(2) as usize;
+    let output_visible_rows = middle[1].height.saturating_sub(2) as usize;
     let output_snapshot = app.messages.iter().cloned().collect::<Vec<_>>();
     let output_lines = tail_lines(&output_snapshot, output_visible_rows)
         .iter()
-        .map(|m| ListItem::new(m.clone()))
+        .map(|m| ListItem::new(Line::styled(m.clone(), style_output_line(m, theme))))
         .collect::<Vec<_>>();
     let output = List::new(output_lines).block(
         Block::default()
             .title(Span::styled(
                 "Output",
                 Style::default()
-                    .fg(Color::LightGreen)
+                    .fg(theme.panel_output)
                     .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL),
     );
-    frame.render_widget(output, root[2]);
+    frame.render_widget(output, middle[1]);
 
     let input = Paragraph::new(app.input.as_str())
-        .style(Style::default().fg(Color::Yellow))
+        .style(Style::default().fg(theme.panel_input))
         .block(
             Block::default()
                 .title(Span::styled(
-                    "Command",
+                    format!("Command  sock: {}", app.client.socket().display()),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.panel_input)
                         .add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL),
         )
         .wrap(Wrap { trim: false });
-    frame.render_widget(input, root[3]);
+    frame.render_widget(input, root[2]);
+}
+
+fn style_output_line(line: &str, theme: Theme) -> Style {
+    if line.starts_with('>') {
+        return Style::default().fg(theme.output_command);
+    }
+    if line.starts_with("event:") {
+        return Style::default().fg(theme.output_event);
+    }
+    if line.starts_with("usage:") || line.starts_with("error:") || line.starts_with("unknown") {
+        return Style::default().fg(theme.output_error);
+    }
+    if line.contains("\"ok\": true")
+        || line.contains("\"signature\"")
+        || line.contains("\"shared_secret\"")
+        || line.starts_with("active peer:")
+    {
+        return Style::default().fg(theme.output_success);
+    }
+    if line.starts_with("sign:") {
+        return Style::default().fg(theme.output_info);
+    }
+    Style::default().fg(Color::White)
 }
 
 fn init_terminal() -> Result<()> {
@@ -622,8 +838,21 @@ mod tests {
         PeerView {
             pubkey: pubkey.to_string(),
             status: "online".to_string(),
-            send: true,
-            recv: true,
+            block_all: false,
+            request: bifrost_rpc::MethodPolicyView {
+                echo: true,
+                ping: true,
+                onboard: true,
+                sign: true,
+                ecdh: true,
+            },
+            respond: bifrost_rpc::MethodPolicyView {
+                echo: true,
+                ping: true,
+                onboard: true,
+                sign: true,
+                ecdh: true,
+            },
             updated: 0,
             member_idx,
             nonce_incoming_available: 1,
@@ -678,5 +907,53 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("ours [")));
         assert!(lines.iter().any(|l| l.contains("spent")));
         assert!(lines.iter().any(|l| l.contains("(bob)")));
+    }
+
+    #[test]
+    fn parse_sign_digest_supports_text_and_hex_modes() {
+        let (text_digest, _) = parse_sign_digest(&["hello"]).expect("text");
+        let (hex_digest, _) = parse_sign_digest(&[
+            "hex:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        ])
+        .expect("hex");
+        let (ox_digest, _) = parse_sign_digest(&[
+            "0x2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        ])
+        .expect("0x");
+        assert_eq!(text_digest, hex_digest);
+        assert_eq!(ox_digest, hex_digest);
+    }
+
+    #[test]
+    fn resolve_echo_target_prefers_explicit_selector_and_falls_back_to_active() {
+        let peers = vec![
+            peer(
+                "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                2,
+            ),
+            peer(
+                "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                3,
+            ),
+        ];
+
+        let explicit =
+            resolve_echo_target_and_message(&peers, None, &["bob", "hello"]).expect("explicit");
+        assert_eq!(explicit.0, peers[0].pubkey);
+        assert_eq!(explicit.1, "hello");
+        assert!(explicit.2);
+
+        let fallback =
+            resolve_echo_target_and_message(&peers, Some(&peers[1].pubkey), &["hello", "team"])
+                .expect("fallback");
+        assert_eq!(fallback.0, peers[1].pubkey);
+        assert_eq!(fallback.1, "hello team");
+        assert!(!fallback.2);
+    }
+
+    #[test]
+    fn resolve_echo_target_requires_active_peer_for_shorthand() {
+        let err = resolve_echo_target_and_message(&[], None, &["hello"]).expect_err("no active");
+        assert!(err.contains("use <peer>"));
     }
 }

@@ -30,6 +30,10 @@ Rust:
 - single sign: `node.sign(message32).await`
 - bounded batch: `node.sign_batch(&messages).await`
 - queued/chunked batch: `node.sign_queue(&messages).await`
+- facade options:
+  - `NodeClient` for lifecycle/operation orchestration with middleware hooks.
+  - `Signer` for dedicated sign/sign_batch façade.
+  - `NoncePoolView` for nonce health/config views.
 
 ### ECDH
 
@@ -95,7 +99,8 @@ TS websocket behavior -> Rust `bifrost-transport-ws`:
 
 ## Known Differences
 
-- Batch signing uses safe Option-B orchestration (session-per-hash style behavior), with core batch helpers available.
+- Rust batch signing now uses Option-A single-session multi-hash orchestration with indexed nonce/signature binding, not TS class internals.
+- TS deterministic nonce derivation internals are replaced by stored FROST signing nonce state with atomic claim semantics.
 - Full forced network-fault integration coverage for websocket transport remains a follow-up hardening item.
 
 ## Verification Checklist
@@ -104,4 +109,3 @@ TS websocket behavior -> Rust `bifrost-transport-ws`:
 - `cargo test -p bifrost-transport-ws --offline`
 - `cargo test -p bifrost-node --test happy_paths --offline`
 - `cargo test -p bifrost-node --test adversarial --offline`
-

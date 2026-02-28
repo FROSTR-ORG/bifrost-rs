@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
 use bifrost_core::local_pubkey_from_share;
-use bifrost_core::types::{GroupPackage, MemberPackage, SharePackage};
-use frost_secp256k1_tr_unofficial as frost;
-use rand_core::OsRng;
+use frostr_utils::{CreateKeysetConfig, create_keyset};
 use serde::Serialize;
 
 const DEFAULT_NAMES: [&str; 8] = [
@@ -18,10 +16,33 @@ struct DaemonConfig {
     socket_path: String,
     group_path: String,
     share_path: String,
-    peers: Vec<String>,
+    peers: Vec<DaemonPeerConfig>,
     relays: Vec<String>,
     options: Option<serde_json::Value>,
     transport: DaemonTransportConfig,
+    auth: DaemonAuthConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DaemonPeerConfig {
+    pubkey: String,
+    policy: PeerPolicyConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PeerPolicyConfig {
+    block_all: bool,
+    request: MethodPolicyConfig,
+    respond: MethodPolicyConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MethodPolicyConfig {
+    echo: bool,
+    ping: bool,
+    onboard: bool,
+    sign: bool,
+    ecdh: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,20 +55,14 @@ struct DaemonTransportConfig {
     sender_seckey32_hex: String,
 }
 
-fn main() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let cmd = args.first().map(String::as_str).unwrap_or("help");
-
-    match cmd {
-        "keygen" => run_keygen(&args[1..]),
-        _ => {
-            print_usage();
-            Ok(())
-        }
-    }
+#[derive(Debug, Clone, Serialize)]
+struct DaemonAuthConfig {
+    token: Option<String>,
+    allow_unauthenticated_read: bool,
+    insecure_no_auth: bool,
 }
 
-fn run_keygen(args: &[String]) -> Result<()> {
+pub fn run_keygen_command(args: &[String]) -> Result<()> {
     let out_dir = arg_value(args, "--out-dir").unwrap_or_else(|| "dev/data".to_string());
     let threshold = arg_value(args, "--threshold")
         .and_then(|v| v.parse::<u16>().ok())
@@ -71,52 +86,11 @@ fn run_keygen(args: &[String]) -> Result<()> {
     let out_path = PathBuf::from(out_dir);
     fs::create_dir_all(&out_path).with_context(|| format!("create {}", out_path.display()))?;
 
-    let (shares, pubkey_pkg) = frost::keys::generate_with_dealer(
-        count,
-        threshold,
-        frost::keys::IdentifierList::Default,
-        OsRng,
-    )
-    .context("generate_with_dealer")?;
-
-    let mut material = Vec::new();
-    for (id, secret_share) in shares {
-        let key_package = frost::keys::KeyPackage::try_from(secret_share).context("key package")?;
-        material.push((id, key_package));
-    }
-    material.sort_by_key(|(id, _)| id.serialize());
-
-    let mut group_pk = [0u8; 33];
-    group_pk.copy_from_slice(&pubkey_pkg.verifying_key().serialize().context("group pk")?);
-
-    let mut members = Vec::new();
-    let mut share_packages = Vec::new();
-
-    for (id, key) in material {
-        let id_ser = id.serialize();
-        let idx = id_ser[31] as u16;
-
-        let mut member_pk = [0u8; 33];
-        member_pk.copy_from_slice(&key.verifying_share().serialize().context("member pk")?);
-
-        let mut seckey = [0u8; 32];
-        seckey.copy_from_slice(&key.signing_share().serialize());
-
-        members.push(MemberPackage {
-            idx,
-            pubkey: member_pk,
-        });
-        share_packages.push(SharePackage { idx, seckey });
-    }
-
-    members.sort_by_key(|m| m.idx);
-    share_packages.sort_by_key(|s| s.idx);
-
-    let group = GroupPackage {
-        group_pk,
-        threshold,
-        members: members.clone(),
-    };
+    let bundle = create_keyset(CreateKeysetConfig { threshold, count })
+        .map_err(|e| anyhow!("create keyset: {e}"))?;
+    let group = bundle.group;
+    let share_packages = bundle.shares;
+    let members = group.members.clone();
 
     write_json(
         &out_path.join("group.json"),
@@ -139,7 +113,26 @@ fn run_keygen(args: &[String]) -> Result<()> {
         let peers = members
             .iter()
             .filter(|m| m.idx != share.idx)
-            .map(|m| hex::encode(m.pubkey))
+            .map(|m| DaemonPeerConfig {
+                pubkey: hex::encode(m.pubkey),
+                policy: PeerPolicyConfig {
+                    block_all: false,
+                    request: MethodPolicyConfig {
+                        echo: true,
+                        ping: true,
+                        onboard: true,
+                        sign: true,
+                        ecdh: true,
+                    },
+                    respond: MethodPolicyConfig {
+                        echo: true,
+                        ping: true,
+                        onboard: true,
+                        sign: true,
+                        ecdh: true,
+                    },
+                },
+            })
             .collect::<Vec<_>>();
 
         let daemon_cfg = DaemonConfig {
@@ -161,6 +154,11 @@ fn run_keygen(args: &[String]) -> Result<()> {
                     local_pubkey_from_share(share).context("derive local transport pubkey")?,
                 ),
                 sender_seckey32_hex: hex::encode(share.seckey),
+            },
+            auth: DaemonAuthConfig {
+                token: None,
+                allow_unauthenticated_read: false,
+                insecure_no_auth: true,
             },
         };
 
@@ -188,8 +186,8 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
     None
 }
 
-fn print_usage() {
+pub fn print_keygen_usage() {
     eprintln!(
-        "bifrost-devnet keygen [--out-dir DIR] [--threshold N] [--count N] [--relay URL] [--socket-dir DIR]"
+        "bifrost-devtools keygen [--out-dir DIR] [--threshold N] [--count N] [--relay URL] [--socket-dir DIR]"
     );
 }

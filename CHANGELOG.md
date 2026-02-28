@@ -11,8 +11,7 @@ All notable changes to `bifrost-rs` should be documented in this file.
   - `bifrostd` daemon
   - `bifrost-cli`
   - `bifrost-tui`
-  - `bifrost-relay-dev`
-  - `bifrost-devnet`
+  - `bifrost-devtools` (`relay` + `keygen` subcommands)
 - Devnet/e2e automation scripts:
   - `scripts/devnet.sh`
   - `scripts/devnet-tmux.sh`
@@ -29,5 +28,4 @@ All notable changes to `bifrost-rs` should be documented in this file.
 
 ### Notes
 
-- See `docs/release-checklist-v0.1.0.md` for release gate evidence.
-
+- See `dev/audit/checklist-v0.1.0.md` and `dev/audit/internal-audit-2026-02-27.md` for release gate evidence.

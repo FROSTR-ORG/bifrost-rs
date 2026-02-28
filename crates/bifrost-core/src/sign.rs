@@ -12,28 +12,37 @@ pub fn create_partial_sig_package(
     group: &GroupPackage,
     session: &SignSessionPackage,
     share: &SharePackage,
-    signing_nonces: &frost::round1::SigningNonces,
+    signing_nonces: &[frost::round1::SigningNonces],
     pubkey: [u8; 33],
 ) -> CoreResult<PartialSigPackage> {
     if session.hashes.is_empty() {
         return Err(CoreError::EmptySessionHashes);
     }
-    if session.hashes.len() != 1 || session.hashes[0].len() != 1 {
-        return Err(CoreError::UnsupportedBatchSigning);
+    if signing_nonces.len() != session.hashes.len() {
+        return Err(CoreError::BatchItemCountMismatch);
     }
 
     let key_package = build_key_package(group, share)?;
-    let commitments = build_commitments_map(session)?;
+    let commitments = build_commitments_by_index(session)?;
 
     let mut psigs = Vec::with_capacity(session.hashes.len());
-    for vec in &session.hashes {
-        let Some(sighash) = vec.first() else {
-            return Err(CoreError::EmptySessionHashes);
-        };
+    for (hash_index, sighash) in session.hashes.iter().enumerate() {
+        let signing_package = frost::SigningPackage::new(
+            commitments
+                .get(hash_index)
+                .ok_or(CoreError::MissingHashIndexContribution)?
+                .clone(),
+            sighash,
+        );
+        let signature_share = frost::round2::sign(
+            &signing_package,
+            signing_nonces
+                .get(hash_index)
+                .ok_or(CoreError::MissingHashIndexContribution)?,
+            &key_package,
+        )
+        .map_err(|e| CoreError::Frost(e.to_string()))?;
 
-        let signing_package = frost::SigningPackage::new(commitments.clone(), sighash);
-        let signature_share = frost::round2::sign(&signing_package, signing_nonces, &key_package)
-            .map_err(|e| CoreError::Frost(e.to_string()))?;
         let share_bytes = signature_share.serialize();
         if share_bytes.len() != 32 {
             return Err(CoreError::InvalidScalar);
@@ -43,6 +52,7 @@ pub fn create_partial_sig_package(
         partial_sig.copy_from_slice(&share_bytes);
 
         psigs.push(PartialSigEntry {
+            hash_index: hash_index as u16,
             sighash: *sighash,
             partial_sig,
         });
@@ -62,7 +72,7 @@ pub fn create_partial_sig_packages_batch(
     group: &GroupPackage,
     sessions: &[SignSessionPackage],
     share: &SharePackage,
-    signing_nonces: &[frost::round1::SigningNonces],
+    signing_nonces: &[Vec<frost::round1::SigningNonces>],
     pubkey: [u8; 33],
 ) -> CoreResult<Vec<PartialSigPackage>> {
     if sessions.is_empty() {
@@ -101,10 +111,27 @@ pub fn verify_partial_sig_package(
         .verifying_shares()
         .get(&identifier)
         .ok_or(CoreError::MissingMember)?;
-    let commitments = build_commitments_map(session)?;
+    let commitments = build_commitments_by_index(session)?;
 
+    let mut seen = std::collections::HashSet::new();
     for psig in &pkg.psigs {
-        let signing_package = frost::SigningPackage::new(commitments.clone(), &psig.sighash);
+        let idx = psig.hash_index as usize;
+        if idx >= session.hashes.len() {
+            return Err(CoreError::HashIndexOutOfRange);
+        }
+        if !seen.insert(idx) {
+            return Err(CoreError::HashIndexDuplicate);
+        }
+        if session.hashes[idx] != psig.sighash {
+            return Err(CoreError::SessionHashMismatch);
+        }
+        let signing_package = frost::SigningPackage::new(
+            commitments
+                .get(idx)
+                .ok_or(CoreError::MissingHashIndexContribution)?
+                .clone(),
+            &psig.sighash,
+        );
         let signature_share = frost::round2::SignatureShare::deserialize(&psig.partial_sig)
             .map_err(|e| CoreError::Frost(e.to_string()))?;
 
@@ -131,15 +158,17 @@ pub fn combine_signatures(
     }
 
     let public_key_package = build_public_key_package(group)?;
-    let commitments = build_commitments_map(session)?;
+    let commitments = build_commitments_by_index(session)?;
 
     let mut out = Vec::with_capacity(session.hashes.len());
-    for vec in &session.hashes {
-        let Some(sighash) = vec.first() else {
-            return Err(CoreError::EmptySessionHashes);
-        };
-
-        let signing_package = frost::SigningPackage::new(commitments.clone(), sighash);
+    for (hash_index, sighash) in session.hashes.iter().enumerate() {
+        let signing_package = frost::SigningPackage::new(
+            commitments
+                .get(hash_index)
+                .ok_or(CoreError::MissingHashIndexContribution)?
+                .clone(),
+            sighash,
+        );
         let mut signature_shares = BTreeMap::new();
 
         for pkg in pkgs {
@@ -148,8 +177,11 @@ pub fn combine_signatures(
             let entry = pkg
                 .psigs
                 .iter()
-                .find(|e| e.sighash == *sighash)
-                .ok_or(CoreError::EmptySessionHashes)?;
+                .find(|e| e.hash_index as usize == hash_index)
+                .ok_or(CoreError::MissingHashIndexContribution)?;
+            if entry.sighash != *sighash {
+                return Err(CoreError::SessionHashMismatch);
+            }
             let signature_share = frost::round2::SignatureShare::deserialize(&entry.partial_sig)
                 .map_err(|e| CoreError::Frost(e.to_string()))?;
             signature_shares.insert(identifier, signature_share);
@@ -197,33 +229,44 @@ pub fn combine_signatures_batch(
 
     let mut out = Vec::with_capacity(sessions.len());
     for (session, pkgs) in sessions.iter().zip(pkgs_by_session.iter()) {
-        let sigs = combine_signatures(group, session, pkgs)?;
-        if sigs.len() != 1 {
-            return Err(CoreError::UnsupportedBatchSigning);
-        }
-        out.push(sigs[0].clone());
+        out.extend(combine_signatures(group, session, pkgs)?);
     }
 
     Ok(out)
 }
 
-fn build_commitments_map(
+fn build_commitments_by_index(
     session: &SignSessionPackage,
-) -> CoreResult<BTreeMap<frost::Identifier, frost::round1::SigningCommitments>> {
+) -> CoreResult<Vec<BTreeMap<frost::Identifier, frost::round1::SigningCommitments>>> {
     let nonces = session.nonces.as_ref().ok_or(CoreError::MissingNonces)?;
-    let mut commitments = BTreeMap::new();
+    let hash_len = session.hashes.len();
+    let mut commitments = vec![BTreeMap::new(); hash_len];
 
-    for nonce in nonces {
-        let identifier =
-            frost::Identifier::try_from(nonce.idx).map_err(|e| CoreError::Frost(e.to_string()))?;
-        let hiding = frost::round1::NonceCommitment::deserialize(&nonce.hidden_pn)
+    for member_nonce_set in nonces {
+        let identifier = frost::Identifier::try_from(member_nonce_set.idx)
             .map_err(|e| CoreError::Frost(e.to_string()))?;
-        let binding = frost::round1::NonceCommitment::deserialize(&nonce.binder_pn)
-            .map_err(|e| CoreError::Frost(e.to_string()))?;
-        commitments.insert(
-            identifier,
-            frost::round1::SigningCommitments::new(hiding, binding),
-        );
+        if member_nonce_set.entries.len() != hash_len {
+            return Err(CoreError::MissingHashIndexContribution);
+        }
+        for entry in &member_nonce_set.entries {
+            let idx = entry.hash_index as usize;
+            if idx >= hash_len {
+                return Err(CoreError::HashIndexOutOfRange);
+            }
+            let hiding = frost::round1::NonceCommitment::deserialize(&entry.hidden_pn)
+                .map_err(|e| CoreError::Frost(e.to_string()))?;
+            let binding = frost::round1::NonceCommitment::deserialize(&entry.binder_pn)
+                .map_err(|e| CoreError::Frost(e.to_string()))?;
+            if commitments[idx]
+                .insert(
+                    identifier,
+                    frost::round1::SigningCommitments::new(hiding, binding),
+                )
+                .is_some()
+            {
+                return Err(CoreError::HashIndexDuplicate);
+            }
+        }
     }
 
     Ok(commitments)
@@ -381,21 +424,24 @@ mod tests {
             let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
                 .expect("signing share deserialize");
             let (n, c) = frost::round1::commit(&signing_share, &mut OsRng);
-            nonces.push(crate::types::MemberPublicNonce {
+            nonces.push(crate::types::MemberNonceCommitmentSet {
                 idx: share.idx,
-                binder_pn: c
-                    .binding()
-                    .serialize()
-                    .expect("serialize commitment")
-                    .try_into()
-                    .expect("len"),
-                hidden_pn: c
-                    .hiding()
-                    .serialize()
-                    .expect("serialize commitment")
-                    .try_into()
-                    .expect("len"),
-                code: [1u8; 32],
+                entries: vec![crate::types::IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: c
+                        .binding()
+                        .serialize()
+                        .expect("serialize commitment")
+                        .try_into()
+                        .expect("len"),
+                    hidden_pn: c
+                        .hiding()
+                        .serialize()
+                        .expect("serialize commitment")
+                        .try_into()
+                        .expect("len"),
+                    code: [1u8; 32],
+                }],
             });
             local_nonces.push(n);
         }
@@ -404,7 +450,7 @@ mod tests {
             gid: [1; 32],
             sid: [2; 32],
             members: share_packages.iter().map(|s| s.idx).collect(),
-            hashes: vec![vec![[7; 32]]],
+            hashes: vec![[7; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 1,
@@ -422,8 +468,8 @@ mod tests {
             let parsed_nonces =
                 frost::round1::SigningNonces::deserialize(&nonce_ser).expect("deserialize nonces");
             let key_pkg = build_key_package(&group, share).expect("build key package");
-            let commitments = build_commitments_map(&session).expect("commitments");
-            let sp = frost::SigningPackage::new(commitments, &[7; 32]);
+            let commitments = build_commitments_by_index(&session).expect("commitments");
+            let sp = frost::SigningPackage::new(commitments[0].clone(), &[7; 32]);
             let sig_share = frost::round2::sign(&sp, &parsed_nonces, &key_pkg).expect("sign share");
 
             let mut ps = [0u8; 32];
@@ -434,6 +480,7 @@ mod tests {
                 sid: session.sid,
                 pubkey: member.pubkey,
                 psigs: vec![PartialSigEntry {
+                    hash_index: 0,
                     sighash: [7; 32],
                     partial_sig: ps,
                 }],
@@ -487,25 +534,28 @@ mod tests {
             gid: [1; 32],
             sid: [2; 32],
             members: shares.iter().map(|s| s.idx).collect(),
-            hashes: vec![vec![[7; 32]]],
+            hashes: vec![[7; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 1,
-            nonces: Some(vec![crate::types::MemberPublicNonce {
+            nonces: Some(vec![crate::types::MemberNonceCommitmentSet {
                 idx: share.idx,
-                binder_pn: commitments_a
-                    .binding()
-                    .serialize()
-                    .expect("serialize")
-                    .try_into()
-                    .expect("len"),
-                hidden_pn: commitments_a
-                    .hiding()
-                    .serialize()
-                    .expect("serialize")
-                    .try_into()
-                    .expect("len"),
-                code: [3u8; 32],
+                entries: vec![crate::types::IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: commitments_a
+                        .binding()
+                        .serialize()
+                        .expect("serialize")
+                        .try_into()
+                        .expect("len"),
+                    hidden_pn: commitments_a
+                        .hiding()
+                        .serialize()
+                        .expect("serialize")
+                        .try_into()
+                        .expect("len"),
+                    code: [3u8; 32],
+                }],
             }]),
         };
 
@@ -513,7 +563,7 @@ mod tests {
             &group,
             &[session],
             share,
-            &[nonce_a, nonce_b],
+            &[vec![nonce_a], vec![nonce_b]],
             group
                 .members
                 .iter()
@@ -530,30 +580,33 @@ mod tests {
         let (group, shares) = two_member_fixture();
 
         let mut sessions = Vec::new();
-        let mut local_nonces_by_share: Vec<Vec<frost::round1::SigningNonces>> =
-            vec![Vec::new(); shares.len()];
+        let mut local_nonces_by_share: Vec<Vec<Vec<u8>>> = vec![Vec::new(); shares.len()];
         for idx in 0..3u8 {
             let mut member_nonces = Vec::with_capacity(shares.len());
             for (share_idx, share) in shares.iter().enumerate() {
                 let signing_share =
                     frost::keys::SigningShare::deserialize(&share.seckey).expect("signing share");
                 let (nonces, commitments) = frost::round1::commit(&signing_share, &mut OsRng);
-                local_nonces_by_share[share_idx].push(nonces);
-                member_nonces.push(crate::types::MemberPublicNonce {
+                local_nonces_by_share[share_idx]
+                    .push(nonces.serialize().expect("serialize signing nonces"));
+                member_nonces.push(crate::types::MemberNonceCommitmentSet {
                     idx: share.idx,
-                    binder_pn: commitments
-                        .binding()
-                        .serialize()
-                        .expect("serialize")
-                        .try_into()
-                        .expect("len"),
-                    hidden_pn: commitments
-                        .hiding()
-                        .serialize()
-                        .expect("serialize")
-                        .try_into()
-                        .expect("len"),
-                    code: [idx; 32],
+                    entries: vec![crate::types::IndexedPublicNonceCommitment {
+                        hash_index: 0,
+                        binder_pn: commitments
+                            .binding()
+                            .serialize()
+                            .expect("serialize")
+                            .try_into()
+                            .expect("len"),
+                        hidden_pn: commitments
+                            .hiding()
+                            .serialize()
+                            .expect("serialize")
+                            .try_into()
+                            .expect("len"),
+                        code: [idx; 32],
+                    }],
                 });
             }
 
@@ -561,7 +614,7 @@ mod tests {
                 gid: [1; 32],
                 sid: [10 + idx; 32],
                 members: shares.iter().map(|s| s.idx).collect(),
-                hashes: vec![vec![[20 + idx; 32]]],
+                hashes: vec![[20 + idx; 32]],
                 content: None,
                 kind: "message".to_string(),
                 stamp: 100 + idx as u32,
@@ -581,7 +634,15 @@ mod tests {
                 &group,
                 &sessions,
                 share,
-                &local_nonces_by_share[share_idx],
+                &local_nonces_by_share[share_idx]
+                    .iter()
+                    .map(|n| {
+                        vec![
+                            frost::round1::SigningNonces::deserialize(n)
+                                .expect("deserialize signing nonces"),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
                 pubkey,
             )
             .expect("create batch");

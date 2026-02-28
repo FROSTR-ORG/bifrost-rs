@@ -16,6 +16,12 @@
 - Wire structs for transport payloads.
 - Hex bridge conversions between wire and core types.
 
+## `frostr-utils`
+
+- Shared integration/tooling helpers for keyset lifecycle and onboarding packaging.
+- Keyset operations: create/verify/rotate/recover.
+- Onboarding package operations: minimal bootstrap package build + bech32m/binary encode/decode.
+
 ## `bifrost-transport`
 
 - Generic transport traits:

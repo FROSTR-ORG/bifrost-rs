@@ -36,4 +36,10 @@ pub enum NodeError {
     StaleEnvelope,
     #[error("payload limit exceeded: {0}")]
     PayloadLimitExceeded(&'static str),
+    #[error("unsupported envelope version: {0}")]
+    UnsupportedEnvelopeVersion(u16),
+    #[error("invalid request id format")]
+    InvalidRequestIdFormat,
+    #[error("peer policy denied: {0}")]
+    PolicyDenied(&'static str),
 }

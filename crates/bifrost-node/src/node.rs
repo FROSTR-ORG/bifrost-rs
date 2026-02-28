@@ -1,10 +1,10 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bifrost_codec::rpc::{RpcEnvelope, RpcPayload};
 use bifrost_codec::wire::{
-    EcdhPackageWire, OnboardRequestWire, OnboardResponseWire, PartialSigPackageWire,
+    EcdhPackageWire, OnboardRequestWire, OnboardResponseWire, PartialSigPackageWire, PeerErrorWire,
     PingPayloadWire, SignSessionPackageWire,
 };
 use bifrost_codec::{
@@ -14,30 +14,69 @@ use bifrost_codec::{
 use bifrost_core::group::get_group_id;
 use bifrost_core::nonce::{NoncePool, NoncePoolConfig};
 use bifrost_core::session::{create_session_package, verify_session_package};
-use bifrost_core::sign::{
-    combine_signatures, create_partial_sig_package, verify_partial_sig_package,
-};
 use bifrost_core::types::{
-    EcdhPackage, GroupPackage, OnboardResponse, PingPayload, SharePackage, SignSessionTemplate,
+    EcdhPackage, GroupPackage, IndexedPublicNonceCommitment, MemberNonceCommitmentSet,
+    OnboardResponse, PeerScopedPolicyProfile, PingPayload, SharePackage, SignSessionTemplate,
 };
-use bifrost_core::{combine_ecdh_packages, create_ecdh_package, local_pubkey_from_share};
 use bifrost_transport::{Clock, IncomingMessage, OutgoingMessage, ResponseHandle, Transport};
+use frostr_utils::{
+    ecdh_create_from_share, ecdh_finalize, sign_create_partial, sign_finalize, sign_verify_partial,
+};
 use k256::SecretKey;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
+use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 
 use crate::error::{NodeError, NodeResult};
 use crate::types::{
-    BifrostNodeConfig, BifrostNodeOptions, NodeEvent, PeerData, PeerNonceHealth, PeerPolicy,
-    PeerStatus,
+    BifrostNodeConfig, BifrostNodeOptions, MethodPolicy, NodeEvent, PeerData, PeerNonceHealth,
+    PeerPolicy, PeerStatus,
 };
+
+const PEER_ENVELOPE_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationMethod {
+    Echo,
+    Ping,
+    Onboard,
+    Sign,
+    Ecdh,
+}
+
+impl OperationMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Echo => "echo",
+            Self::Ping => "ping",
+            Self::Onboard => "onboard",
+            Self::Sign => "sign",
+            Self::Ecdh => "ecdh",
+        }
+    }
+}
+
+fn operation_from_payload(payload: &RpcPayload) -> Option<OperationMethod> {
+    match payload {
+        RpcPayload::Echo(_) => Some(OperationMethod::Echo),
+        RpcPayload::Ping(_) => Some(OperationMethod::Ping),
+        RpcPayload::OnboardRequest(_) => Some(OperationMethod::Onboard),
+        RpcPayload::Sign(_) => Some(OperationMethod::Sign),
+        RpcPayload::Ecdh(_) => Some(OperationMethod::Ecdh),
+        RpcPayload::SignResponse(_) | RpcPayload::OnboardResponse(_) | RpcPayload::Error(_) => None,
+    }
+}
 
 pub struct BifrostNode<T: Transport, C: Clock> {
     transport: Arc<T>,
     clock: Arc<C>,
     group: GroupPackage,
     share: SharePackage,
+    member_idx_by_pubkey: HashMap<String, u16>,
+    group_member_indices: HashSet<u16>,
     config: BifrostNodeConfig,
+    policies: Arc<Mutex<HashMap<String, PeerPolicy>>>,
+    remote_scoped_policies: Arc<Mutex<HashMap<String, PeerScopedPolicyProfile>>>,
     pool: Arc<Mutex<NoncePool>>,
     replay_cache: Arc<Mutex<HashMap<String, u64>>>,
     ecdh_cache: Arc<Mutex<EcdhCache>>,
@@ -74,7 +113,18 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         get_group_id(&group).map_err(|e| NodeError::Core(e.to_string()))?;
 
         let now = clock.now_unix_seconds();
-        let peers = peer_pubkeys
+        let mut member_idx_by_pubkey = HashMap::with_capacity(group.members.len());
+        let mut group_member_indices = HashSet::with_capacity(group.members.len());
+        for member in &group.members {
+            if !group_member_indices.insert(member.idx) {
+                return Err(NodeError::InvalidGroup);
+            }
+            let pubkey = hex::encode(member.pubkey);
+            if member_idx_by_pubkey.insert(pubkey, member.idx).is_some() {
+                return Err(NodeError::InvalidGroup);
+            }
+        }
+        let peers: Vec<PeerData> = peer_pubkeys
             .into_iter()
             .map(|pubkey| PeerData {
                 pubkey,
@@ -83,6 +133,10 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 updated: now,
             })
             .collect();
+        let policies = peers
+            .iter()
+            .map(|p| (p.pubkey.clone(), p.policy))
+            .collect::<HashMap<_, _>>();
 
         let resolved = options.unwrap_or_default();
         let (events_tx, _) = broadcast::channel(256);
@@ -106,10 +160,14 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             clock,
             group,
             share,
+            member_idx_by_pubkey,
+            group_member_indices,
             config: BifrostNodeConfig {
                 options: resolved,
                 peers,
             },
+            policies: Arc::new(Mutex::new(policies)),
+            remote_scoped_policies: Arc::new(Mutex::new(HashMap::new())),
             pool: Arc::new(Mutex::new(pool)),
             replay_cache: Arc::new(Mutex::new(HashMap::new())),
             ecdh_cache: Arc::new(Mutex::new(EcdhCache::default())),
@@ -133,6 +191,49 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
     pub fn peers(&self) -> &[PeerData] {
         &self.config.peers
+    }
+
+    pub fn peers_snapshot(&self) -> Vec<PeerData> {
+        let policies = self.policies.lock().map(|m| m.clone()).unwrap_or_default();
+        self.config
+            .peers
+            .iter()
+            .map(|p| {
+                let mut next = p.clone();
+                if let Some(pol) = policies.get(&p.pubkey) {
+                    next.policy = *pol;
+                }
+                next
+            })
+            .collect()
+    }
+
+    pub fn peer_policy(&self, peer: &str) -> NodeResult<PeerPolicy> {
+        let policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        policies.get(peer).copied().ok_or(NodeError::PeerNotFound)
+    }
+
+    pub fn set_peer_policy(&self, peer: &str, policy: PeerPolicy) -> NodeResult<()> {
+        let mut policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        if !self.member_idx_by_pubkey.contains_key(peer) {
+            return Err(NodeError::PeerNotFound);
+        }
+        policies.insert(peer.to_string(), policy);
+        Ok(())
+    }
+
+    pub fn peer_policies(&self) -> NodeResult<HashMap<String, PeerPolicy>> {
+        let policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        Ok(policies.clone())
     }
 
     pub fn nonce_pool_config(&self) -> NoncePoolConfig {
@@ -184,6 +285,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
     pub async fn echo(&self, peer: &str, challenge: &str) -> NodeResult<String> {
         self.ensure_ready()?;
+        self.enforce_outbound_request_policy(peer, OperationMethod::Echo)?;
 
         let envelope = RpcEnvelope {
             version: 1,
@@ -202,15 +304,21 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .request(req, self.config.options.ping_timeout_ms)
             .await
             .map_err(|e| NodeError::Transport(e.to_string()))?;
+        self.assert_expected_response_peer(peer, &res, "echo response")?;
 
         match res.envelope.payload {
             RpcPayload::Echo(value) => Ok(value),
+            RpcPayload::Error(err) => Err(NodeError::Core(format!(
+                "peer policy denied: {}: {}",
+                err.code, err.message
+            ))),
             _ => Err(NodeError::InvalidResponse),
         }
     }
 
     pub async fn ping(&self, peer: &str) -> NodeResult<PingPayload> {
         self.ensure_ready()?;
+        self.enforce_outbound_request_policy(peer, OperationMethod::Ping)?;
 
         let payload = {
             let mut pool = self
@@ -230,7 +338,11 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 None
             };
 
-            PingPayload { version: 1, nonces }
+            PingPayload {
+                version: 1,
+                nonces,
+                policy_profile: Some(self.local_policy_profile_for(peer)?),
+            }
         };
 
         let envelope = RpcEnvelope {
@@ -250,7 +362,14 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .request(req, self.config.options.ping_timeout_ms)
             .await
             .map_err(|e| NodeError::Transport(e.to_string()))?;
+        self.assert_expected_response_peer(peer, &res, "ping response")?;
 
+        if let RpcPayload::Error(err) = &res.envelope.payload {
+            return Err(NodeError::Core(format!(
+                "peer policy denied: {}: {}",
+                err.code, err.message
+            )));
+        }
         let parsed: PingPayload = parse_ping(&res.envelope)
             .map_err(|e: bifrost_codec::CodecError| NodeError::Core(e.to_string()))?;
 
@@ -262,12 +381,16 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             let peer_idx = self.member_idx_by_peer_pubkey(peer)?;
             pool.store_incoming(peer_idx, nonces);
         }
+        if let Some(profile) = parsed.policy_profile.clone() {
+            self.store_remote_scoped_policy(peer, profile)?;
+        }
 
         Ok(parsed)
     }
 
     pub async fn onboard(&self, peer: &str) -> NodeResult<OnboardResponse> {
         self.ensure_ready()?;
+        self.enforce_outbound_request_policy(peer, OperationMethod::Onboard)?;
 
         let request = OnboardRequestWire {
             share_pk: self.local_pubkey_hex()?,
@@ -292,9 +415,22 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             )
             .await
             .map_err(|e| NodeError::Transport(e.to_string()))?;
+        self.assert_expected_response_peer(peer, &res, "onboard response")?;
 
+        if let RpcPayload::Error(err) = &res.envelope.payload {
+            return Err(NodeError::Core(format!(
+                "peer policy denied: {}: {}",
+                err.code, err.message
+            )));
+        }
         let onboard: OnboardResponse = parse_onboard_response(&res.envelope)
             .map_err(|e: bifrost_codec::CodecError| NodeError::Core(e.to_string()))?;
+        let local_gid = get_group_id(&self.group).map_err(|e| NodeError::Core(e.to_string()))?;
+        let onboard_gid =
+            get_group_id(&onboard.group).map_err(|e| NodeError::Core(e.to_string()))?;
+        if local_gid != onboard_gid {
+            return Err(NodeError::InvalidResponse);
+        }
 
         let peer_idx = self.member_idx_by_peer_pubkey(peer)?;
         let mut pool = self
@@ -307,9 +443,34 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
     }
 
     pub async fn sign(&self, _message: [u8; 32]) -> NodeResult<[u8; 64]> {
-        self.ensure_ready()?;
+        let out = self.sign_batch(&[_message]).await?;
+        let Some(first) = out.first() else {
+            return Err(NodeError::InvalidResponse);
+        };
+        Ok(*first)
+    }
 
-        let selected = self.select_signing_peers()?;
+    pub async fn sign_batch(&self, messages: &[[u8; 32]]) -> NodeResult<Vec<[u8; 64]>> {
+        self.ensure_ready()?;
+        if messages.is_empty() {
+            return Err(NodeError::InvalidSignBatch(
+                "message list must not be empty",
+            ));
+        }
+        if messages.len() > self.config.options.max_sign_batch {
+            return Err(NodeError::InvalidSignBatch(
+                "message list exceeds max_sign_batch",
+            ));
+        }
+        let selected = match self.select_signing_peers(OperationMethod::Sign) {
+            Ok(v) => v,
+            Err(NodeError::InsufficientPeers) => {
+                self.refresh_unknown_policy_peers(OperationMethod::Sign)
+                    .await?;
+                self.select_signing_peers(OperationMethod::Sign)?
+            }
+            Err(err) => return Err(err),
+        };
         let mut members = Vec::with_capacity(selected.len() + 1);
         members.push(self.share.idx);
         for peer in &selected {
@@ -317,8 +478,10 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         }
         members.sort_unstable();
 
-        let mut nonces = Vec::with_capacity(members.len());
-        let self_nonce = {
+        let mut member_nonce_sets: Vec<MemberNonceCommitmentSet> =
+            Vec::with_capacity(members.len());
+        let mut self_nonce_codes = Vec::with_capacity(messages.len());
+        {
             let mut pool = self
                 .pool
                 .lock()
@@ -326,33 +489,49 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
             for peer in &selected {
                 let idx = self.member_idx_by_peer_pubkey(peer)?;
-                let nonce = pool
-                    .consume_incoming(idx)
-                    .ok_or(NodeError::NonceUnavailable)?;
-                nonces.push(nonce);
+                let mut entries = Vec::with_capacity(messages.len());
+                for hash_index in 0..messages.len() {
+                    let nonce = pool
+                        .consume_incoming(idx)
+                        .ok_or(NodeError::NonceUnavailable)?;
+                    entries.push(IndexedPublicNonceCommitment {
+                        hash_index: hash_index as u16,
+                        binder_pn: nonce.binder_pn,
+                        hidden_pn: nonce.hidden_pn,
+                        code: nonce.code,
+                    });
+                }
+                member_nonce_sets.push(MemberNonceCommitmentSet { idx, entries });
             }
 
             let generated = pool
-                .generate_for_peer(self.share.idx, 1)
+                .generate_for_peer(self.share.idx, messages.len())
                 .map_err(|e| NodeError::Core(e.to_string()))?;
-            let Some(derived) = generated.first() else {
-                return Err(NodeError::Core("failed to generate self nonce".to_string()));
-            };
-
-            let self_nonce = bifrost_core::types::MemberPublicNonce {
+            if generated.len() != messages.len() {
+                return Err(NodeError::Core(
+                    "failed to generate required local nonce commitments".to_string(),
+                ));
+            }
+            let mut entries = Vec::with_capacity(messages.len());
+            for (hash_index, nonce) in generated.iter().enumerate() {
+                self_nonce_codes.push(nonce.code);
+                entries.push(IndexedPublicNonceCommitment {
+                    hash_index: hash_index as u16,
+                    binder_pn: nonce.binder_pn,
+                    hidden_pn: nonce.hidden_pn,
+                    code: nonce.code,
+                });
+            }
+            member_nonce_sets.push(MemberNonceCommitmentSet {
                 idx: self.share.idx,
-                binder_pn: derived.binder_pn,
-                hidden_pn: derived.hidden_pn,
-                code: derived.code,
-            };
+                entries,
+            });
+        }
 
-            nonces.push(self_nonce.clone());
-            self_nonce
-        };
-
+        member_nonce_sets.sort_by_key(|m| m.idx);
         let template = SignSessionTemplate {
             members,
-            hashes: vec![vec![_message]],
+            hashes: messages.to_vec(),
             content: None,
             kind: "message".to_string(),
             stamp: self.clock.now_unix_seconds() as u32,
@@ -360,7 +539,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
         let mut session = create_session_package(&self.group, template)
             .map_err(|e| NodeError::Core(e.to_string()))?;
-        session.nonces = Some(nonces);
+        session.nonces = Some(member_nonce_sets);
         self.validate_sign_session(&session)?;
 
         let wire = SignSessionPackageWire::from(session.clone());
@@ -393,55 +572,48 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 .pool
                 .lock()
                 .map_err(|_| NodeError::Core("nonce pool poisoned".to_string()))?;
-            pool.take_outgoing_signing_nonces(self.share.idx, self_nonce.code)
+            pool.take_outgoing_signing_nonces_many(self.share.idx, &self_nonce_codes)
                 .map_err(|e| NodeError::Core(e.to_string()))?
         };
 
-        let self_pkg = create_partial_sig_package(
+        let self_pkg = sign_create_partial(
             &self.group,
             &session,
             &self.share,
             &self_signing_nonces,
-            local_pubkey_from_share(&self.share).map_err(|e| NodeError::Core(e.to_string()))?,
+            None,
         )
         .map_err(|e| NodeError::Core(e.to_string()))?;
 
         let mut pkgs = vec![self_pkg];
+        let mut seen_responders = HashSet::new();
         for msg in responses {
+            if !selected.iter().any(|p| p == &msg.peer) {
+                return Err(NodeError::InvalidSenderBinding("unexpected sign responder"));
+            }
+            self.assert_expected_response_peer(&msg.peer, &msg, "sign response")?;
+            if !seen_responders.insert(msg.peer.clone()) {
+                return Err(NodeError::InvalidSenderBinding("duplicate sign responder"));
+            }
+            if let RpcPayload::Error(err) = &msg.envelope.payload {
+                return Err(NodeError::Core(format!(
+                    "sign denied by peer {}: {}: {}",
+                    msg.peer, err.code, err.message
+                )));
+            }
             let pkg: bifrost_core::types::PartialSigPackage = parse_psig(&msg.envelope)
                 .map_err(|e: bifrost_codec::CodecError| NodeError::Core(e.to_string()))?;
-            verify_partial_sig_package(&self.group, &session, &pkg)
+            sign_verify_partial(&self.group, &session, &pkg)
                 .map_err(|e| NodeError::Core(e.to_string()))?;
             pkgs.push(pkg);
         }
 
-        let sigs = combine_signatures(&self.group, &session, &pkgs)
+        let sigs = sign_finalize(&self.group, &session, &pkgs)
             .map_err(|e| NodeError::Core(e.to_string()))?;
-        let Some(first) = sigs.first() else {
+        if sigs.len() != messages.len() {
             return Err(NodeError::InvalidResponse);
-        };
-
-        Ok(first.signature)
-    }
-
-    pub async fn sign_batch(&self, messages: &[[u8; 32]]) -> NodeResult<Vec<[u8; 64]>> {
-        self.ensure_ready()?;
-        if messages.is_empty() {
-            return Err(NodeError::InvalidSignBatch(
-                "message list must not be empty",
-            ));
         }
-        if messages.len() > self.config.options.max_sign_batch {
-            return Err(NodeError::InvalidSignBatch(
-                "message list exceeds max_sign_batch",
-            ));
-        }
-
-        let mut out = Vec::with_capacity(messages.len());
-        for message in messages {
-            out.push(self.sign(*message).await?);
-        }
-        Ok(out)
+        Ok(sigs.into_iter().map(|s| s.signature).collect())
     }
 
     pub async fn sign_queue(&self, messages: &[[u8; 32]]) -> NodeResult<Vec<[u8; 64]>> {
@@ -477,7 +649,15 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             return Ok(secret);
         }
 
-        let selected = self.select_signing_peers()?;
+        let selected = match self.select_signing_peers(OperationMethod::Ecdh) {
+            Ok(v) => v,
+            Err(NodeError::InsufficientPeers) => {
+                self.refresh_unknown_policy_peers(OperationMethod::Ecdh)
+                    .await?;
+                self.select_signing_peers(OperationMethod::Ecdh)?
+            }
+            Err(err) => return Err(err),
+        };
         let mut members = Vec::with_capacity(selected.len() + 1);
         members.push(self.share.idx);
         for peer in &selected {
@@ -485,7 +665,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         }
         members.sort_unstable();
 
-        let local = create_ecdh_package(&members, &self.share, &[pubkey])
+        let local = ecdh_create_from_share(&members, &self.share, &[pubkey])
             .map_err(|e| NodeError::Core(e.to_string()))?;
         let wire = EcdhPackageWire::from(local.clone());
 
@@ -509,14 +689,27 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .map_err(|e| NodeError::Transport(e.to_string()))?;
 
         let mut pkgs: Vec<EcdhPackage> = vec![local];
+        let mut seen_responders = HashSet::new();
         for msg in responses {
+            if !selected.iter().any(|p| p == &msg.peer) {
+                return Err(NodeError::InvalidSenderBinding("unexpected ecdh responder"));
+            }
+            self.assert_expected_response_peer(&msg.peer, &msg, "ecdh response")?;
+            if !seen_responders.insert(msg.peer.clone()) {
+                return Err(NodeError::InvalidSenderBinding("duplicate ecdh responder"));
+            }
+            if let RpcPayload::Error(err) = &msg.envelope.payload {
+                return Err(NodeError::Core(format!(
+                    "ecdh denied by peer {}: {}: {}",
+                    msg.peer, err.code, err.message
+                )));
+            }
             let pkg: EcdhPackage = parse_ecdh(&msg.envelope)
                 .map_err(|e: bifrost_codec::CodecError| NodeError::Core(e.to_string()))?;
             pkgs.push(pkg);
         }
 
-        let secret =
-            combine_ecdh_packages(&pkgs, pubkey).map_err(|e| NodeError::Core(e.to_string()))?;
+        let secret = ecdh_finalize(&pkgs, pubkey).map_err(|e| NodeError::Core(e.to_string()))?;
         self.store_cached_ecdh(pubkey, secret, now)?;
         Ok(secret)
     }
@@ -560,6 +753,9 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
     pub async fn handle_incoming(&self, msg: IncomingMessage) -> NodeResult<()> {
         self.ensure_ready()?;
+        if msg.envelope.version != PEER_ENVELOPE_VERSION {
+            return Err(NodeError::UnsupportedEnvelopeVersion(msg.envelope.version));
+        }
         self.validate_payload_limits(&msg.envelope)?;
 
         let peer = msg.peer.clone();
@@ -568,6 +764,28 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         let version = msg.envelope.version;
         self.emit_event(NodeEvent::Message(request_id.clone()));
         self.check_and_track_request(&sender, &request_id)?;
+
+        if let Some(method) = operation_from_payload(&msg.envelope.payload)
+            && !self.is_respond_allowed(&peer, method)?
+        {
+            let response = OutgoingMessage {
+                peer: peer.clone(),
+                envelope: RpcEnvelope {
+                    version: 1,
+                    id: request_id.clone(),
+                    sender: self.local_sender_id(),
+                    payload: RpcPayload::Error(PeerErrorWire {
+                        code: "POLICY_DENIED".to_string(),
+                        message: format!("respond policy denies {}", method.as_str()),
+                    }),
+                },
+            };
+            self.transport
+                .send_response(ResponseHandle { peer, request_id }, response)
+                .await
+                .map_err(|e| NodeError::Transport(e.to_string()))?;
+            return Ok(());
+        }
 
         let payload = match msg.envelope.payload {
             RpcPayload::Echo(challenge) => RpcPayload::Echo(challenge),
@@ -589,6 +807,9 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 if let Some(nonces) = ping.nonces {
                     pool.store_incoming(peer_idx, nonces);
                 }
+                if let Some(profile) = ping.policy_profile {
+                    self.store_remote_scoped_policy(&peer, profile)?;
+                }
 
                 let nonces = if pool.should_send_nonces_to(peer_idx) {
                     Some(
@@ -602,7 +823,11 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                     None
                 };
 
-                RpcPayload::Ping(PingPayloadWire::from(PingPayload { version: 1, nonces }))
+                RpcPayload::Ping(PingPayloadWire::from(PingPayload {
+                    version: 1,
+                    nonces,
+                    policy_profile: Some(self.local_policy_profile_for(&peer)?),
+                }))
             }
             RpcPayload::OnboardRequest(wire) => {
                 let sender_idx = self.validate_sender_binding(&peer, &sender)?;
@@ -654,30 +879,43 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                         "sign session does not include sender idx",
                     ));
                 }
-                let our_nonce = session
+                let our_nonce_set = session
                     .nonces
                     .as_ref()
                     .and_then(|n| n.iter().find(|n| n.idx == self.share.idx))
                     .ok_or(NodeError::NonceUnavailable)?;
+                if our_nonce_set.entries.len() != session.hashes.len() {
+                    return Err(NodeError::InvalidSignSession(
+                        "nonce entries must match hash count",
+                    ));
+                }
+                let mut seen_hash_indices = std::collections::HashSet::new();
+                let mut codes_by_hash: Vec<[u8; 32]> = vec![[0u8; 32]; session.hashes.len()];
+                for entry in &our_nonce_set.entries {
+                    let idx = entry.hash_index as usize;
+                    if idx >= session.hashes.len() {
+                        return Err(NodeError::InvalidSignSession(
+                            "nonce hash index out of range",
+                        ));
+                    }
+                    if !seen_hash_indices.insert(idx) {
+                        return Err(NodeError::InvalidSignSession("duplicate nonce hash index"));
+                    }
+                    codes_by_hash[idx] = entry.code;
+                }
 
                 let signing_nonces = {
                     let mut pool = self
                         .pool
                         .lock()
                         .map_err(|_| NodeError::Core("nonce pool poisoned".to_string()))?;
-                    pool.take_outgoing_signing_nonces(requester_idx, our_nonce.code)
+                    pool.take_outgoing_signing_nonces_many(requester_idx, &codes_by_hash)
                         .map_err(|_| NodeError::NonceUnavailable)?
                 };
 
-                let mut pkg = create_partial_sig_package(
-                    &self.group,
-                    &session,
-                    &self.share,
-                    &signing_nonces,
-                    local_pubkey_from_share(&self.share)
-                        .map_err(|e| NodeError::Core(e.to_string()))?,
-                )
-                .map_err(|e| NodeError::Core(e.to_string()))?;
+                let mut pkg =
+                    sign_create_partial(&self.group, &session, &self.share, &signing_nonces, None)
+                        .map_err(|e| NodeError::Core(e.to_string()))?;
 
                 {
                     let mut pool = self
@@ -706,17 +944,13 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                     payload: RpcPayload::Ecdh(wire),
                 })
                 .map_err(|e: bifrost_codec::CodecError| NodeError::Core(e.to_string()))?;
-                if !req.members.contains(&sender_idx) {
-                    return Err(NodeError::InvalidSenderBinding(
-                        "ecdh members do not include sender idx",
-                    ));
-                }
+                self.validate_ecdh_request(&req, sender_idx)?;
                 let ecdh_pks = req.entries.iter().map(|e| e.ecdh_pk).collect::<Vec<_>>();
-                let pkg = create_ecdh_package(&req.members, &self.share, &ecdh_pks)
+                let pkg = ecdh_create_from_share(&req.members, &self.share, &ecdh_pks)
                     .map_err(|e| NodeError::Core(e.to_string()))?;
                 RpcPayload::Ecdh(EcdhPackageWire::from(pkg))
             }
-            RpcPayload::SignResponse(_) | RpcPayload::OnboardResponse(_) => {
+            RpcPayload::SignResponse(_) | RpcPayload::OnboardResponse(_) | RpcPayload::Error(_) => {
                 self.emit_event(NodeEvent::Bounced("invalid response payload".to_string()));
                 return Err(NodeError::InvalidResponse);
             }
@@ -750,11 +984,10 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
     }
 
     fn member_idx_by_peer_pubkey(&self, peer: &str) -> NodeResult<u16> {
-        let mut members: HashMap<String, u16> = HashMap::with_capacity(self.group.members.len());
-        for m in &self.group.members {
-            members.insert(hex::encode(m.pubkey), m.idx);
-        }
-        members.get(peer).copied().ok_or(NodeError::PeerNotFound)
+        self.member_idx_by_pubkey
+            .get(peer)
+            .copied()
+            .ok_or(NodeError::PeerNotFound)
     }
 
     fn validate_sender_binding(&self, peer: &str, sender: &str) -> NodeResult<u16> {
@@ -774,7 +1007,12 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
     fn request_id(&self) -> String {
         let seq = self.request_seq.fetch_add(1, Ordering::Relaxed);
-        format!("{}-{}-{}", self.clock.now_unix_seconds(), self.share.idx, seq)
+        format!(
+            "{}-{}-{}",
+            self.clock.now_unix_seconds(),
+            self.share.idx,
+            seq
+        )
     }
 
     fn check_and_track_request(&self, sender: &str, request_id: &str) -> NodeResult<()> {
@@ -783,10 +1021,10 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         let ttl = self.config.options.request_ttl_secs;
         let cache_limit = self.config.options.request_cache_limit;
 
-        if let Some(issued_at) = parse_request_id_timestamp(request_id) {
-            if now > issued_at.saturating_add(ttl) {
-                return Err(NodeError::StaleEnvelope);
-            }
+        let (issued_at, _, _) =
+            parse_request_id_components(request_id).ok_or(NodeError::InvalidRequestIdFormat)?;
+        if now > issued_at.saturating_add(ttl) {
+            return Err(NodeError::StaleEnvelope);
         }
 
         let mut cache = self
@@ -810,6 +1048,21 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             }
         }
 
+        Ok(())
+    }
+
+    fn assert_expected_response_peer(
+        &self,
+        expected_peer: &str,
+        response: &IncomingMessage,
+        context: &'static str,
+    ) -> NodeResult<()> {
+        if response.peer != expected_peer {
+            return Err(NodeError::InvalidSenderBinding(context));
+        }
+        if response.envelope.sender != expected_peer {
+            return Err(NodeError::InvalidSenderBinding(context));
+        }
         Ok(())
     }
 
@@ -888,13 +1141,13 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             RpcPayload::Sign(w) => {
                 if w.hashes.len() > self.config.options.max_sign_batch {
                     return Err(NodeError::PayloadLimitExceeded(
-                        "sign hash groups exceed max_sign_batch",
+                        "sign hashes exceed max_sign_batch",
                     ));
                 }
-                if let Some(content) = &w.content {
-                    if content.len() > self.config.options.max_sign_content_len {
-                        return Err(NodeError::PayloadLimitExceeded("sign content too large"));
-                    }
+                if let Some(content) = &w.content
+                    && content.len() > self.config.options.max_sign_content_len
+                {
+                    return Err(NodeError::PayloadLimitExceeded("sign content too large"));
                 }
             }
             RpcPayload::Ecdh(w) if w.entries.len() > self.config.options.max_ecdh_batch => {
@@ -923,15 +1176,133 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 "hash count exceeds max_sign_batch",
             ));
         }
-        if session.hashes.len() != 1 || session.hashes[0].len() != 1 {
+        if session.members.len() < self.group.threshold as usize {
             return Err(NodeError::InvalidSignSession(
-                "only single-message signing is currently supported",
+                "session member count below group threshold",
+            ));
+        }
+        let mut sorted_members = session.members.clone();
+        sorted_members.sort_unstable();
+        if sorted_members != session.members {
+            return Err(NodeError::InvalidSignSession(
+                "session members must be sorted ascending",
+            ));
+        }
+        if sorted_members.windows(2).any(|w| w[0] == w[1]) {
+            return Err(NodeError::InvalidSignSession(
+                "session members contain duplicates",
+            ));
+        }
+        if !sorted_members
+            .iter()
+            .all(|idx| self.group_member_indices.contains(idx))
+        {
+            return Err(NodeError::InvalidSignSession(
+                "session includes non-group member idx",
             ));
         }
         if session.nonces.is_none() {
             return Err(NodeError::InvalidSignSession("missing nonces"));
         }
+        let nonces = session
+            .nonces
+            .as_ref()
+            .ok_or(NodeError::InvalidSignSession("missing nonces"))?;
+        if nonces.len() != session.members.len() {
+            return Err(NodeError::InvalidSignSession(
+                "nonce member sets must match session members",
+            ));
+        }
+        let mut seen_members = HashSet::new();
+        for member_set in nonces {
+            if !seen_members.insert(member_set.idx) {
+                return Err(NodeError::InvalidSignSession(
+                    "duplicate nonce member commitment set",
+                ));
+            }
+            if !session.members.contains(&member_set.idx) {
+                return Err(NodeError::InvalidSignSession(
+                    "nonce member idx not present in session members",
+                ));
+            }
+            if member_set.entries.len() != session.hashes.len() {
+                return Err(NodeError::InvalidSignSession(
+                    "member nonce entries must match hash count",
+                ));
+            }
+            let mut seen = HashSet::new();
+            for entry in &member_set.entries {
+                let idx = entry.hash_index as usize;
+                if idx >= session.hashes.len() {
+                    return Err(NodeError::InvalidSignSession(
+                        "nonce hash index out of range",
+                    ));
+                }
+                if !seen.insert(idx) {
+                    return Err(NodeError::InvalidSignSession("duplicate nonce hash index"));
+                }
+            }
+        }
+        if !session
+            .members
+            .iter()
+            .all(|member| seen_members.contains(member))
+        {
+            return Err(NodeError::InvalidSignSession(
+                "missing nonce commitment set for session member",
+            ));
+        }
 
+        Ok(())
+    }
+
+    fn validate_ecdh_request(&self, req: &EcdhPackage, sender_idx: u16) -> NodeResult<()> {
+        if req.idx != sender_idx {
+            return Err(NodeError::InvalidSenderBinding(
+                "ecdh package idx does not match sender idx",
+            ));
+        }
+        if req.members.len() < self.group.threshold as usize {
+            return Err(NodeError::InvalidEcdhBatch(
+                "ecdh members below group threshold",
+            ));
+        }
+        let mut members = req.members.clone();
+        members.sort_unstable();
+        if members != req.members {
+            return Err(NodeError::InvalidEcdhBatch(
+                "ecdh members must be sorted ascending",
+            ));
+        }
+        if members.windows(2).any(|w| w[0] == w[1]) {
+            return Err(NodeError::InvalidEcdhBatch(
+                "ecdh members contain duplicates",
+            ));
+        }
+        if !members
+            .iter()
+            .all(|idx| self.group_member_indices.contains(idx))
+        {
+            return Err(NodeError::InvalidEcdhBatch(
+                "ecdh request includes non-group member idx",
+            ));
+        }
+        if !members.contains(&sender_idx) {
+            return Err(NodeError::InvalidSenderBinding(
+                "ecdh members do not include sender idx",
+            ));
+        }
+        if !members.contains(&self.share.idx) {
+            return Err(NodeError::InvalidEcdhBatch(
+                "ecdh members do not include local idx",
+            ));
+        }
+        let mut seen = HashSet::new();
+        for entry in &req.entries {
+            if !seen.insert(entry.ecdh_pk) {
+                return Err(NodeError::InvalidEcdhBatch("duplicate ecdh target pubkey"));
+            }
+        }
         Ok(())
     }
 
@@ -943,7 +1314,98 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         ))
     }
 
-    fn select_signing_peers(&self) -> NodeResult<Vec<String>> {
+    fn local_policy_profile_for(&self, peer: &str) -> NodeResult<PeerScopedPolicyProfile> {
+        let now = self.clock.now_unix_seconds();
+        let policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        let policy = policies.get(peer).copied().ok_or(NodeError::PeerNotFound)?;
+        Ok(PeerScopedPolicyProfile {
+            for_peer: decode_33(peer)?,
+            revision: now,
+            updated: now,
+            block_all: policy.block_all,
+            request: core_method_policy(policy.request),
+            respond: core_method_policy(policy.respond),
+        })
+    }
+
+    fn store_remote_scoped_policy(
+        &self,
+        peer: &str,
+        profile: PeerScopedPolicyProfile,
+    ) -> NodeResult<()> {
+        let local = self.local_pubkey_hex()?;
+        if hex::encode(profile.for_peer) != local {
+            return Ok(());
+        }
+        let mut remote = self
+            .remote_scoped_policies
+            .lock()
+            .map_err(|_| NodeError::Core("remote policy map poisoned".to_string()))?;
+        remote.insert(peer.to_string(), profile);
+        Ok(())
+    }
+
+    async fn refresh_unknown_policy_peers(&self, method: OperationMethod) -> NodeResult<()> {
+        let peers = self
+            .config
+            .peers
+            .iter()
+            .map(|p| p.pubkey.clone())
+            .collect::<Vec<_>>();
+        for peer in peers {
+            if !self.has_remote_profile_for(&peer, method)? {
+                let _ = self.ping(&peer).await;
+            }
+        }
+        Ok(())
+    }
+
+    fn has_remote_profile_for(&self, peer: &str, method: OperationMethod) -> NodeResult<bool> {
+        let remote = self
+            .remote_scoped_policies
+            .lock()
+            .map_err(|_| NodeError::Core("remote policy map poisoned".to_string()))?;
+        let Some(profile) = remote.get(peer) else {
+            return Ok(false);
+        };
+        Ok(profile_method_allowed(profile, false, method))
+    }
+
+    fn enforce_outbound_request_policy(
+        &self,
+        peer: &str,
+        method: OperationMethod,
+    ) -> NodeResult<()> {
+        let policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        let Some(policy) = policies.get(peer).copied() else {
+            return Err(NodeError::PeerNotFound);
+        };
+        if !method_allowed(policy, true, method) {
+            return Err(NodeError::PolicyDenied(
+                "outbound request denied by local policy",
+            ));
+        }
+        Ok(())
+    }
+
+    fn is_respond_allowed(&self, peer: &str, method: OperationMethod) -> NodeResult<bool> {
+        let policies = self
+            .policies
+            .lock()
+            .map_err(|_| NodeError::Core("policy map poisoned".to_string()))?;
+        let Some(policy) = policies.get(peer).copied() else {
+            return Err(NodeError::PeerNotFound);
+        };
+        Ok(method_allowed(policy, false, method))
+    }
+
+    fn select_signing_peers(&self, method: OperationMethod) -> NodeResult<Vec<String>> {
         let needed = self.group.threshold.saturating_sub(1) as usize;
         if needed == 0 {
             return Ok(Vec::new());
@@ -958,27 +1420,131 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .config
             .peers
             .iter()
-            .filter(|p| p.policy.send)
             .filter_map(|peer| {
-                self.member_idx_by_peer_pubkey(&peer.pubkey)
+                let local_allowed = self
+                    .policies
+                    .lock()
                     .ok()
-                    .filter(|idx| pool.can_sign(*idx))
-                    .map(|_| peer.pubkey.clone())
+                    .and_then(|m| m.get(&peer.pubkey).copied())
+                    .map(|p| method_allowed(p, true, method))
+                    .unwrap_or(false);
+                if !local_allowed {
+                    return None;
+                }
+                let idx = self.member_idx_by_peer_pubkey(&peer.pubkey).ok()?;
+                if method == OperationMethod::Sign && !pool.can_sign(idx) {
+                    return None;
+                }
+                let remote = self
+                    .remote_scoped_policies
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(&peer.pubkey).cloned());
+                match method {
+                    OperationMethod::Sign | OperationMethod::Ecdh => {
+                        if remote
+                            .as_ref()
+                            .map(|v| profile_method_allowed(v, false, method))
+                            != Some(true)
+                        {
+                            return None;
+                        }
+                    }
+                    _ => {}
+                }
+                Some(peer.pubkey.clone())
             })
             .collect();
 
-        eligible.sort();
         if eligible.len() < needed {
             return Err(NodeError::InsufficientPeers);
         }
-
+        shuffle_peers(&mut eligible);
         Ok(eligible.into_iter().take(needed).collect())
     }
 }
 
-fn parse_request_id_timestamp(request_id: &str) -> Option<u64> {
-    let ts = request_id.split('-').next()?;
-    ts.parse().ok()
+fn method_allowed(policy: PeerPolicy, request_side: bool, method: OperationMethod) -> bool {
+    if policy.block_all {
+        return false;
+    }
+    let scope = if request_side {
+        policy.request
+    } else {
+        policy.respond
+    };
+    match method {
+        OperationMethod::Echo => scope.echo,
+        OperationMethod::Ping => scope.ping,
+        OperationMethod::Onboard => scope.onboard,
+        OperationMethod::Sign => scope.sign,
+        OperationMethod::Ecdh => scope.ecdh,
+    }
+}
+
+fn profile_method_allowed(
+    profile: &PeerScopedPolicyProfile,
+    request_side: bool,
+    method: OperationMethod,
+) -> bool {
+    let policy = PeerPolicy {
+        block_all: profile.block_all,
+        request: node_method_policy(profile.request.clone()),
+        respond: node_method_policy(profile.respond.clone()),
+    };
+    method_allowed(policy, request_side, method)
+}
+
+fn node_method_policy(value: bifrost_core::types::MethodPolicy) -> MethodPolicy {
+    MethodPolicy {
+        echo: value.echo,
+        ping: value.ping,
+        onboard: value.onboard,
+        sign: value.sign,
+        ecdh: value.ecdh,
+    }
+}
+
+fn core_method_policy(value: MethodPolicy) -> bifrost_core::types::MethodPolicy {
+    bifrost_core::types::MethodPolicy {
+        echo: value.echo,
+        ping: value.ping,
+        onboard: value.onboard,
+        sign: value.sign,
+        ecdh: value.ecdh,
+    }
+}
+
+fn shuffle_peers(peers: &mut [String]) {
+    if peers.len() <= 1 {
+        return;
+    }
+    let mut rng = OsRng;
+    for i in (1..peers.len()).rev() {
+        let j = (rng.next_u64() as usize) % (i + 1);
+        peers.swap(i, j);
+    }
+}
+
+fn decode_33(hex33: &str) -> NodeResult<[u8; 33]> {
+    let raw = hex::decode(hex33).map_err(|e| NodeError::Core(e.to_string()))?;
+    if raw.len() != 33 {
+        return Err(NodeError::Core("expected 33-byte pubkey".to_string()));
+    }
+    let mut out = [0u8; 33];
+    out.copy_from_slice(&raw);
+    Ok(out)
+}
+
+fn parse_request_id_components(request_id: &str) -> Option<(u64, u16, u64)> {
+    let mut parts = request_id.split('-');
+    let ts = parts.next()?.parse::<u64>().ok()?;
+    let idx = parts.next()?.parse::<u16>().ok()?;
+    let seq = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((ts, idx, seq))
 }
 
 #[cfg(test)]
@@ -992,8 +1558,8 @@ mod tests {
     use bifrost_codec::wire::{OnboardRequestWire, SignSessionPackageWire};
     use bifrost_core::create_session_package;
     use bifrost_core::types::{
-        DerivedPublicNonce, GroupPackage, MemberPackage, MemberPublicNonce, SharePackage,
-        SignSessionTemplate,
+        DerivedPublicNonce, GroupPackage, IndexedPublicNonceCommitment, MemberNonceCommitmentSet,
+        MemberPackage, SharePackage, SignSessionTemplate,
     };
     use bifrost_core::{create_partial_sig_package, local_pubkey_from_share};
     use bifrost_transport::{
@@ -1090,6 +1656,28 @@ mod tests {
                         payload: RpcPayload::Ping(bifrost_codec::wire::PingPayloadWire {
                             version: 1,
                             nonces: None,
+                            policy_profile: Some(
+                                bifrost_codec::wire::PeerScopedPolicyProfileWire {
+                                    for_peer: msg.envelope.sender,
+                                    revision: 1,
+                                    updated: 1,
+                                    block_all: false,
+                                    request: bifrost_codec::wire::MethodPolicyWire {
+                                        echo: true,
+                                        ping: true,
+                                        onboard: true,
+                                        sign: true,
+                                        ecdh: true,
+                                    },
+                                    respond: bifrost_codec::wire::MethodPolicyWire {
+                                        echo: true,
+                                        ping: true,
+                                        onboard: true,
+                                        sign: true,
+                                        ecdh: true,
+                                    },
+                                },
+                            ),
                         }),
                     },
                 }),
@@ -1193,12 +1781,30 @@ mod tests {
                         .ok_or_else(|| {
                             TransportError::Backend("missing member nonce".to_string())
                         })?;
-                    let signing_nonces =
-                        ctx.signing_nonces
-                            .remove(&member_nonce.code)
-                            .ok_or_else(|| {
+                    let mut signing_nonces: Vec<Option<frost::round1::SigningNonces>> =
+                        (0..member_nonce.entries.len()).map(|_| None).collect();
+                    for entry in &member_nonce.entries {
+                        let idx = entry.hash_index as usize;
+                        if idx >= signing_nonces.len() {
+                            return Err(TransportError::Backend(
+                                "nonce hash index out of range".to_string(),
+                            ));
+                        }
+                        signing_nonces[idx] =
+                            Some(ctx.signing_nonces.remove(&entry.code).ok_or_else(|| {
                                 TransportError::Backend("missing signing nonces".to_string())
-                            })?;
+                            })?);
+                    }
+                    let signing_nonces = signing_nonces
+                        .into_iter()
+                        .map(|v| {
+                            v.ok_or_else(|| {
+                                TransportError::Backend(
+                                    "missing indexed signing nonces".to_string(),
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
 
                     let pkg = create_partial_sig_package(
                         &ctx.group,
@@ -1944,7 +2550,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "1700000000-2".to_string(),
+                id: "1700000000-2-6".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Echo("hello".to_string()),
             },
@@ -1952,7 +2558,7 @@ mod tests {
 
         block_on(node.handle_incoming(msg)).expect("handle incoming");
         let event = block_on(events.recv()).expect("event");
-        assert_eq!(event, NodeEvent::Message("1700000000-2".to_string()));
+        assert_eq!(event, NodeEvent::Message("1700000000-2-6".to_string()));
     }
 
     #[test]
@@ -1973,7 +2579,7 @@ mod tests {
 
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![[1u8; 32]]],
+            hashes: vec![[1u8; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 1,
@@ -1985,7 +2591,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "req-1".to_string(),
+                id: "1700000000-2-1".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Sign(SignSessionPackageWire::from(session)),
             },
@@ -1996,7 +2602,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_incoming_sign_rejects_non_single_hash_shape() {
+    fn handle_incoming_sign_rejects_malformed_nonce_hash_index() {
         let (group, share, peer_pubkey_hex) = sample_group_and_share();
         let transport = Arc::new(TestTransport::default());
         let clock = Arc::new(TestClock);
@@ -2013,30 +2619,42 @@ mod tests {
 
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![[1u8; 32]], vec![[2u8; 32]]],
+            hashes: vec![[1u8; 32], [2u8; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 1,
         };
         let mut session = create_session_package(&group, template).expect("session");
-        session.nonces = Some(vec![MemberPublicNonce {
+        session.nonces = Some(vec![MemberNonceCommitmentSet {
             idx: 1,
-            binder_pn: [2u8; 33],
-            hidden_pn: [3u8; 33],
-            code: [4u8; 32],
+            entries: vec![
+                IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: [2u8; 33],
+                    hidden_pn: [3u8; 33],
+                    code: [4u8; 32],
+                },
+                IndexedPublicNonceCommitment {
+                    hash_index: 5,
+                    binder_pn: [2u8; 33],
+                    hidden_pn: [3u8; 33],
+                    code: [5u8; 32],
+                },
+            ],
         }]);
 
         let msg = IncomingMessage {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "req-2".to_string(),
+                id: "1700000000-2-2".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Sign(SignSessionPackageWire::from(session)),
             },
         };
 
-        let err = block_on(node.handle_incoming(msg)).expect_err("must reject batch hashes");
+        let err =
+            block_on(node.handle_incoming(msg)).expect_err("must reject malformed nonce index");
         assert!(matches!(err, NodeError::InvalidSignSession(_)));
     }
 
@@ -2058,25 +2676,39 @@ mod tests {
 
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![[9u8; 32]]],
+            hashes: vec![[9u8; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 5,
         };
         let mut session = create_session_package(&group, template).expect("session");
-        session.nonces = Some(vec![MemberPublicNonce {
-            idx: 1,
-            binder_pn: [2u8; 33],
-            hidden_pn: [3u8; 33],
-            code: [4u8; 32],
-        }]);
+        session.nonces = Some(vec![
+            MemberNonceCommitmentSet {
+                idx: 1,
+                entries: vec![IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: [2u8; 33],
+                    hidden_pn: [3u8; 33],
+                    code: [4u8; 32],
+                }],
+            },
+            MemberNonceCommitmentSet {
+                idx: 2,
+                entries: vec![IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: [5u8; 33],
+                    hidden_pn: [6u8; 33],
+                    code: [7u8; 32],
+                }],
+            },
+        ]);
         session.sid[0] ^= 0x01;
 
         let msg = IncomingMessage {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "req-3".to_string(),
+                id: "1700000000-2-3".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Sign(SignSessionPackageWire::from(session)),
             },
@@ -2110,24 +2742,38 @@ mod tests {
 
         let template = SignSessionTemplate {
             members: vec![1, 2],
-            hashes: vec![vec![[7u8; 32]]],
+            hashes: vec![[7u8; 32]],
             content: None,
             kind: "message".to_string(),
             stamp: 9,
         };
         let mut session = create_session_package(&group, template).expect("session");
-        session.nonces = Some(vec![MemberPublicNonce {
-            idx: 1,
-            binder_pn: [2u8; 33],
-            hidden_pn: [3u8; 33],
-            code: [4u8; 32],
-        }]);
+        session.nonces = Some(vec![
+            MemberNonceCommitmentSet {
+                idx: 1,
+                entries: vec![IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: [2u8; 33],
+                    hidden_pn: [3u8; 33],
+                    code: [4u8; 32],
+                }],
+            },
+            MemberNonceCommitmentSet {
+                idx: 2,
+                entries: vec![IndexedPublicNonceCommitment {
+                    hash_index: 0,
+                    binder_pn: [5u8; 33],
+                    hidden_pn: [6u8; 33],
+                    code: [7u8; 32],
+                }],
+            },
+        ]);
 
         let msg = IncomingMessage {
             peer: peer_pubkey_hex,
             envelope: RpcEnvelope {
                 version: 1,
-                id: "req-4".to_string(),
+                id: "1700000000-2-4".to_string(),
                 sender: hex::encode([8u8; 33]),
                 payload: RpcPayload::Sign(SignSessionPackageWire::from(session)),
             },
@@ -2135,7 +2781,10 @@ mod tests {
 
         let err =
             block_on(node.handle_incoming(msg)).expect_err("must reject sender/peer mismatch");
-        assert!(matches!(err, NodeError::InvalidSenderBinding(_)));
+        match err {
+            NodeError::InvalidSenderBinding(_) => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -2158,7 +2807,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "req-5".to_string(),
+                id: "1700000000-2-5".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::OnboardRequest(OnboardRequestWire {
                     share_pk: hex::encode([3u8; 33]),
@@ -2192,7 +2841,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "1700000000-2".to_string(),
+                id: "1700000000-2-8".to_string(),
                 sender: peer_pubkey_hex.clone(),
                 payload: RpcPayload::Echo("hello".to_string()),
             },
@@ -2223,7 +2872,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "1699999500-2".to_string(),
+                id: "1699999500-2-7".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Echo("hello".to_string()),
             },
@@ -2234,12 +2883,74 @@ mod tests {
     }
 
     #[test]
+    fn handle_incoming_rejects_invalid_request_id_format() {
+        let (group, share, peer_pubkey_hex) = sample_group_and_share();
+        let transport = Arc::new(TestTransport::default());
+        let clock = Arc::new(TestClock);
+        let node = BifrostNode::new(
+            group,
+            share,
+            vec![peer_pubkey_hex.clone()],
+            transport,
+            clock,
+            None,
+        )
+        .expect("node");
+        block_on(node.connect()).expect("connect");
+
+        let msg = IncomingMessage {
+            peer: peer_pubkey_hex.clone(),
+            envelope: RpcEnvelope {
+                version: 1,
+                id: "invalid-request-id".to_string(),
+                sender: peer_pubkey_hex,
+                payload: RpcPayload::Echo("hello".to_string()),
+            },
+        };
+
+        let err = block_on(node.handle_incoming(msg)).expect_err("must reject invalid request id");
+        assert!(matches!(err, NodeError::InvalidRequestIdFormat));
+    }
+
+    #[test]
+    fn handle_incoming_rejects_unsupported_envelope_version() {
+        let (group, share, peer_pubkey_hex) = sample_group_and_share();
+        let transport = Arc::new(TestTransport::default());
+        let clock = Arc::new(TestClock);
+        let node = BifrostNode::new(
+            group,
+            share,
+            vec![peer_pubkey_hex.clone()],
+            transport,
+            clock,
+            None,
+        )
+        .expect("node");
+        block_on(node.connect()).expect("connect");
+
+        let msg = IncomingMessage {
+            peer: peer_pubkey_hex.clone(),
+            envelope: RpcEnvelope {
+                version: 99,
+                id: "1700000000-2-11".to_string(),
+                sender: peer_pubkey_hex,
+                payload: RpcPayload::Echo("hello".to_string()),
+            },
+        };
+
+        let err = block_on(node.handle_incoming(msg)).expect_err("must reject envelope version");
+        assert!(matches!(err, NodeError::UnsupportedEnvelopeVersion(99)));
+    }
+
+    #[test]
     fn handle_incoming_rejects_oversized_echo_payload() {
         let (group, share, peer_pubkey_hex) = sample_group_and_share();
         let transport = Arc::new(TestTransport::default());
         let clock = Arc::new(TestClock);
-        let mut options = BifrostNodeOptions::default();
-        options.max_echo_len = 4;
+        let options = BifrostNodeOptions {
+            max_echo_len: 4,
+            ..BifrostNodeOptions::default()
+        };
         let node = BifrostNode::new(
             group,
             share,
@@ -2255,7 +2966,7 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "1700000000-2".to_string(),
+                id: "1700000000-2-9".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Echo("hello".to_string()),
             },
@@ -2270,8 +2981,10 @@ mod tests {
         let (group, share, peer_pubkey_hex) = sample_group_and_share();
         let transport = Arc::new(TestTransport::default());
         let clock = Arc::new(TestClock);
-        let mut options = BifrostNodeOptions::default();
-        options.max_sign_content_len = 8;
+        let options = BifrostNodeOptions {
+            max_sign_content_len: 8,
+            ..BifrostNodeOptions::default()
+        };
         let node = BifrostNode::new(
             group,
             share,
@@ -2287,14 +3000,14 @@ mod tests {
             peer: peer_pubkey_hex.clone(),
             envelope: RpcEnvelope {
                 version: 1,
-                id: "1700000000-2".to_string(),
+                id: "1700000000-2-10".to_string(),
                 sender: peer_pubkey_hex,
                 payload: RpcPayload::Sign(SignSessionPackageWire {
                     gid: hex::encode([1u8; 32]),
                     sid: hex::encode([2u8; 32]),
                     members: vec![1, 2],
-                    hashes: vec![vec![hex::encode([3u8; 32])]],
-                    content: Some("0123456789".to_string()),
+                    hashes: vec![hex::encode([3u8; 32])],
+                    content: Some("00".repeat(10)),
                     kind: "message".to_string(),
                     stamp: 1,
                     nonces: None,
