@@ -1,9 +1,10 @@
+#![allow(clippy::manual_async_fn)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use bifrost_codec::rpc::{decode_envelope, encode_envelope};
@@ -828,202 +829,216 @@ impl WebSocketTransport {
     }
 }
 
-#[async_trait]
 impl Transport for WebSocketTransport {
-    async fn connect(&self) -> TransportResult<()> {
-        if self.connected.load(Ordering::Relaxed) {
-            return Ok(());
-        }
+    fn connect(&self) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move {
+            if self.connected.load(Ordering::Relaxed) {
+                return Ok(());
+            }
 
-        if self.relays.is_empty() {
-            self.set_state(ConnectionState::Disconnected);
-            return Err(TransportError::Backend("no relay configured".to_string()));
-        }
-        if self.nostr.sender_pubkey33.is_empty() {
-            return Err(TransportError::Backend(
-                "nostr sender_pubkey33 must not be empty".to_string(),
-            ));
-        }
-        self.validate_identity()?;
+            if self.relays.is_empty() {
+                self.set_state(ConnectionState::Disconnected);
+                return Err(TransportError::Backend("no relay configured".to_string()));
+            }
+            if self.nostr.sender_pubkey33.is_empty() {
+                return Err(TransportError::Backend(
+                    "nostr sender_pubkey33 must not be empty".to_string(),
+                ));
+            }
+            self.validate_identity()?;
 
-        self.set_state(ConnectionState::Connecting);
-        let mut last_err: Option<TransportError> = None;
+            self.set_state(ConnectionState::Connecting);
+            let mut last_err: Option<TransportError> = None;
 
-        for attempt in 0..=self.config.max_retries {
-            let relay_order = self.relay_order().await;
-            for relay in relay_order {
-                match self.establish_connection(&relay).await {
-                    Ok(()) => {
-                        self.mark_relay_success(&relay).await;
-                        return Ok(());
+            for attempt in 0..=self.config.max_retries {
+                let relay_order = self.relay_order().await;
+                for relay in relay_order {
+                    match self.establish_connection(&relay).await {
+                        Ok(()) => {
+                            self.mark_relay_success(&relay).await;
+                            return Ok(());
+                        }
+                        Err(err) => {
+                            self.mark_relay_failure(&relay, &err.to_string()).await;
+                            last_err = Some(err);
+                        }
                     }
-                    Err(err) => {
-                        self.mark_relay_failure(&relay, &err.to_string()).await;
-                        last_err = Some(err);
-                    }
+                }
+
+                if attempt < self.config.max_retries {
+                    self.set_state(ConnectionState::Backoff);
+                    sleep(Duration::from_millis(self.backoff_ms(attempt))).await;
+                    self.set_state(ConnectionState::Connecting);
                 }
             }
 
-            if attempt < self.config.max_retries {
-                self.set_state(ConnectionState::Backoff);
-                sleep(Duration::from_millis(self.backoff_ms(attempt))).await;
-                self.set_state(ConnectionState::Connecting);
+            self.set_state(ConnectionState::Disconnected);
+            Err(last_err.unwrap_or_else(|| {
+                TransportError::Backend("failed to connect to any relay".to_string())
+            }))
+        }
+    }
+
+    fn close(&self) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move {
+            self.set_state(ConnectionState::Closing);
+            self.connected.store(false, Ordering::Relaxed);
+
+            if let Some(tx) = self.outbound_tx.lock().await.clone() {
+                let _ = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string()));
             }
-        }
 
-        self.set_state(ConnectionState::Disconnected);
-        Err(last_err.unwrap_or_else(|| {
-            TransportError::Backend("failed to connect to any relay".to_string())
-        }))
+            {
+                let mut active = self.active_relay.lock().await;
+                *active = None;
+            }
+
+            {
+                let mut outbound = self.outbound_tx.lock().await;
+                *outbound = None;
+            }
+
+            {
+                let mut pending = self.pending.lock().await;
+                pending.clear();
+            }
+
+            let mut tasks = self.tasks.lock().await;
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+
+            self.set_state(ConnectionState::Disconnected);
+            Ok(())
+        }
     }
 
-    async fn close(&self) -> TransportResult<()> {
-        self.set_state(ConnectionState::Closing);
-        self.connected.store(false, Ordering::Relaxed);
-
-        if let Some(tx) = self.outbound_tx.lock().await.clone() {
-            let _ = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string()));
-        }
-
-        {
-            let mut active = self.active_relay.lock().await;
-            *active = None;
-        }
-
-        {
-            let mut outbound = self.outbound_tx.lock().await;
-            *outbound = None;
-        }
-
-        {
-            let mut pending = self.pending.lock().await;
-            pending.clear();
-        }
-
-        let mut tasks = self.tasks.lock().await;
-        for task in tasks.drain(..) {
-            task.abort();
-        }
-
-        self.set_state(ConnectionState::Disconnected);
-        Ok(())
-    }
-
-    async fn request(
+    fn request(
         &self,
         msg: OutgoingMessage,
         timeout_ms: u64,
-    ) -> TransportResult<IncomingMessage> {
-        self.ensure_connected()?;
+    ) -> impl std::future::Future<Output = TransportResult<IncomingMessage>> + Send {
+        async move {
+            self.ensure_connected()?;
 
-        let (tx, rx) = oneshot::channel::<IncomingMessage>();
-        let pending_key = Self::pending_key(&msg.envelope.id, &msg.peer);
-        {
-            let mut pending = self.pending.lock().await;
-            pending.insert(
-                pending_key.clone(),
-                PendingRequest {
-                    expected_peer: msg.peer.clone(),
-                    request_id: msg.envelope.id.clone(),
-                    tx,
-                },
-            );
-        }
+            let (tx, rx) = oneshot::channel::<IncomingMessage>();
+            let pending_key = Self::pending_key(&msg.envelope.id, &msg.peer);
+            {
+                let mut pending = self.pending.lock().await;
+                pending.insert(
+                    pending_key.clone(),
+                    PendingRequest {
+                        expected_peer: msg.peer.clone(),
+                        request_id: msg.envelope.id.clone(),
+                        tx,
+                    },
+                );
+            }
 
-        if let Err(err) = self.send_envelope(msg.clone()).await {
-            let mut pending = self.pending.lock().await;
-            pending.remove(&pending_key);
-            return Err(err);
-        }
-
-        match timeout(Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(TransportError::Backend(
-                "request channel closed before response".to_string(),
-            )),
-            Err(_) => {
+            if let Err(err) = self.send_envelope(msg.clone()).await {
                 let mut pending = self.pending.lock().await;
                 pending.remove(&pending_key);
-                Err(TransportError::Timeout)
+                return Err(err);
+            }
+
+            match timeout(Duration::from_millis(timeout_ms), rx).await {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(_)) => Err(TransportError::Backend(
+                    "request channel closed before response".to_string(),
+                )),
+                Err(_) => {
+                    let mut pending = self.pending.lock().await;
+                    pending.remove(&pending_key);
+                    Err(TransportError::Timeout)
+                }
             }
         }
     }
 
-    async fn cast(
+    fn cast(
         &self,
         msg: OutgoingMessage,
         peers: &[String],
         threshold: usize,
         timeout_ms: u64,
-    ) -> TransportResult<Vec<IncomingMessage>> {
-        self.ensure_connected()?;
-        if peers.is_empty() {
-            return Err(TransportError::PeerNotFound);
-        }
+    ) -> impl std::future::Future<Output = TransportResult<Vec<IncomingMessage>>> + Send {
+        async move {
+            self.ensure_connected()?;
+            if peers.is_empty() {
+                return Err(TransportError::PeerNotFound);
+            }
 
-        let required = threshold.max(1);
-        let total = peers.len();
-        let mut results: Vec<IncomingMessage> = Vec::new();
-        let mut attempted = 0usize;
-        let mut last_err: Option<TransportError> = None;
+            let required = threshold.max(1);
+            let total = peers.len();
+            let mut results: Vec<IncomingMessage> = Vec::new();
+            let mut attempted = 0usize;
+            let mut last_err: Option<TransportError> = None;
 
-        let mut inflight = FuturesUnordered::new();
-        for peer in peers.iter() {
-            let mut req = msg.clone();
-            req.peer = peer.clone();
-            inflight.push(async move { self.request(req, timeout_ms).await });
-        }
+            let mut inflight = FuturesUnordered::new();
+            for peer in peers.iter() {
+                let mut req = msg.clone();
+                req.peer = peer.clone();
+                inflight.push(async move { self.request(req, timeout_ms).await });
+            }
 
-        while let Some(outcome) = inflight.next().await {
-            attempted = attempted.saturating_add(1);
-            match outcome {
-                Ok(res) => {
-                    results.push(res);
-                    if results.len() >= required {
-                        return Ok(results);
+            while let Some(outcome) = inflight.next().await {
+                attempted = attempted.saturating_add(1);
+                match outcome {
+                    Ok(res) => {
+                        results.push(res);
+                        if results.len() >= required {
+                            return Ok(results);
+                        }
+                    }
+                    Err(err) => {
+                        last_err = Some(err);
                     }
                 }
-                Err(err) => {
-                    last_err = Some(err);
+
+                if Self::threshold_unreachable(results.len(), attempted, total, required) {
+                    return Err(last_err.unwrap_or_else(|| {
+                        TransportError::Backend("cast did not reach threshold".to_string())
+                    }));
                 }
             }
 
-            if Self::threshold_unreachable(results.len(), attempted, total, required) {
-                return Err(last_err.unwrap_or_else(|| {
+            if results.len() >= required {
+                Ok(results)
+            } else {
+                Err(last_err.unwrap_or_else(|| {
                     TransportError::Backend("cast did not reach threshold".to_string())
-                }));
+                }))
             }
-        }
-
-        if results.len() >= required {
-            Ok(results)
-        } else {
-            Err(last_err.unwrap_or_else(|| {
-                TransportError::Backend("cast did not reach threshold".to_string())
-            }))
         }
     }
 
-    async fn send_response(
+    fn send_response(
         &self,
         handle: ResponseHandle,
         mut response: OutgoingMessage,
-    ) -> TransportResult<()> {
-        self.ensure_connected()?;
-        response.peer = handle.peer;
-        response.envelope.id = handle.request_id;
-        self.send_envelope(response).await
+    ) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move {
+            self.ensure_connected()?;
+            response.peer = handle.peer;
+            response.envelope.id = handle.request_id;
+            self.send_envelope(response).await
+        }
     }
 
-    async fn next_incoming(&self) -> TransportResult<IncomingMessage> {
-        self.ensure_connected()?;
-        let mut rx = self.inbound_rx.lock().await;
-        rx.recv().await.ok_or_else(|| {
-            TransportError::Backend("incoming channel closed while waiting for message".to_string())
-        })
+    fn next_incoming(
+        &self,
+    ) -> impl std::future::Future<Output = TransportResult<IncomingMessage>> + Send {
+        async move {
+            self.ensure_connected()?;
+            let mut rx = self.inbound_rx.lock().await;
+            rx.recv().await.ok_or_else(|| {
+                TransportError::Backend(
+                    "incoming channel closed while waiting for message".to_string(),
+                )
+            })
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

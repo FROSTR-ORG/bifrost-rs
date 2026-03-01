@@ -13,4 +13,4 @@ tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", 
 bifrost-core = { path = "../bifrost-core" }
 bifrost-rpc = { path = "../bifrost-rpc" }
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29"

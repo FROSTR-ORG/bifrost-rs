@@ -1,8 +1,9 @@
+#![allow(clippy::manual_async_fn)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use bifrost_codec::rpc::{RpcEnvelope, RpcPayload};
 use bifrost_codec::wire::{EcdhPackageWire, PartialSigPackageWire};
 use bifrost_core::nonce::NoncePoolConfig;
@@ -103,223 +104,229 @@ impl ChaosTransport {
     }
 }
 
-#[async_trait]
 impl Transport for ChaosTransport {
-    async fn connect(&self) -> TransportResult<()> {
-        Ok(())
+    fn connect(&self) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move { Ok(()) }
     }
 
-    async fn close(&self) -> TransportResult<()> {
-        Ok(())
+    fn close(&self) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move { Ok(()) }
     }
 
-    async fn request(
+    fn request(
         &self,
         msg: OutgoingMessage,
-        _timeout_ms: u64,
-    ) -> TransportResult<IncomingMessage> {
-        match msg.envelope.payload {
-            RpcPayload::Ping(_) => {
-                let mut peers = self
-                    .peers
-                    .lock()
-                    .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
-                let Some(ctx) = peers.get_mut(&msg.peer) else {
-                    return Err(TransportError::PeerNotFound);
-                };
+        timeout_ms: u64,
+    ) -> impl std::future::Future<Output = TransportResult<IncomingMessage>> + Send {
+        let _ = timeout_ms;
+        async move {
+            match msg.envelope.payload {
+                RpcPayload::Ping(_) => {
+                    let mut peers = self
+                        .peers
+                        .lock()
+                        .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
+                    let Some(ctx) = peers.get_mut(&msg.peer) else {
+                        return Err(TransportError::PeerNotFound);
+                    };
 
-                let signing_share = frost::keys::SigningShare::deserialize(&ctx.share.seckey)
-                    .map_err(|e| TransportError::Backend(e.to_string()))?;
-                let (signing_nonces, commitments) =
-                    frost::round1::commit(&signing_share, &mut OsRng);
-                let mut code = [0u8; 32];
-                let mut rng = OsRng;
-                rng.fill_bytes(&mut code);
+                    let signing_share = frost::keys::SigningShare::deserialize(&ctx.share.seckey)
+                        .map_err(|e| TransportError::Backend(e.to_string()))?;
+                    let (signing_nonces, commitments) =
+                        frost::round1::commit(&signing_share, &mut OsRng);
+                    let mut code = [0u8; 32];
+                    let mut rng = OsRng;
+                    rng.fill_bytes(&mut code);
 
-                let hiding = commitments
-                    .hiding()
-                    .serialize()
-                    .map_err(|e| TransportError::Backend(e.to_string()))?;
-                let binding = commitments
-                    .binding()
-                    .serialize()
-                    .map_err(|e| TransportError::Backend(e.to_string()))?;
+                    let hiding = commitments
+                        .hiding()
+                        .serialize()
+                        .map_err(|e| TransportError::Backend(e.to_string()))?;
+                    let binding = commitments
+                        .binding()
+                        .serialize()
+                        .map_err(|e| TransportError::Backend(e.to_string()))?;
 
-                let mut hidden_pn = [0u8; 33];
-                hidden_pn.copy_from_slice(&hiding);
-                let mut binder_pn = [0u8; 33];
-                binder_pn.copy_from_slice(&binding);
+                    let mut hidden_pn = [0u8; 33];
+                    hidden_pn.copy_from_slice(&hiding);
+                    let mut binder_pn = [0u8; 33];
+                    binder_pn.copy_from_slice(&binding);
 
-                ctx.signing_nonces.insert(code, signing_nonces);
+                    ctx.signing_nonces.insert(code, signing_nonces);
 
-                let nonce = DerivedPublicNonce {
-                    binder_pn,
-                    hidden_pn,
-                    code,
-                };
+                    let nonce = DerivedPublicNonce {
+                        binder_pn,
+                        hidden_pn,
+                        code,
+                    };
 
-                Ok(IncomingMessage {
-                    peer: msg.peer.clone(),
-                    envelope: RpcEnvelope {
-                        version: 1,
-                        id: msg.envelope.id,
-                        sender: msg.peer,
-                        payload: RpcPayload::Ping(bifrost_codec::wire::PingPayloadWire {
+                    Ok(IncomingMessage {
+                        peer: msg.peer.clone(),
+                        envelope: RpcEnvelope {
                             version: 1,
-                            nonces: Some(vec![nonce.into()]),
-                            policy_profile: Some(
-                                bifrost_codec::wire::PeerScopedPolicyProfileWire {
-                                    for_peer: msg.envelope.sender.clone(),
-                                    revision: 1,
-                                    updated: 1,
-                                    block_all: false,
-                                    request: bifrost_codec::wire::MethodPolicyWire {
-                                        echo: true,
-                                        ping: true,
-                                        onboard: true,
-                                        sign: true,
-                                        ecdh: true,
+                            id: msg.envelope.id,
+                            sender: msg.peer,
+                            payload: RpcPayload::Ping(bifrost_codec::wire::PingPayloadWire {
+                                version: 1,
+                                nonces: Some(vec![nonce.into()]),
+                                policy_profile: Some(
+                                    bifrost_codec::wire::PeerScopedPolicyProfileWire {
+                                        for_peer: msg.envelope.sender.clone(),
+                                        revision: 1,
+                                        updated: 1,
+                                        block_all: false,
+                                        request: bifrost_codec::wire::MethodPolicyWire {
+                                            echo: true,
+                                            ping: true,
+                                            onboard: true,
+                                            sign: true,
+                                            ecdh: true,
+                                        },
+                                        respond: bifrost_codec::wire::MethodPolicyWire {
+                                            echo: true,
+                                            ping: true,
+                                            onboard: true,
+                                            sign: true,
+                                            ecdh: true,
+                                        },
                                     },
-                                    respond: bifrost_codec::wire::MethodPolicyWire {
-                                        echo: true,
-                                        ping: true,
-                                        onboard: true,
-                                        sign: true,
-                                        ecdh: true,
-                                    },
-                                },
-                            ),
-                        }),
-                    },
-                })
+                                ),
+                            }),
+                        },
+                    })
+                }
+                _ => Err(TransportError::Backend(
+                    "unsupported request payload".to_string(),
+                )),
             }
-            _ => Err(TransportError::Backend(
-                "unsupported request payload".to_string(),
-            )),
         }
     }
 
-    async fn cast(
+    fn cast(
         &self,
         msg: OutgoingMessage,
         peers: &[String],
         threshold: usize,
         timeout_ms: u64,
-    ) -> TransportResult<Vec<IncomingMessage>> {
-        self.maybe_delay(timeout_ms)?;
-        let responders = self.responder_peers(peers)?;
-        if responders.len() < threshold {
-            return Err(TransportError::Timeout);
-        }
+    ) -> impl std::future::Future<Output = TransportResult<Vec<IncomingMessage>>> + Send {
+        async move {
+            self.maybe_delay(timeout_ms)?;
+            let responders = self.responder_peers(peers)?;
+            if responders.len() < threshold {
+                return Err(TransportError::Timeout);
+            }
 
-        match msg.envelope.payload {
-            RpcPayload::Sign(wire) => {
-                let session: bifrost_core::types::SignSessionPackage =
-                    wire.try_into().map_err(|e: bifrost_codec::CodecError| {
-                        TransportError::Backend(e.to_string())
-                    })?;
-
-                let mut out = Vec::with_capacity(responders.len());
-                let mut peers_guard = self
-                    .peers
-                    .lock()
-                    .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
-
-                for peer in responders {
-                    let Some(ctx) = peers_guard.get_mut(&peer) else {
-                        return Err(TransportError::PeerNotFound);
-                    };
-
-                    let nonce_set = session
-                        .nonces
-                        .as_ref()
-                        .and_then(|sets| sets.iter().find(|s| s.idx == ctx.share.idx))
-                        .ok_or_else(|| {
-                            TransportError::Backend("missing nonce commitment set".to_string())
+            match msg.envelope.payload {
+                RpcPayload::Sign(wire) => {
+                    let session: bifrost_core::types::SignSessionPackage =
+                        wire.try_into().map_err(|e: bifrost_codec::CodecError| {
+                            TransportError::Backend(e.to_string())
                         })?;
 
-                    let mut signing_nonces = Vec::with_capacity(nonce_set.entries.len());
-                    for entry in &nonce_set.entries {
-                        signing_nonces.push(ctx.signing_nonces.remove(&entry.code).ok_or_else(
-                            || {
-                                TransportError::Backend(
-                                    "missing signing nonce for code".to_string(),
-                                )
+                    let mut out = Vec::with_capacity(responders.len());
+                    let mut peers_guard = self
+                        .peers
+                        .lock()
+                        .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
+
+                    for peer in responders {
+                        let Some(ctx) = peers_guard.get_mut(&peer) else {
+                            return Err(TransportError::PeerNotFound);
+                        };
+
+                        let nonce_set = session
+                            .nonces
+                            .as_ref()
+                            .and_then(|sets| sets.iter().find(|s| s.idx == ctx.share.idx))
+                            .ok_or_else(|| {
+                                TransportError::Backend("missing nonce commitment set".to_string())
+                            })?;
+
+                        let mut signing_nonces = Vec::with_capacity(nonce_set.entries.len());
+                        for entry in &nonce_set.entries {
+                            signing_nonces.push(
+                                ctx.signing_nonces.remove(&entry.code).ok_or_else(|| {
+                                    TransportError::Backend(
+                                        "missing signing nonce for code".to_string(),
+                                    )
+                                })?,
+                            );
+                        }
+
+                        let pkg = create_partial_sig_package(
+                            &ctx.group,
+                            &session,
+                            &ctx.share,
+                            &signing_nonces,
+                            local_pubkey_from_share(&ctx.share)
+                                .map_err(|e| TransportError::Backend(e.to_string()))?,
+                        )
+                        .map_err(|e| TransportError::Backend(e.to_string()))?;
+
+                        out.push(IncomingMessage {
+                            peer: peer.clone(),
+                            envelope: RpcEnvelope {
+                                version: 1,
+                                id: format!("{}-resp", msg.envelope.id),
+                                sender: peer,
+                                payload: RpcPayload::SignResponse(PartialSigPackageWire::from(pkg)),
                             },
-                        )?);
+                        });
                     }
 
-                    let pkg = create_partial_sig_package(
-                        &ctx.group,
-                        &session,
-                        &ctx.share,
-                        &signing_nonces,
-                        local_pubkey_from_share(&ctx.share)
-                            .map_err(|e| TransportError::Backend(e.to_string()))?,
-                    )
-                    .map_err(|e| TransportError::Backend(e.to_string()))?;
-
-                    out.push(IncomingMessage {
-                        peer: peer.clone(),
-                        envelope: RpcEnvelope {
-                            version: 1,
-                            id: format!("{}-resp", msg.envelope.id),
-                            sender: peer,
-                            payload: RpcPayload::SignResponse(PartialSigPackageWire::from(pkg)),
-                        },
-                    });
+                    Ok(out)
                 }
+                RpcPayload::Ecdh(wire) => {
+                    let req: bifrost_core::types::EcdhPackage =
+                        wire.try_into().map_err(|e: bifrost_codec::CodecError| {
+                            TransportError::Backend(e.to_string())
+                        })?;
+                    let targets = req.entries.iter().map(|e| e.ecdh_pk).collect::<Vec<_>>();
 
-                Ok(out)
-            }
-            RpcPayload::Ecdh(wire) => {
-                let req: bifrost_core::types::EcdhPackage =
-                    wire.try_into().map_err(|e: bifrost_codec::CodecError| {
-                        TransportError::Backend(e.to_string())
-                    })?;
-                let targets = req.entries.iter().map(|e| e.ecdh_pk).collect::<Vec<_>>();
+                    let mut out = Vec::with_capacity(responders.len());
+                    let peers_guard = self
+                        .peers
+                        .lock()
+                        .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
 
-                let mut out = Vec::with_capacity(responders.len());
-                let peers_guard = self
-                    .peers
-                    .lock()
-                    .map_err(|_| TransportError::Backend("peer lock poisoned".to_string()))?;
+                    for peer in responders {
+                        let Some(ctx) = peers_guard.get(&peer) else {
+                            return Err(TransportError::PeerNotFound);
+                        };
+                        let pkg = create_ecdh_package(&req.members, &ctx.share, &targets)
+                            .map_err(|e| TransportError::Backend(e.to_string()))?;
+                        out.push(IncomingMessage {
+                            peer: peer.clone(),
+                            envelope: RpcEnvelope {
+                                version: 1,
+                                id: format!("{}-resp", msg.envelope.id),
+                                sender: peer,
+                                payload: RpcPayload::Ecdh(EcdhPackageWire::from(pkg)),
+                            },
+                        });
+                    }
 
-                for peer in responders {
-                    let Some(ctx) = peers_guard.get(&peer) else {
-                        return Err(TransportError::PeerNotFound);
-                    };
-                    let pkg = create_ecdh_package(&req.members, &ctx.share, &targets)
-                        .map_err(|e| TransportError::Backend(e.to_string()))?;
-                    out.push(IncomingMessage {
-                        peer: peer.clone(),
-                        envelope: RpcEnvelope {
-                            version: 1,
-                            id: format!("{}-resp", msg.envelope.id),
-                            sender: peer,
-                            payload: RpcPayload::Ecdh(EcdhPackageWire::from(pkg)),
-                        },
-                    });
+                    Ok(out)
                 }
-
-                Ok(out)
+                _ => Err(TransportError::Backend(
+                    "unsupported cast payload".to_string(),
+                )),
             }
-            _ => Err(TransportError::Backend(
-                "unsupported cast payload".to_string(),
-            )),
         }
     }
 
-    async fn send_response(
+    fn send_response(
         &self,
         _handle: ResponseHandle,
         _response: OutgoingMessage,
-    ) -> TransportResult<()> {
-        Ok(())
+    ) -> impl std::future::Future<Output = TransportResult<()>> + Send {
+        async move { Ok(()) }
     }
 
-    async fn next_incoming(&self) -> TransportResult<IncomingMessage> {
-        Err(TransportError::Backend("not used".to_string()))
+    fn next_incoming(
+        &self,
+    ) -> impl std::future::Future<Output = TransportResult<IncomingMessage>> + Send {
+        async move { Err(TransportError::Backend("not used".to_string())) }
     }
 }
 

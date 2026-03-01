@@ -22,7 +22,6 @@ license = "MIT"
 authors = ["Christopher Scott"]
 
 [workspace.dependencies]
-async-trait = "0.1"
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -35,7 +34,6 @@ zeroize = { version = "1", features = ["derive"] }
 k256 = { version = "0.13", features = ["arithmetic", "ecdh"] }
 futures = "0.3"
 futures-util = "0.3"
-chacha20poly1305 = "0.10"
 tokio = { version = "1", features = ["rt", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
