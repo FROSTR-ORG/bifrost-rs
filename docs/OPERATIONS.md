@@ -37,7 +37,7 @@ scripts/devnet-tmux.sh stop
 ### Toolchain preflight
 
 ```bash
-./dev/scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
+toolchain_preflight.sh --require-cargo --require-cargo-audit
 ```
 
 ### Build and quality gates
@@ -62,7 +62,7 @@ scripts/test-tui-e2e.sh
 ### Start a single daemon manually
 
 ```bash
-cargo run -p bifrostd -- --config ./dev/data/daemon-alice.json
+cargo run -p bifrostd -- --config <path-to-daemon-config-json>
 ```
 
 ### Query daemon via CLI
@@ -86,35 +86,35 @@ cargo run -p bifrost-cli -- --socket /tmp/bifrostd-alice.sock events 50
 Run full release/audit matrix:
 
 ```bash
-dev/scripts/audit_run.sh
+audit_run.sh
 ```
 
 Scaffold only (no execution):
 
 ```bash
-dev/scripts/audit_run.sh --scaffold-only
+audit_run.sh --scaffold-only
 ```
 
-Manual planner checks:
+Optional planning checks (if runbook tooling is available):
 
 ```bash
-dev/scripts/planner_runbook.sh summary
-dev/scripts/planner_runbook.sh verify
+planner_runbook.sh summary
+planner_runbook.sh verify
 ```
 
 ## Logs and Artifacts
 
 Runtime logs:
-- `dev/data/logs/relay.log`
-- `dev/data/logs/bifrostd-<name>.log`
+- `<runtime-logs-dir>/relay.log`
+- `<runtime-logs-dir>/bifrostd-<name>.log`
 
 Audit artifacts:
-- `dev/audit/work/*.md`
-- `dev/audit/work/evidence/*`
+- `<audit-artifact-dir>/*.md`
+- `<audit-artifact-dir>/evidence/*`
 
 ## Security and Operational Controls
 
-- Use explicit RPC auth token in daemon config unless local-dev explicitly sets `auth.insecure_no_auth=true`.
+- Use explicit RPC auth token in daemon config unless local development explicitly sets `auth.insecure_no_auth=true`.
 - Keep socket paths permission-restricted to daemon owner.
 - Keep relay lists controlled; do not trust relay metadata or availability.
 - Treat devnet key material as disposable test material.

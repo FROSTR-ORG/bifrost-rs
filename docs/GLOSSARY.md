@@ -38,5 +38,4 @@ Local Unix-socket JSON RPC interface exposed by `bifrostd`.
 
 ## Devnet
 
-Local multi-node runtime setup generated under `dev/data`.
-
+Local multi-node runtime setup generated under the configured runtime data directory.

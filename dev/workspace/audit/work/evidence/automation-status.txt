@@ -1,0 +1,11 @@
+preflight_exit:0
+fmt_exit:0
+clippy_exit:0
+cargo_check_exit:0
+cargo_test_core_exit:0
+cargo_test_relay_exit:0
+node_e2e_exit:0
+tui_e2e_exit:0
+planner_summary_exit:0
+planner_verify_exit:0
+cargo_audit_exit:0

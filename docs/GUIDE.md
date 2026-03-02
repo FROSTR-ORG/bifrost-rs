@@ -11,7 +11,7 @@ This guide gets you from a clean checkout to a working local `bifrost-rs` devnet
 Preflight:
 
 ```bash
-./dev/scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
+toolchain_preflight.sh --require-cargo --require-cargo-audit
 ```
 
 ## 1. Build Baseline
@@ -27,7 +27,7 @@ cargo test -p bifrost-core -p bifrost-codec -p bifrost-node --offline
 scripts/devnet.sh gen
 ```
 
-This creates group/share/config artifacts under `dev/data`.
+This creates group/share/config artifacts under the configured data directory.
 
 ## 3. Start Local Runtime
 
@@ -41,10 +41,10 @@ Expected processes:
 - `bifrostd` for `alice`, `bob`, `carol`
 
 Logs:
-- `dev/data/logs/relay.log`
-- `dev/data/logs/bifrostd-alice.log`
-- `dev/data/logs/bifrostd-bob.log`
-- `dev/data/logs/bifrostd-carol.log`
+- `<data-dir>/relay.log`
+- `<data-dir>/bifrostd-alice.log`
+- `<data-dir>/bifrostd-bob.log`
+- `<data-dir>/bifrostd-carol.log`
 
 ## 4. Verify RPC Health With CLI
 
@@ -120,10 +120,10 @@ scripts/devnet-tmux.sh stop
 ## 8. Release/Audit Gate Execution
 
 ```bash
-dev/scripts/audit_run.sh
+audit_run.sh
 ```
 
-Artifacts are written under `dev/audit/work/evidence`.
+Artifacts are written under the audit evidence directory.
 
 ## Next Reading
 

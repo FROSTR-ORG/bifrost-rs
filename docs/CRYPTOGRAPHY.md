@@ -33,7 +33,7 @@ This document summarizes implemented cryptographic behavior and constraints in `
 
 Design note:
 
-- `dev/planner/09-batch-sign-nonce-model.md`
+- Batch-sign nonce safety and test strategy are implemented in the core/node stack.
 
 ## ECDH Flow
 
@@ -55,4 +55,4 @@ Design note:
 ## References
 
 - `docs/SECURITY-MODEL.md`
-- `dev/planner/06-test-strategy.md`
+- repository test strategy and implementation notes

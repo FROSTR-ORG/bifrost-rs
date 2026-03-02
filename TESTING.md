@@ -42,6 +42,34 @@ cargo install cargo-llvm-cov --locked
 cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info --summary-only
 ```
 
+## Test Coverage Surface
+
+Current test classes in repo:
+
+- Unit tests: extensive crate-level `#[test]` coverage in `crates/*/src`.
+  - `cargo test -p bifrost-core -p bifrost-codec -p bifrost-node` (core suite)
+  - `cargo test -p bifrost-transport-ws` (transport suite)
+- Integration tests (Rust `tests/` targets):
+  - `crates/bifrost-node/tests/happy_paths.rs`
+  - `crates/bifrost-node/tests/adversarial.rs`
+  - `crates/bifrost-node/tests/fault_injection.rs`
+  - `crates/bifrost-codec/tests/fixture_matrix.rs`
+  - `crates/bifrost-cli/tests/e2e_cli.rs`
+  - CI runs these explicitly via the `test-integration` task:
+    - `cargo test -p bifrost-node --test happy_paths`
+    - `cargo test -p bifrost-node --test adversarial`
+    - `cargo test -p bifrost-node --test fault_injection`
+- End-to-end/runtime tests:
+  - `scripts/test-node-e2e.sh`
+  - `scripts/test-tui-e2e.sh`
+  - `scripts/devnet.sh smoke`
+  - CI runs these in `runtime-e2e`.
+
+Coverage status:
+
+- `cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info --summary-only` collects overall workspace coverage and uploads summary artifacts.
+- There is no repository-defined minimum coverage threshold in CI; coverage quality is captured by artifact review.
+
 ## Testing Requirements By Change Type
 
 - Crypto/core changes: add deterministic correctness + reject-path tests.

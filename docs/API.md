@@ -70,7 +70,7 @@ Utility APIs for integration/tooling use cases:
   - `verify_share(&SharePackage, &GroupPackage)`
 - Onboarding package helpers:
   - `build_onboarding_package(share, peer_pk, relays)`
-  - `encode_onboarding_package(&OnboardingPackage)` (`bfonboard` bech32m)
+  - `encode_onboarding_package(&OnboardingPackage)` (bech32m)
   - `decode_onboarding_package(&str)`
   - `serialize_onboarding_data(&OnboardingPackage)`
   - `deserialize_onboarding_data(&[u8])`
@@ -130,6 +130,7 @@ Daemon RPC schema (`crates/bifrost-rpc/src/types.rs`):
 - Request envelope: `RpcRequestEnvelope { id, request }`
 - Response envelope: `RpcResponseEnvelope { id, response }`
 - Request enum `BifrostRpcRequest` methods:
+  - `Negotiate { client_name, client_version }`
   - `Health`, `Status`, `Events`, `Echo`, `Ping`, `Onboard`, `Sign`, `Ecdh`
   - peer policy administration: `GetPeerPolicies`, `GetPeerPolicy`, `SetPeerPolicy`, `RefreshPeerPolicy`
   - `Shutdown`
@@ -149,9 +150,9 @@ Client helpers:
 - `bifrost-cli`: command-oriented RPC client
 - `bifrost-tui`: interactive `ratatui` dashboard with scripted mode
 - `bifrost-devtools`: development tooling binary with:
-  - `relay` for REQ/EVENT/CLOSE dev relay flow
+  - `relay` for REQ/EVENT/CLOSE development relay flow
   - `keygen` for local key/config generation
 
 Change management reference:
 
-- `dev/planner/05-interfaces.md`
+- planning interface notes in repository artifacts

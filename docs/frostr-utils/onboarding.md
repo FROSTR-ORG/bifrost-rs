@@ -9,7 +9,7 @@ Onboarding utilities produce a portable package containing:
 ## API
 
 - `build_onboarding_package(share, peer_pk, relays)`
-- `encode_onboarding_package(&pkg)` (`bfonboard` bech32m)
+- `encode_onboarding_package(&pkg)` (bech32m)
 - `decode_onboarding_package(&str)`
 - `serialize_onboarding_data(&pkg)`
 - `deserialize_onboarding_data(&[u8])`

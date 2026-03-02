@@ -30,6 +30,11 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
+pub const DEFAULT_MAX_RETRIES: u32 = 3;
+pub const DEFAULT_BACKOFF_INITIAL_MS: u64 = 250;
+pub const DEFAULT_BACKOFF_MAX_MS: u64 = 5_000;
+pub const DEFAULT_RPC_KIND: u64 = 20_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ConnectionState {
@@ -51,10 +56,10 @@ pub struct WsTransportConfig {
 impl Default for WsTransportConfig {
     fn default() -> Self {
         Self {
-            max_retries: 3,
-            backoff_initial_ms: 250,
-            backoff_max_ms: 5_000,
-            rpc_kind: 20_000,
+            max_retries: DEFAULT_MAX_RETRIES,
+            backoff_initial_ms: DEFAULT_BACKOFF_INITIAL_MS,
+            backoff_max_ms: DEFAULT_BACKOFF_MAX_MS,
+            rpc_kind: DEFAULT_RPC_KIND,
         }
     }
 }
@@ -785,7 +790,12 @@ impl WebSocketTransport {
                             {
                                 continue;
                             }
-                            let _ = pending.tx.send(incoming);
+                            if let Err(err) = pending.tx.send(incoming) {
+                                warn!(
+                                    %err,
+                                    "failed to dispatch pending response to waiting caller"
+                                );
+                            }
                             continue;
                         }
                         drop(pending_map);
@@ -885,7 +895,9 @@ impl Transport for WebSocketTransport {
             self.connected.store(false, Ordering::Relaxed);
 
             if let Some(tx) = self.outbound_tx.lock().await.clone() {
-                let _ = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string()));
+                if let Err(err) = tx.send(Message::Text(json!(["CLOSE", "bifrost-rpc"]).to_string()) {
+                    warn!(%err, "failed to send websocket close message");
+                }
             }
 
             {
@@ -1106,10 +1118,10 @@ mod tests {
         let transport = WebSocketTransport::with_config(
             vec!["wss://relay.example".to_string()],
             WsTransportConfig {
-                max_retries: 3,
+                max_retries: DEFAULT_MAX_RETRIES,
                 backoff_initial_ms: 100,
                 backoff_max_ms: 250,
-                rpc_kind: 20_000,
+                rpc_kind: DEFAULT_RPC_KIND,
             },
             WsNostrConfig {
                 sender_pubkey33: "02".to_string() + &"11".repeat(32),
@@ -1339,7 +1351,7 @@ mod tests {
                     max_retries: 1,
                     backoff_initial_ms: 1,
                     backoff_max_ms: 2,
-                    rpc_kind: 20_000,
+                    rpc_kind: DEFAULT_RPC_KIND,
                 },
                 WsNostrConfig {
                     sender_pubkey33: pubkey33_hex(SEC1),

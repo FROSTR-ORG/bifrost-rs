@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +16,10 @@ use bifrost_rpc::{
     PeerView, RpcRequestEnvelope, RpcResponseEnvelope,
 };
 use bifrost_transport::Clock;
-use bifrost_transport_ws::{WebSocketTransport, WsNostrConfig, WsTransportConfig};
+use bifrost_transport_ws::{
+    WebSocketTransport, WsNostrConfig, WsTransportConfig, DEFAULT_BACKOFF_INITIAL_MS,
+    DEFAULT_BACKOFF_MAX_MS, DEFAULT_MAX_RETRIES, DEFAULT_RPC_KIND,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -89,19 +93,19 @@ impl Default for DaemonTransportConfig {
 }
 
 fn default_rpc_kind() -> u64 {
-    20_000
+    DEFAULT_RPC_KIND
 }
 
 fn default_max_retries() -> u32 {
-    3
+    DEFAULT_MAX_RETRIES
 }
 
 fn default_backoff_initial_ms() -> u64 {
-    250
+    DEFAULT_BACKOFF_INITIAL_MS
 }
 
 fn default_backoff_max_ms() -> u64 {
-    5_000
+    DEFAULT_BACKOFF_MAX_MS
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +208,14 @@ async fn main() -> Result<()> {
     spawn_inbound_processor(node.clone(), stop.clone());
 
     if Path::new(&cfg.socket_path).exists() {
-        let _ = tokio::fs::remove_file(&cfg.socket_path).await;
+        if let Err(err) = tokio::fs::remove_file(&cfg.socket_path).await {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(anyhow!(err).context(format!(
+                    "failed to remove stale socket file {}",
+                    cfg.socket_path
+                )));
+            }
+        }
     }
 
     let listener = UnixListener::bind(&cfg.socket_path)
@@ -230,8 +241,14 @@ async fn main() -> Result<()> {
         }
     }
 
-    let _ = node.close().await;
-    let _ = tokio::fs::remove_file(&cfg.socket_path).await;
+    if let Err(err) = node.close().await {
+        tracing::warn!(%err, "daemon node shutdown failed");
+    }
+    if let Err(err) = tokio::fs::remove_file(&cfg.socket_path).await {
+        if err.kind() != ErrorKind::NotFound {
+            tracing::warn!(%err, "failed to remove socket at shutdown");
+        }
+    }
     Ok(())
 }
 
@@ -274,7 +291,9 @@ fn spawn_inbound_processor(
 ) {
     tokio::spawn(async move {
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = node.process_next_incoming().await;
+            if let Err(err) = node.process_next_incoming().await {
+                tracing::warn!(%err, "daemon inbound processing failed");
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     });
@@ -724,8 +743,12 @@ mod tests {
         let oversized = vec![b'a'; RPC_MAX_LINE_BYTES + 1];
         tokio::spawn(async move {
             let mut client = client;
-            let _ = client.write_all(&oversized).await;
-            let _ = client.write_all(b"\n").await;
+            if let Err(err) = client.write_all(&oversized).await {
+                panic!("write oversized test payload failed: {err}");
+            }
+            if let Err(err) = client.write_all(b"\n").await {
+                panic!("write newline for oversized test failed: {err}");
+            }
         });
         let err = read_rpc_line(&mut reader, RPC_MAX_LINE_BYTES)
             .await

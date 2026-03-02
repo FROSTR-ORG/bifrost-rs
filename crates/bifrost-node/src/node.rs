@@ -26,14 +26,13 @@ use k256::SecretKey;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
+use tracing::warn;
 
 use crate::error::{NodeError, NodeResult};
 use crate::types::{
     BifrostNodeConfig, BifrostNodeOptions, MethodPolicy, NodeEvent, PeerData, PeerNonceHealth,
-    PeerPolicy, PeerStatus,
+    PeerPolicy, PeerStatus, DEFAULT_EVENT_CHANNEL_CAPACITY, NODE_ENVELOPE_VERSION,
 };
-
-const PEER_ENVELOPE_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationMethod {
@@ -139,7 +138,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .collect::<HashMap<_, _>>();
 
         let resolved = options.unwrap_or_default();
-        let (events_tx, _) = broadcast::channel(256);
+        let (events_tx, _) = broadcast::channel(DEFAULT_EVENT_CHANNEL_CAPACITY);
         let mut pool = NoncePool::new(
             share.idx,
             share.seckey,
@@ -288,7 +287,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         self.enforce_outbound_request_policy(peer, OperationMethod::Echo)?;
 
         let envelope = RpcEnvelope {
-            version: 1,
+            version: NODE_ENVELOPE_VERSION,
             id: self.request_id(),
             sender: self.local_sender_id(),
             payload: RpcPayload::Echo(challenge.to_string()),
@@ -339,14 +338,14 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             };
 
             PingPayload {
-                version: 1,
+                version: NODE_ENVELOPE_VERSION,
                 nonces,
                 policy_profile: Some(self.local_policy_profile_for(peer)?),
             }
         };
 
         let envelope = RpcEnvelope {
-            version: 1,
+            version: NODE_ENVELOPE_VERSION,
             id: self.request_id(),
             sender: self.local_sender_id(),
             payload: RpcPayload::Ping(PingPayloadWire::from(payload)),
@@ -398,7 +397,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         };
 
         let envelope = RpcEnvelope {
-            version: 1,
+            version: NODE_ENVELOPE_VERSION,
             id: self.request_id(),
             sender: self.local_sender_id(),
             payload: RpcPayload::OnboardRequest(request),
@@ -544,7 +543,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
         let wire = SignSessionPackageWire::from(session.clone());
         let envelope = RpcEnvelope {
-            version: 1,
+            version: NODE_ENVELOPE_VERSION,
             id: self.request_id(),
             sender: self.local_sender_id(),
             payload: RpcPayload::Sign(wire),
@@ -675,7 +674,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 OutgoingMessage {
                     peer: String::new(),
                     envelope: RpcEnvelope {
-                        version: 1,
+                        version: NODE_ENVELOPE_VERSION,
                         id: self.request_id(),
                         sender: self.local_sender_id(),
                         payload: RpcPayload::Ecdh(wire),
@@ -753,7 +752,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
 
     pub async fn handle_incoming(&self, msg: IncomingMessage) -> NodeResult<()> {
         self.ensure_ready()?;
-        if msg.envelope.version != PEER_ENVELOPE_VERSION {
+        if msg.envelope.version != NODE_ENVELOPE_VERSION {
             return Err(NodeError::UnsupportedEnvelopeVersion(msg.envelope.version));
         }
         self.validate_payload_limits(&msg.envelope)?;
@@ -771,7 +770,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             let response = OutgoingMessage {
                 peer: peer.clone(),
                 envelope: RpcEnvelope {
-                    version: 1,
+                    version: NODE_ENVELOPE_VERSION,
                     id: request_id.clone(),
                     sender: self.local_sender_id(),
                     payload: RpcPayload::Error(PeerErrorWire {
@@ -824,7 +823,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
                 };
 
                 RpcPayload::Ping(PingPayloadWire::from(PingPayload {
-                    version: 1,
+                    version: NODE_ENVELOPE_VERSION,
                     nonces,
                     policy_profile: Some(self.local_policy_profile_for(&peer)?),
                 }))
@@ -959,7 +958,7 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
         let response = OutgoingMessage {
             peer: peer.clone(),
             envelope: RpcEnvelope {
-                version: 1,
+                version: NODE_ENVELOPE_VERSION,
                 id: request_id.clone(),
                 sender: self.local_sender_id(),
                 payload,
@@ -1162,7 +1161,9 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
     }
 
     fn emit_event(&self, event: NodeEvent) {
-        let _ = self.events_tx.send(event);
+        if let Err(err) = self.events_tx.send(event) {
+            warn!(%err, "node event dropped (no active subscribers)");
+        }
     }
 
     fn validate_sign_session(
@@ -1357,7 +1358,13 @@ impl<T: Transport, C: Clock> BifrostNode<T, C> {
             .collect::<Vec<_>>();
         for peer in peers {
             if !self.has_remote_profile_for(&peer, method)? {
-                let _ = self.ping(&peer).await;
+                if let Err(err) = self.ping(&peer).await {
+                    warn!(
+                        peer = %peer,
+                        %err,
+                        "failed to refresh unknown policy peer via ping"
+                    );
+                }
             }
         }
         Ok(())

@@ -100,8 +100,7 @@ Methods:
 - Runtime daemon boundary is an intentional architecture split from TS in-process demo flow.
 - Core operation semantics (`ping`, `echo`, `ecdh`, `sign`, `onboard`) are preserved.
 
-See also:
-
-- `dev/artifacts/runtime-stack.md`
+- See also:
+- runtime stack notes for environment wiring
 - `docs/API.md`
-- `dev/planner/05-interfaces.md`
+- migration interface notes in repository planning artifacts

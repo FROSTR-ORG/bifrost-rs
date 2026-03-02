@@ -43,9 +43,9 @@
 11. `GLOSSARY.md`
 - Shared terminology.
 
-## Out Of Scope For `docs/`
+## Out of scope for `docs/`
 
 The following are intentionally outside this manual:
 - Governance/process policy: `CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`, `CHANGELOG.md`
-- Migration planning state: `dev/planner/`
-- Execution artifacts and audits: `dev/artifacts/`, `dev/audit/`
+- Migration planning artifacts: project planning and execution state files outside this manual
+- Execution artifacts and audits: execution/evidence directories outside this manual

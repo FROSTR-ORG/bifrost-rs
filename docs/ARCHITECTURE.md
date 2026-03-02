@@ -44,8 +44,7 @@
 
 - Tokio/tungstenite based backend.
 - Request correlation via pending map.
-- Current limitations:
-- no production-grade reconnect/failover state machine yet.
+- Reconnect and backoff behavior is implemented with relay health-aware routing.
 
 ## Key Data Flow: Sign
 
@@ -64,6 +63,6 @@
 ## Security-Critical Boundaries
 
 - Session integrity checks (`gid`, `sid`).
-- Sender/member binding checks (still being hardened).
+- Sender/member binding checks.
 - Nonce one-time usage and lifecycle controls.
-- Strict wire payload validation (in progress).
+- Strict wire payload validation.

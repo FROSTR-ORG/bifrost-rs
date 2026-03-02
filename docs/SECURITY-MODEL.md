@@ -38,7 +38,7 @@ Threat model and control map for `bifrost-rs`.
 ## Runtime Security Notes
 
 - `bifrostd` enforces token auth when `auth.token` is configured.
-- If `auth.token` is omitted, startup fails unless `auth.insecure_no_auth=true` is explicitly set (dev-only mode).
+- If `auth.token` is omitted, startup fails unless `auth.insecure_no_auth=true` is explicitly set (development-only mode).
 - RPC request lines are bounded (`64 KiB`) to reduce local resource-exhaustion exposure.
 - `Shutdown` RPC remains privileged; operators should restrict socket path and process ownership.
 
@@ -47,16 +47,16 @@ Threat model and control map for `bifrost-rs`.
 - Use restrictive socket file permissions (`600` where practical).
 - Run daemon under dedicated service user.
 - Keep relay list controlled in production-like environments.
-- Treat devnet-generated key material as ephemeral, never production.
+- Treat cluster-generated key material as ephemeral, never production.
 
 ## Residual Risks / Open Work
 
-- dev environments that choose `auth.insecure_no_auth=true` accept a local control-plane trust risk
-- formal protocol version negotiation policy
-- deeper adversarial transport tests (fault injection, prolonged reconnect stress)
+- Dev environments that choose `auth.insecure_no_auth=true` accept a local control-plane trust risk.
+- Formal protocol version negotiation policy.
+- Deeper adversarial transport tests (fault injection, prolonged reconnect stress).
 
 ## Related Docs
 
 - `SECURITY.md`
 - `docs/CRYPTOGRAPHY.md`
-- `dev/planner/07-risks-and-decisions.md`
+- `README.md` and repository execution artifacts for risk tracking context

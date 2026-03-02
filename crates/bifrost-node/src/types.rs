@@ -1,6 +1,22 @@
 use bifrost_core::nonce::NoncePoolConfig;
 use serde::{Deserialize, Serialize};
 
+pub const NODE_ENVELOPE_VERSION: u16 = 1;
+pub const DEFAULT_SIGN_TIMEOUT_MS: u64 = 30_000;
+pub const DEFAULT_ECDH_TIMEOUT_MS: u64 = 30_000;
+pub const DEFAULT_PING_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_REQUEST_TTL_SECS: u64 = 300;
+pub const DEFAULT_REQUEST_CACHE_LIMIT: usize = 4096;
+pub const DEFAULT_MAX_SIGN_BATCH: usize = 100;
+pub const DEFAULT_MAX_ECDH_BATCH: usize = 100;
+pub const DEFAULT_MAX_REQUEST_ID_LEN: usize = 256;
+pub const DEFAULT_MAX_SENDER_LEN: usize = 256;
+pub const DEFAULT_MAX_ECHO_LEN: usize = 8192;
+pub const DEFAULT_MAX_SIGN_CONTENT_LEN: usize = 16_384;
+pub const DEFAULT_ECDH_CACHE_TTL_SECS: u64 = 300;
+pub const DEFAULT_ECDH_CACHE_MAX_ENTRIES: usize = 1024;
+pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerStatus {
     Online,
@@ -74,19 +90,19 @@ pub struct BifrostNodeOptions {
 impl Default for BifrostNodeOptions {
     fn default() -> Self {
         Self {
-            sign_timeout_ms: 30_000,
-            ecdh_timeout_ms: 30_000,
-            ping_timeout_ms: 15_000,
-            request_ttl_secs: 300,
-            request_cache_limit: 4096,
-            max_sign_batch: 100,
-            max_ecdh_batch: 100,
-            max_request_id_len: 256,
-            max_sender_len: 256,
-            max_echo_len: 8192,
-            max_sign_content_len: 16384,
-            ecdh_cache_ttl_secs: 300,
-            ecdh_cache_max_entries: 1024,
+            sign_timeout_ms: DEFAULT_SIGN_TIMEOUT_MS,
+            ecdh_timeout_ms: DEFAULT_ECDH_TIMEOUT_MS,
+            ping_timeout_ms: DEFAULT_PING_TIMEOUT_MS,
+            request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
+            request_cache_limit: DEFAULT_REQUEST_CACHE_LIMIT,
+            max_sign_batch: DEFAULT_MAX_SIGN_BATCH,
+            max_ecdh_batch: DEFAULT_MAX_ECDH_BATCH,
+            max_request_id_len: DEFAULT_MAX_REQUEST_ID_LEN,
+            max_sender_len: DEFAULT_MAX_SENDER_LEN,
+            max_echo_len: DEFAULT_MAX_ECHO_LEN,
+            max_sign_content_len: DEFAULT_MAX_SIGN_CONTENT_LEN,
+            ecdh_cache_ttl_secs: DEFAULT_ECDH_CACHE_TTL_SECS,
+            ecdh_cache_max_entries: DEFAULT_ECDH_CACHE_MAX_ENTRIES,
             nonce_pool: NoncePoolConfig::default(),
         }
     }

@@ -16,7 +16,7 @@ Rust implementation of the FROSTR threshold-signing stack, migrated from `bifros
 
 ## Project Status
 
-Migration backlog status is complete in planner tracking (`53/53 done`).
+Migration tracking status is maintained in repository planning artifacts.
 
 Current release condition:
 - `cargo audit` is vulnerability-clean.
@@ -24,8 +24,8 @@ Current release condition:
 - This is tracked in audit artifacts and re-checked each release cycle.
 
 See:
-- [dev/audit/internal-audit-2026-02-27.md](./dev/audit/internal-audit-2026-02-27.md)
-- [dev/audit/checklist-v0.1.0.md](./dev/audit/checklist-v0.1.0.md)
+- Internal audit report: internal-audit-2026-02-27.md (as available in this checkout)
+- Audit checklist: checklist-v0.1.0.md (as available in this checkout)
 
 ## Workspace Layout
 
@@ -39,10 +39,10 @@ See:
 - `crates/bifrostd`: headless daemon over Unix socket JSON RPC.
 - `crates/bifrost-cli`: command-oriented RPC client.
 - `crates/bifrost-tui`: interactive operator shell.
-- `crates/bifrost-devtools`: consolidated dev tooling (`relay` + `keygen`).
+- `crates/bifrost-devtools`: consolidated developer tooling (`relay` + `keygen`).
 - `docs/`: product manual and operational guide.
-- `dev/planner/`: migration source of truth.
-- `dev/audit/`: audit framework, runbook, and evidence.
+- `artifacts/`: migration and audit artifacts (as available in this checkout).
+- `audit/`: audit framework, runbook, and evidence.
 
 ## Quickstart (Local Devnet)
 
@@ -53,7 +53,7 @@ Prereqs:
 1) Preflight:
 
 ```bash
-./dev/scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
+./scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
 ```
 
 2) Generate devnet artifacts:
@@ -112,7 +112,7 @@ scripts/test-tui-e2e.sh
 Audit automation:
 
 ```bash
-dev/scripts/audit_run.sh
+scripts/audit_run.sh
 ```
 
 ## Documentation Map
@@ -141,15 +141,15 @@ Governance/process:
 
 ## TS Parity Tracking
 
-- Parity matrix: [dev/planner/02-parity-matrix.md](./dev/planner/02-parity-matrix.md)
-- Gap report: [dev/artifacts/gap-report-ts-vs-rs.md](./dev/artifacts/gap-report-ts-vs-rs.md)
-- TS to RS migration notes: [dev/artifacts/migration-guide-ts-to-rs.md](./dev/artifacts/migration-guide-ts-to-rs.md)
+- Parity matrix and migration notes: `artifacts/gap-report-ts-vs-rs.md` (as available in this checkout).
+- Gap report: `artifacts/gap-report-ts-vs-rs.md`
+- TS to RS migration notes: `artifacts/migration-guide-ts-to-rs.md`
 
 ## Security Notes
 
 - Local RPC surface (`bifrostd`) supports token auth (`auth.token`) and optional unauthenticated read mode controls.
 - Enforce restrictive socket permissions in any shared environment.
-- Treat `dev/data` credentials as ephemeral test material only.
+- Treat `<runtime-data-directory>` credentials as ephemeral test material only.
 
 ## License
 

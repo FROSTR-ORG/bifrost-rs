@@ -7,8 +7,8 @@
 ```json
 {
   "socket_path": "/tmp/bifrostd-alice.sock",
-  "group_path": "./dev/data/group.json",
-  "share_path": "./dev/data/share-alice.json",
+  "group_path": "<data-dir>/group.json",
+  "share_path": "<data-dir>/share-alice.json",
   "peers": [
     {
       "pubkey": "<peer-member-pubkey-hex>",
@@ -63,7 +63,7 @@ Validation rule:
 `auth` fields:
 - `token`: bearer token for authenticated requests.
 - `allow_unauthenticated_read`: if `true`, read-only methods may be called without token.
-- `insecure_no_auth`: explicit dev-only bypass; when `true` and `token` is unset, all RPC methods are unauthenticated.
+- `insecure_no_auth`: explicit development-only bypass; when `true` and `token` is unset, all RPC methods are unauthenticated.
 
 Auth validation rules:
 - `auth.token` is required unless `auth.insecure_no_auth=true`.
