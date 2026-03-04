@@ -18,8 +18,8 @@ This document defines how to run a release-quality, category-based audit for `bi
 
 ## Audit Inputs
 
-- Governance docs: `CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`.
-- Planner state: `dev/planner/`.
+- Governance docs: `CONTRIBUTING.md`, `TESTING.md`, `RELEASE.md`, `SECURITY.md`.
+- Current runtime status snapshot: `dev/artifacts/current-status.md`.
 - Prior audit artifacts: `dev/audit/`.
 - Execution model: `dev/audit/RUNBOOK.md`.
 
@@ -52,13 +52,13 @@ Run from repo root:
 ```bash
 dev/scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --offline --no-deps
+cargo clippy --workspace --all-targets --offline --no-deps -- -D warnings
 cargo check --workspace --offline
-cargo test -p bifrost-core -p bifrost-codec -p bifrost-node -p bifrost-transport-ws --offline
-cargo test -p bifrost-devtools -p bifrost-rpc --offline
+cargo test --workspace --offline
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194
+scripts/devnet.sh smoke
 scripts/test-node-e2e.sh
 scripts/test-tui-e2e.sh
-dev/scripts/planner_runbook.sh summary
 cargo audit | tee dev/audit/work/evidence/cargo-audit.log
 ```
 
@@ -75,7 +75,7 @@ cargo audit | tee dev/audit/work/evidence/cargo-audit.log
 - Run index + category markdowns + run summary under `dev/audit/work/`
 - Checklist update: `dev/audit/checklist-v0.1.0.md`
 - Audit baseline report: `dev/audit/internal-audit-YYYY-MM-DD.md`
-- Any release-impacting blocker must be reflected in `RELEASES.md` and planner artifacts.
+- Any release-impacting blocker must be reflected in `RELEASE.md` and audit artifacts.
 
 ## Recommended Scaffolding
 

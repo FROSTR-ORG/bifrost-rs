@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bifrost_core::types::{
     DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, IndexedPublicNonceCommitment,
     MemberNonceCommitmentSet, MemberPackage, MemberPublicNonce, MethodPolicy, OnboardRequest,
@@ -183,9 +185,28 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
             ));
         }
 
-        let mut members = Vec::with_capacity(value.members.len());
+        let mut members: Vec<MemberPackage> = Vec::with_capacity(value.members.len());
         for m in value.members {
             members.push(m.try_into()?);
+        }
+        if value.threshold == 0 || value.threshold as usize > members.len() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "group threshold is out of bounds",
+            ));
+        }
+        let mut seen_indices = HashSet::with_capacity(members.len());
+        let mut seen_pubkeys = HashSet::with_capacity(members.len());
+        for member in &members {
+            if !seen_indices.insert(member.idx) {
+                return Err(crate::error::CodecError::InvalidPayload(
+                    "group members contain duplicate idx",
+                ));
+            }
+            if !seen_pubkeys.insert(member.pubkey) {
+                return Err(crate::error::CodecError::InvalidPayload(
+                    "group members contain duplicate pubkey",
+                ));
+            }
         }
 
         Ok(Self {

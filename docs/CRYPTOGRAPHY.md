@@ -33,7 +33,7 @@ This document summarizes implemented cryptographic behavior and constraints in `
 
 Design note:
 
-- `dev/planner/09-batch-sign-nonce-model.md`
+- Batch-sign nonce safety and test strategy are implemented in the core/signer stack.
 
 ## ECDH Flow
 
@@ -45,14 +45,13 @@ Design note:
 
 - Session IDs must bind to session payload (`SessionIdMismatch` rejection path).
 - Group/session/member consistency must hold for every signing flow.
-- Sender binding is enforced by node boundary before crypto operations.
+- Sender binding is enforced by signer boundary before crypto operations.
 
 ## Known Hardening Follow-Ups
 
-- Continue Option-A single-session multi-hash orchestration work.
 - Expand adversarial/fault injection coverage around transport-driven crypto workflows.
 
 ## References
 
 - `docs/SECURITY-MODEL.md`
-- `dev/planner/06-test-strategy.md`
+- repository test strategy and implementation notes

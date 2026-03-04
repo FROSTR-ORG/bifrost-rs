@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION_NAME="bifrost-rs-demo"
 DEVNET_SCRIPT="${ROOT_DIR}/scripts/devnet.sh"
 LOG_DIR="${ROOT_DIR}/dev/data/logs"
+CONFIG_DIR="${ROOT_DIR}/dev/data"
 
 usage() {
   cat <<USAGE
@@ -37,11 +38,11 @@ create_layout() {
   tmux send-keys -t "${SESSION_NAME}:demo.0" \
     "cd '${ROOT_DIR}' && clear && echo 'Relay log (Ctrl+b d to detach)' && exec tail -n +1 -f '${LOG_DIR}/relay.log'" C-m
   tmux send-keys -t "${SESSION_NAME}:demo.1" \
-    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-tui --offline -- --socket /tmp/bifrostd-alice.sock" C-m
+    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-app --bin bifrost --offline -- --config '${CONFIG_DIR}/bifrost-alice.json' listen" C-m
   tmux send-keys -t "${SESSION_NAME}:demo.2" \
-    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-tui --offline -- --socket /tmp/bifrostd-bob.sock" C-m
+    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-app --bin bifrost --offline -- --config '${CONFIG_DIR}/bifrost-bob.json' listen" C-m
   tmux send-keys -t "${SESSION_NAME}:demo.3" \
-    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-tui --offline -- --socket /tmp/bifrostd-carol.sock" C-m
+    "cd '${ROOT_DIR}' && clear && exec cargo run -p bifrost-app --bin bifrost --offline -- --config '${CONFIG_DIR}/bifrost-carol.json' listen" C-m
 
   tmux select-pane -t "${SESSION_NAME}:demo.1"
 

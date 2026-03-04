@@ -1,0 +1,21 @@
+[package]
+name = "bifrost-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+nostr.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing.workspace = true
+bifrost-core = { path = "../bifrost-core" }
+bifrost-signer = { path = "../bifrost-signer" }
+
+[dev-dependencies]
+bifrost-codec = { path = "../bifrost-codec" }
+frostr-utils = { path = "../frostr-utils" }
+hex.workspace = true

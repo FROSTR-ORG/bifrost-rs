@@ -19,9 +19,9 @@ Security-sensitive areas include:
 
 - `bifrost-core` cryptographic flows and nonce lifecycle
 - `bifrost-codec` validation and parsing boundaries
-- `bifrost-node` authorization/binding/replay controls
-- `bifrost-transport-ws` relay trust and transport safety
-- `bifrostd` local RPC surface and runtime controls
+- `bifrost-signer` authorization/binding/replay controls
+- `bifrost-bridge` relay orchestration and queueing controls
+- `bifrost-app` state persistence and runtime configuration safety
 
 ## Disclosure Policy
 
@@ -34,5 +34,4 @@ Security-sensitive areas include:
 
 - Threat model: `docs/SECURITY-MODEL.md`
 - Cryptography details: `docs/CRYPTOGRAPHY.md`
-- Release security checks: `RELEASES.md`
-
+- Release security checks: `RELEASE.md`

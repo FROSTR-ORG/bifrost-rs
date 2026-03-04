@@ -1,107 +1,48 @@
 # Wire Protocol Overview
 
-`bifrost-rs` has two protocol layers:
+`bifrost-rs` uses encrypted peer envelopes over Nostr relay events.
 
-1. peer protocol (`bifrost-codec::rpc::RpcEnvelope`) over transport
-2. local daemon RPC (`bifrost-rpc`) over Unix sockets
+## Peer Envelope (`bifrost-codec`)
 
-## 1) Peer Envelope (`bifrost-codec`)
-
-Envelope shape:
+Envelope shape (`BridgeEnvelopeV1`):
 
 ```json
 {
   "version": 1,
-  "id": "1700000000-2",
-  "sender": "<peer_pubkey_hex>",
-  "payload": { "method": "...", "data": { } }
+  "request_id": "1700000000-2-1",
+  "sent_at": 1700000000,
+  "payload": { "type": "...", "data": {} }
 }
 ```
 
-Payload methods:
+Payload variants:
+- `PingRequest`, `PingResponse`
+- `SignRequest`, `SignResponse`
+- `EcdhRequest`, `EcdhResponse`
+- `OnboardRequest`, `OnboardResponse`
+- `Error`
 
-- `Ping`
-- `Echo`
-- `Sign`
-- `SignResponse`
-- `Ecdh`
-- `OnboardRequest`
-- `OnboardResponse`
-- `Error` (explicit peer policy deny/error response payload)
+Validation boundaries:
+- version must equal `1`
+- request id must be non-empty and canonical (`<unix_ts>-<member_idx>-<seq>`)
+- payload-specific bounds and shape checks are enforced in wire conversions
 
-Current validation boundaries:
+## Relay Event Layer
 
-- envelope id non-empty, max length 256
-- envelope id canonical format: `<unix_ts>-<member_idx>-<seq>`
-- sender non-empty, max length 256
-- envelope version must equal `1`
-- echo max length 8192
-- outbound request responses are bound to expected peer identity
-
-Wire payload bounds (selected, from `wire.rs`):
-
-- `MAX_GROUP_MEMBERS = 1000`
-- `MAX_SIGN_BATCH_SIZE = 100`
-- `MAX_ECDH_BATCH_SIZE = 100`
-- `MAX_NONCE_PACKAGE = 1000`
-
-`Ping` payload includes:
-- optional nonce replenishment material
-- optional scoped peer-policy profile (`for_peer`, `revision`, `updated`, `block_all`, method-level `request/respond`)
-
-Encoding notes:
-
-- `SignSessionPackage.content` is binary-safe hex bytes (`Option<String>` on wire, `Option<Vec<u8>>` in core).
-
-Examples of enforced rejects:
-
-- empty members/hashes
-- oversized nonce/sign/ecdh arrays
-- malformed fixed-width hex payloads
-
-## 2) Daemon RPC (`bifrost-rpc`)
-
-Transport: newline-delimited JSON on Unix socket.
-
-Request envelope:
-
-```json
-{ "id": 123, "request": { "method": "Status" } }
-```
-
-Response envelope:
-
-```json
-{ "id": 123, "response": { "result": "Ok", "data": { } } }
-```
-
-Methods:
-
-- `Health`
-- `Status`
-- `Events { limit }`
-- `Echo { peer, message }`
-- `Ping { peer }`
-- `Onboard { peer }`
-- `Sign { message32_hex }`
-- `Ecdh { pubkey33_hex }`
-- `Shutdown`
+- Events are subscribed by `authors` and `kind` (default `20000`).
+- Event `content` carries an encrypted blob.
+- No payload structure should be inferred from relay metadata.
 
 ## Request Flow
 
-1. Client sends RPC request to daemon.
-2. Daemon invokes node operation.
-3. Node uses transport request/cast over relay(s).
-4. Peer envelope parsed and validated.
-5. Response returns as RPC `Ok(data)` or `Err(code,message)`.
+1. Caller starts operation through bridge command.
+2. Signer emits encrypted request event(s).
+3. Peers decrypt, validate, process, and emit encrypted response event(s).
+4. Initiator signer verifies responses against the locked peer set selected at round start.
+5. Round succeeds only if all locked peers return valid responses before timeout.
+6. On missing/invalid locked-peer response, round fails terminally and caller must start a new request.
 
 ## Compatibility Notes
 
-- Runtime daemon boundary is an intentional architecture split from TS in-process demo flow.
-- Core operation semantics (`ping`, `echo`, `ecdh`, `sign`, `onboard`) are preserved.
-
-See also:
-
-- `dev/artifacts/runtime-stack.md`
-- `docs/API.md`
-- `dev/planner/05-interfaces.md`
+- This is a hard-cut design replacing the legacy daemon/RPC runtime path.
+- Core operation semantics (`ping`, `onboard`, `sign`, `ecdh`) are preserved.
