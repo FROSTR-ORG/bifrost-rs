@@ -26,7 +26,7 @@ impl Default for NoncePoolConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoncePool {
     our_idx: u16,
     seckey: Bytes32,

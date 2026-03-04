@@ -4,59 +4,44 @@ Threat model and control map for `bifrost-rs`.
 
 ## System Boundary
 
-- Peer-to-peer protocol over relay transport (`bifrost-node` + transport crates)
-- Local daemon control plane over Unix socket (`bifrostd` + `bifrost-rpc`)
-- Cryptographic core operations (`bifrost-core`)
+- Encrypted peer protocol over relay transport (`bifrost-bridge` + adapter).
+- Stateful cryptographic engine (`bifrost-signer`).
+- Core cryptographic/session primitives (`bifrost-core`).
 
 ## Adversary Assumptions
 
-- Relay can observe metadata and availability but should not be trusted with sensitive plaintext.
-- A peer may be malicious, malformed, replaying, or out-of-policy.
-- Local machine users/processes may attempt unauthorized daemon RPC access.
+- Relay can observe metadata and availability but not trusted plaintext.
+- Peer may be malicious, malformed, replaying, or out-of-policy.
+- Local process boundary is untrusted; config/state files require filesystem controls.
 
 ## Security Goals
 
-1. Prevent unauthorized signing/ECDH actions.
+1. Prevent unauthorized sign/ECDH actions.
 2. Preserve nonce and session integrity.
-3. Reject malformed/bounds-violating payloads at boundaries.
-4. Avoid replay/stale-envelope processing.
-5. Limit resource exhaustion vectors from untrusted payloads.
+3. Reject malformed payloads at strict boundaries.
+4. Detect replay/stale request ids.
+5. Limit resource exhaustion from untrusted input.
 
 ## Control Matrix
 
 | Threat | Control | Location |
 |---|---|---|
-| malformed payloads | strict wire parsing + bounded arrays/fields | `bifrost-codec` |
-| oversized message abuse | envelope + node payload limits | `bifrost-codec`, `bifrost-node` |
-| sender spoofing / peer mismatch | sender/member binding checks | `bifrost-node` |
-| replay/stale request IDs | replay cache + TTL checks | `bifrost-node` |
-| nonce misuse | nonce claim/consume guardrails | `bifrost-core`, `bifrost-node` |
-| quorum underflow misuse | explicit threshold and insufficient-peer errors | `bifrost-node`, transport |
-| daemon RPC misuse | token-based authn/authz policy + local Unix socket boundary | `bifrostd` |
-| daemon RPC frame exhaustion | bounded RPC line framing | `bifrostd` |
+| malformed payloads | strict wire parsing + bounds checks | `bifrost-codec` |
+| sender spoofing | sender/member binding checks | `bifrost-signer` |
+| replay/stale requests | replay cache + TTL checks | `bifrost-signer` |
+| nonce misuse | claim/consume guardrails | `bifrost-core`, `bifrost-signer` |
+| quorum misuse | explicit threshold checks | `bifrost-signer` |
+| relay metadata leakage | opaque encrypted `content` payloads | `bifrost-signer` |
 
 ## Runtime Security Notes
 
-- `bifrostd` enforces token auth when `auth.token` is configured.
-- If `auth.token` is omitted, startup fails unless `auth.insecure_no_auth=true` is explicitly set (development-only mode).
-- RPC request lines are bounded (`64 KiB`) to reduce local resource-exhaustion exposure.
-- `Shutdown` RPC remains privileged; operators should restrict socket path and process ownership.
-
-## Deployment Guidance
-
-- Use restrictive socket file permissions (`600` where practical).
-- Run daemon under dedicated service user.
-- Keep relay list controlled in production-like environments.
-- Treat cluster-generated key material as ephemeral, never production.
-
-## Residual Risks / Open Work
-
-- Dev environments that choose `auth.insecure_no_auth=true` accept a local control-plane trust risk.
-- Formal protocol version negotiation policy.
-- Deeper adversarial transport tests (fault injection, prolonged reconnect stress).
+- Keep config/state paths permission-restricted.
+- Keep relay list controlled.
+- Keep event kind aligned across peers.
+- Treat development key material as disposable.
 
 ## Related Docs
 
 - `SECURITY.md`
 - `docs/CRYPTOGRAPHY.md`
-- `README.md` and repository execution artifacts for risk tracking context
+- `docs/PROTOCOL.md`

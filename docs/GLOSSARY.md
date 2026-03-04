@@ -6,7 +6,7 @@ Flexible Round-Optimized Schnorr Threshold protocol used for threshold signature
 
 ## FROSTR
 
-FROST operations coordinated over Nostr-style relay transport.
+FROST operations coordinated over relay transport.
 
 ## Group Package
 
@@ -18,24 +18,24 @@ Per-member secret key share with signer index.
 
 ## Sign Session
 
-A signing context that binds group, members, hashes/content, and nonce state.
+A signing context binding group, members, hashes/content, and nonce state.
 
 ## Partial Signature
 
-A member's threshold signing contribution for one or more sighashes.
+A member's threshold signing contribution.
 
 ## Nonce Pool
 
-Stateful store for outgoing/incoming signing nonces with safety controls.
+Stateful store for outgoing/incoming signing nonces with one-time-use controls.
 
 ## Onboarding
 
-Peer handshake flow used to exchange group context and nonce material.
+Peer bootstrap flow used to exchange group context and nonce material.
 
-## Daemon RPC
+## Signing Device
 
-Local Unix-socket JSON RPC interface exposed by `bifrostd`.
+Stateful cryptographic engine that decrypts peer events, executes protocol logic, and emits encrypted responses.
 
-## Devnet
+## Bridge
 
-Local multi-node runtime setup generated under the configured runtime data directory.
+Runtime orchestration layer that connects a signing device to a relay adapter and exposes command APIs.

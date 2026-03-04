@@ -1,118 +1,81 @@
 # Bifrost RS
 
-Rust implementation of the FROSTR threshold-signing stack, migrated from `bifrost-ts` with behavior parity goals and stricter runtime safety.
+Rust implementation of the FROSTR threshold-signing stack.
 
 ## What This Is
 
 `bifrost-rs` provides:
 - FROST threshold signing over secp256k1.
 - Collaborative ECDH flows.
-- Nostr-native peer transport (`REQ`/`EVENT`/`CLOSE`) with encrypted payload handling.
-- A production-shaped runtime surface:
-  - `bifrostd` daemon (local RPC server)
-  - `bifrost-cli` (scriptable client)
-  - `bifrost-tui` (operator interface)
-  - `bifrost-devtools` + devnet scripts (local integration harness)
+- Nostr-native encrypted peer messaging (NIP-44-compatible envelope handling).
+- Hard-cut runtime split between:
+  - `bifrost-signer` for cryptographic/stateful signing-device logic.
+  - `bifrost-bridge` for runtime orchestration between signer and relay adapter.
+- `bifrost` CLI for command execution.
+- `bifrost-tui` for operator status views.
+- `bifrost-devtools` for local relay + key/config generation.
 
 ## Project Status
 
-Migration tracking status is maintained in repository planning artifacts.
-
-Current release condition:
-- `cargo audit` is vulnerability-clean.
-- One accepted transitive warning remains: `RUSTSEC-2023-0089` (`atomic-polyfill`) via Frost dependency chain.
-- This is tracked in audit artifacts and re-checked each release cycle.
-
-See:
-- Internal audit report: internal-audit-2026-02-27.md (as available in this checkout)
-- Audit checklist: checklist-v0.1.0.md (as available in this checkout)
+- Alpha.
+- Hard-cut migration in progress.
+- Runtime documentation reflects the current signer/bridge architecture only.
 
 ## Workspace Layout
 
 - `crates/bifrost-core`: cryptographic/session primitives and nonce safety.
-- `crates/frostr-utils`: shared FROSTR keyset/onboarding utility APIs.
-- `crates/bifrost-codec`: wire and RPC validation/parsing.
-- `crates/bifrost-transport`: transport traits/shared message types.
-- `crates/bifrost-node`: orchestration/runtime logic.
-- `crates/bifrost-transport-ws`: websocket + Nostr transport backend.
-- `crates/bifrost-rpc`: daemon RPC schema/client helpers.
-- `crates/bifrostd`: headless daemon over Unix socket JSON RPC.
-- `crates/bifrost-cli`: command-oriented RPC client.
-- `crates/bifrost-tui`: interactive operator shell.
-- `crates/bifrost-devtools`: consolidated developer tooling (`relay` + `keygen`).
-- `docs/`: product manual and operational guide.
-- `artifacts/`: migration and audit artifacts (as available in this checkout).
-- `audit/`: audit framework, runbook, and evidence.
+- `crates/frostr-utils`: keyset/onboarding helpers.
+- `crates/bifrost-codec`: strict wire/envelope validation.
+- `crates/bifrost-signer`: signing-device runtime and policy/state management.
+- `crates/bifrost-bridge`: async runtime coordinator and relay adapter boundary.
+- `crates/bifrost-app`: production CLI package (`bifrost`) plus shared runtime glue.
+- `crates/bifrost-dev`: developer tooling package (`bifrost-tui`, `bifrost-devtools`).
+- `docs/`: product and operations documentation.
 
-## Quickstart (Local Devnet)
+## Quickstart
 
-Prereqs:
-- Rust toolchain installed (`cargo`, `rustfmt`, `clippy`).
-- `cargo-audit` available for security gate.
-
-1) Preflight:
+1. Generate local key/config artifacts:
 
 ```bash
-./scripts/toolchain_preflight.sh --require-cargo --require-cargo-audit
+cargo run -p bifrost-dev --bin bifrost-devtools -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
 ```
 
-2) Generate devnet artifacts:
+2. Start a local relay:
 
 ```bash
-scripts/devnet.sh gen
+cargo run -p bifrost-dev --bin bifrost-devtools -- relay 8194
 ```
 
-3) Start relay + daemons:
+3. Start signer listeners (separate terminals):
 
 ```bash
-scripts/devnet.sh start
-scripts/devnet.sh status
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json listen
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-bob.json listen
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json listen
 ```
 
-4) Run CLI commands against Alice:
+4. Run commands from one node:
 
 ```bash
-cargo run -p bifrost-cli -- --socket /tmp/bifrostd-alice.sock health
-cargo run -p bifrost-cli -- --socket /tmp/bifrostd-alice.sock status
-cargo run -p bifrost-cli -- --socket /tmp/bifrostd-alice.sock ping <peer_pubkey_hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json status
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <33-byte-hex>
 ```
 
-5) Open TUI:
+5. Run runtime e2e:
 
 ```bash
-cargo run -p bifrost-tui -- --socket /tmp/bifrostd-alice.sock
-```
-
-6) Stop everything:
-
-```bash
-scripts/devnet.sh stop
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
 ```
 
 ## Verification Matrix
 
-Core checks:
-
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --offline --no-deps
+cargo clippy --workspace --all-targets --offline --no-deps -- -D warnings
 cargo check --workspace --offline
-cargo test -p bifrost-core -p bifrost-codec -p bifrost-node -p bifrost-transport-ws --offline
-cargo test -p bifrost-devtools -p bifrost-rpc --offline
-```
-
-Runtime checks:
-
-```bash
-scripts/devnet.sh smoke
-scripts/test-node-e2e.sh
-scripts/test-tui-e2e.sh
-```
-
-Audit automation:
-
-```bash
-scripts/audit_run.sh
+cargo test --workspace --offline
 ```
 
 ## Documentation Map
@@ -135,21 +98,9 @@ Core manuals:
 Governance/process:
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [TESTING.md](./TESTING.md)
-- [RELEASES.md](./RELEASES.md)
+- [RELEASE.md](./RELEASE.md)
 - [SECURITY.md](./SECURITY.md)
 - [CHANGELOG.md](./CHANGELOG.md)
-
-## TS Parity Tracking
-
-- Parity matrix and migration notes: `artifacts/gap-report-ts-vs-rs.md` (as available in this checkout).
-- Gap report: `artifacts/gap-report-ts-vs-rs.md`
-- TS to RS migration notes: `artifacts/migration-guide-ts-to-rs.md`
-
-## Security Notes
-
-- Local RPC surface (`bifrostd`) supports token auth (`auth.token`) and optional unauthenticated read mode controls.
-- Enforce restrictive socket permissions in any shared environment.
-- Treat `<runtime-data-directory>` credentials as ephemeral test material only.
 
 ## License
 

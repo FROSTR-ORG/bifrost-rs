@@ -1,0 +1,30 @@
+[package]
+name = "bifrost-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "bifrost"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bincode = "1"
+hex.workspace = true
+fs2.workspace = true
+nostr.workspace = true
+nostr-sdk.workspace = true
+rand_core.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
+chacha20poly1305.workspace = true
+bifrost-bridge = { path = "../bifrost-bridge" }
+bifrost-core = { path = "../bifrost-core" }
+bifrost-codec = { path = "../bifrost-codec" }
+bifrost-signer = { path = "../bifrost-signer" }
+clap = { version = "4", features = ["derive"] }

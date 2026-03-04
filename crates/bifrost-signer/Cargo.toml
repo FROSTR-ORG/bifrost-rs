@@ -1,0 +1,25 @@
+[package]
+name = "bifrost-signer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+chacha20.workspace = true
+hmac.workspace = true
+k256.workspace = true
+nostr.workspace = true
+rand_core.workspace = true
+bifrost-core = { path = "../bifrost-core" }
+bifrost-codec = { path = "../bifrost-codec" }
+frostr-utils = { path = "../frostr-utils" }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+serde_json.workspace = true

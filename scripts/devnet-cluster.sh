@@ -12,7 +12,6 @@ CLUSTER_COUNT="${CLUSTER_COUNT:-5}"
 THRESHOLD="${THRESHOLD:-3}"
 RELAY_PORT="${RELAY_PORT:-8194}"
 RELAY_URL="ws://127.0.0.1:${RELAY_PORT}"
-SOCKET_DIR="${SOCKET_DIR:-/tmp}"
 
 MEMBER_NAMES=(alice bob carol dave erin frank grace heidi)
 
@@ -23,17 +22,16 @@ usage() {
 Usage: scripts/devnet-cluster.sh <command>
 
 Commands:
-  gen       Generate group/share/daemon configs for CLUSTER_COUNT members
-  start     Start relay + CLUSTER_COUNT daemons
-  stop      Stop relay + daemons from prior start
-  status    Show relay/daemon process status
-  smoke     Run gen+start and basic CLI checks against first daemon, then stop
+  gen       Generate group/share/runtime configs for CLUSTER_COUNT members
+  start     Start relay + CLUSTER_COUNT signer listeners
+  stop      Stop relay + listeners from prior start
+  status    Show relay/listener process status
+  smoke     Run gen+responder-start and basic checks against first node, then stop
 
 Environment:
   CLUSTER_COUNT   default: 5 (max 8)
   THRESHOLD       default: 3
   RELAY_PORT      default: 8194
-  SOCKET_DIR      default: /tmp
 USAGE
 }
 
@@ -56,14 +54,22 @@ selected_names() {
   done
 }
 
+extract_first_peer() {
+  local config_path="$1"
+  awk -F'"' '
+    /"peers"[[:space:]]*:/ { in_peers=1; next }
+    in_peers && /"pubkey"[[:space:]]*:/ { print $4; exit }
+  ' "${config_path}"
+}
+
 run_gen() {
   require_runtime_tools
-  cargo run -p bifrost-devtools --offline -- keygen \
+  rm -f "${DEVNET_DIR}"/state-*.json "${DEVNET_DIR}"/state-*.lock
+  cargo run -p bifrost-dev --bin bifrost-devtools --offline -- keygen \
     --out-dir "${DEVNET_DIR}" \
     --threshold "${THRESHOLD}" \
     --count "${CLUSTER_COUNT}" \
-    --relay "${RELAY_URL}" \
-    --socket-dir "${SOCKET_DIR}"
+    --relay "${RELAY_URL}"
 }
 
 start_relay() {
@@ -74,18 +80,18 @@ start_relay() {
     echo "relay already running on ${RELAY_PORT}"
     return
   fi
-  cargo run -p bifrost-devtools --offline -- relay "${RELAY_PORT}" >"${LOG_DIR}/relay.log" 2>&1 &
+  cargo run -p bifrost-dev --bin bifrost-devtools --offline -- relay "${RELAY_PORT}" >"${LOG_DIR}/relay.log" 2>&1 &
   RELAY_PID=$!
   echo "started relay pid=${RELAY_PID}"
 }
 
-start_daemon() {
+start_listener() {
   local name="$1"
-  local cfg="${DEVNET_DIR}/daemon-${name}.json"
-  cargo run -p bifrostd --offline -- --config "${cfg}" >"${LOG_DIR}/bifrostd-${name}.log" 2>&1 &
+  local cfg="${DEVNET_DIR}/bifrost-${name}.json"
+  cargo run -p bifrost-app --bin bifrost --offline -- --config "${cfg}" listen >"${LOG_DIR}/bifrost-${name}.log" 2>&1 &
   local pid=$!
-  echo "started bifrostd-${name} pid=${pid}"
-  echo "BIFROSTD_${name^^}_PID=${pid}" >>"${PID_FILE}"
+  echo "started bifrost-${name} pid=${pid}"
+  echo "BIFROST_${name^^}_PID=${pid}" >>"${PID_FILE}"
 }
 
 run_start() {
@@ -97,7 +103,7 @@ run_start() {
 
   sleep 1
   while IFS= read -r name; do
-    start_daemon "${name}"
+    start_listener "${name}"
   done < <(selected_names "${CLUSTER_COUNT}")
 
   sleep 1
@@ -120,12 +126,12 @@ run_stop() {
   fi
 
   while IFS= read -r name; do
-    local var="BIFROSTD_${name^^}_PID"
+    local var="BIFROST_${name^^}_PID"
     local pid="${!var:-}"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" || true
       wait "${pid}" 2>/dev/null || true
-      echo "stopped bifrostd-${name} (${pid})"
+      echo "stopped bifrost-${name} (${pid})"
     fi
   done < <(selected_names "${CLUSTER_COUNT}")
 
@@ -145,12 +151,12 @@ run_status() {
   fi
 
   while IFS= read -r name; do
-    local var="BIFROSTD_${name^^}_PID"
+    local var="BIFROST_${name^^}_PID"
     local pid="${!var:-}"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      echo "bifrostd-${name}: running (${pid})"
+      echo "bifrost-${name}: running (${pid})"
     else
-      echo "bifrostd-${name}: stopped"
+      echo "bifrost-${name}: stopped"
     fi
   done < <(selected_names "${CLUSTER_COUNT}")
 }
@@ -158,14 +164,34 @@ run_status() {
 run_smoke() {
   require_runtime_tools
   run_gen
-  run_start
+  : >"${PID_FILE}"
+  start_relay
+  echo "RELAY_PID=${RELAY_PID}" >>"${PID_FILE}"
 
   local first_name
   first_name="$(selected_names "${CLUSTER_COUNT}" | head -n 1)"
-  local socket="${SOCKET_DIR}/bifrostd-${first_name}.sock"
-  cargo run -p bifrost-cli --offline -- --socket "${socket}" health
-  cargo run -p bifrost-cli --offline -- --socket "${socket}" status
-  cargo run -p bifrost-cli --offline -- --socket "${socket}" events 5
+
+  sleep 1
+  while IFS= read -r name; do
+    if [[ "${name}" == "${first_name}" ]]; then
+      continue
+    fi
+    start_listener "${name}"
+  done < <(selected_names "${CLUSTER_COUNT}")
+  sleep 1
+
+  local config="${DEVNET_DIR}/bifrost-${first_name}.json"
+  local peer
+  peer="$(extract_first_peer "${config}")"
+  if [[ -z "${peer}" ]]; then
+    echo "failed to extract peer pubkey from ${config}" >&2
+    run_stop
+    exit 1
+  fi
+
+  cargo run -p bifrost-app --bin bifrost --offline -- --config "${config}" status
+  cargo run -p bifrost-app --bin bifrost --offline -- --config "${config}" policies
+  cargo run -p bifrost-app --bin bifrost --offline -- --config "${config}" ping "${peer}"
 
   run_stop
   echo "cluster smoke complete"

@@ -17,19 +17,19 @@
 - Day-2 runbook: start/stop/status, health checks, e2e scripts, audit runs.
 
 3. `CONFIGURATION.md`
-- Daemon config schema and practical defaults.
+- Runtime config schema and practical defaults.
 
 4. `TROUBLESHOOTING.md`
 - Failure modes, diagnostics, and recovery commands.
 
 5. `API.md`
-- Rust crate-level API map and daemon RPC method inventory.
+- Rust crate-level API map and runtime command inventory.
 
 6. `frostr-utils/INDEX.md`
 - Shared utility manual for keyset lifecycle and onboarding package helpers.
 
 7. `PROTOCOL.md`
-- Peer and local RPC envelope formats and validation boundaries.
+- Peer envelope formats and validation boundaries.
 
 8. `ARCHITECTURE.md`
 - Crate responsibilities, critical boundaries, and request data flow.
@@ -46,6 +46,6 @@
 ## Out of scope for `docs/`
 
 The following are intentionally outside this manual:
-- Governance/process policy: `CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`, `CHANGELOG.md`
+- Governance/process policy: `CONTRIBUTING.md`, `TESTING.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`
 - Migration planning artifacts: project planning and execution state files outside this manual
 - Execution artifacts and audits: execution/evidence directories outside this manual
