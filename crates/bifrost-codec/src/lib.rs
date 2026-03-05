@@ -6,7 +6,7 @@ pub mod parse;
 pub mod wire;
 
 pub use bridge::{
-    BridgeEnvelopeV1, BridgePayloadV1, decode_bridge_envelope, encode_bridge_envelope,
+    BridgeEnvelope, BridgePayload, decode_bridge_envelope, encode_bridge_envelope,
 };
 pub use error::{CodecError, CodecResult};
 pub use package::{

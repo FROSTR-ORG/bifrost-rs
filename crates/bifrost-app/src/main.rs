@@ -9,6 +9,7 @@ use bifrost_bridge::{Bridge, BridgeConfig};
 use bifrost_core::types::PeerPolicy;
 use bifrost_signer::DeviceStore;
 use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(name = "bifrost")]
@@ -33,6 +34,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
     let config = load_config(&cli.config)?;
 
@@ -159,6 +161,12 @@ async fn main() -> Result<()> {
     store.save(&state)?;
     bridge.shutdown().await;
     Ok(())
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("warn,bifrost_bridge=info,bifrost_app=info"));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 fn decode_hex32(value: &str) -> Result<[u8; 32]> {

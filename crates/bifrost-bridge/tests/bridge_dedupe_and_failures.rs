@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bifrost_bridge::{Bridge, BridgeConfig, BridgeError, RelayAdapter};
 use bifrost_codec::wire::OnboardRequestWire;
 use bifrost_codec::{
-    BridgeEnvelopeV1, BridgePayloadV1, decode_bridge_envelope, encode_bridge_envelope,
+    BridgeEnvelope, BridgePayload, decode_bridge_envelope, encode_bridge_envelope,
 };
 use bifrost_core::types::{GroupPackage, SharePackage};
 use bifrost_signer::{DeviceConfig, DeviceState, SigningDevice};
@@ -117,11 +117,10 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                     .expect("decrypt response");
                 let envelope = decode_bridge_envelope(&plain).expect("decode envelope");
 
-                let malformed = BridgeEnvelopeV1 {
-                    version: 1,
+                let malformed = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: envelope.sent_at.saturating_add(1),
-                    payload: BridgePayloadV1::OnboardRequest(OnboardRequestWire {
+                    payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                         share_pk: hex::encode(share.seckey),
                         idx: 999,
                     }),
@@ -139,7 +138,9 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                 let bad_event = EventBuilder::new(Kind::Custom(event_kind), encrypted)
                     .sign_with_keys(&peer_keys)
                     .expect("sign malformed event");
-                let _ = inbound_tx_worker.send(bad_event);
+                inbound_tx_worker
+                    .send(bad_event)
+                    .expect("inject malformed inbound event");
                 injected = true;
                 break;
             }
@@ -158,6 +159,9 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
             assert!(!request_id.is_empty());
             assert!(message.contains("unexpected response payload"));
         }
+        // If malformed payload is rejected before pending-response binding, the round
+        // still fails via timeout because no valid locked-peer response can complete.
+        BridgeError::Timeout => {}
         other => panic!("unexpected bridge error: {other:?}"),
     }
 

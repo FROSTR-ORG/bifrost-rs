@@ -18,8 +18,8 @@ Primary functions:
 ## `bifrost-codec`
 
 Bridge envelope (`crates/bifrost-codec/src/bridge.rs`):
-- `BridgeEnvelopeV1 { version, request_id, sent_at, payload }`
-- `BridgePayloadV1` request/response variants for `ping`, `sign`, `ecdh`, `onboard`, and `error`.
+- `BridgeEnvelope { request_id, sent_at, payload }`
+- `BridgePayload` request/response variants for `ping`, `sign`, `ecdh`, `onboard`, and `error`.
 - `encode_bridge_envelope`, `decode_bridge_envelope`.
 
 Wire payloads (`crates/bifrost-codec/src/wire.rs`):

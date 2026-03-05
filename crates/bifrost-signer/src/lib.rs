@@ -6,7 +6,7 @@ use bifrost_codec::wire::{
     PingPayloadWire, SignSessionPackageWire,
 };
 use bifrost_codec::{
-    BridgeEnvelopeV1, BridgePayloadV1, decode_bridge_envelope, encode_bridge_envelope,
+    BridgeEnvelope, BridgePayload, decode_bridge_envelope, encode_bridge_envelope,
 };
 use bifrost_core::create_session_package;
 use bifrost_core::nonce::{NoncePool, NoncePoolConfig};
@@ -437,7 +437,7 @@ impl SigningDevice {
                 Ok(outbound) => outbound,
                 Err(err) => {
                     let code = match &envelope.payload {
-                        BridgePayloadV1::Error(_) => OperationFailureCode::PeerRejected,
+                        BridgePayload::Error(_) => OperationFailureCode::PeerRejected,
                         _ => OperationFailureCode::InvalidLockedPeerResponse,
                     };
                     self.fail_pending_operation(
@@ -569,11 +569,10 @@ impl SigningDevice {
         );
         self.latest_request_id = Some(request_id.clone());
 
-        let envelope = BridgeEnvelopeV1 {
-            version: 1,
+        let envelope = BridgeEnvelope {
             request_id,
             sent_at: now,
-            payload: BridgePayloadV1::SignRequest(SignSessionPackageWire::from(session)),
+            payload: BridgePayload::SignRequest(SignSessionPackageWire::from(session)),
         };
         self.encrypt_for_peers(&selected, &envelope)
     }
@@ -629,11 +628,10 @@ impl SigningDevice {
             },
         );
 
-        let envelope = BridgeEnvelopeV1 {
-            version: 1,
+        let envelope = BridgeEnvelope {
             request_id,
             sent_at: now,
-            payload: BridgePayloadV1::EcdhRequest(EcdhPackageWire::from(local_pkg)),
+            payload: BridgePayload::EcdhRequest(EcdhPackageWire::from(local_pkg)),
         };
 
         self.encrypt_for_peers(&selected, &envelope)
@@ -682,11 +680,10 @@ impl SigningDevice {
             policy_profile: Some(self.local_policy_profile_for(peer)?),
         };
 
-        let envelope = BridgeEnvelopeV1 {
-            version: 1,
+        let envelope = BridgeEnvelope {
             request_id,
             sent_at: now,
-            payload: BridgePayloadV1::PingRequest(PingPayloadWire::from(payload)),
+            payload: BridgePayload::PingRequest(PingPayloadWire::from(payload)),
         };
         self.encrypt_for_peers(&[peer.to_string()], &envelope)
     }
@@ -713,11 +710,10 @@ impl SigningDevice {
             },
         );
 
-        let envelope = BridgeEnvelopeV1 {
-            version: 1,
+        let envelope = BridgeEnvelope {
             request_id,
             sent_at: now,
-            payload: BridgePayloadV1::OnboardRequest(OnboardRequestWire {
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                 share_pk: self.share_public_key_hex.clone(),
                 idx: self.share.idx,
             }),
@@ -855,7 +851,7 @@ impl SigningDevice {
         }
     }
 
-    fn decrypt_event(&self, event: &Event, sender33: &str) -> Result<BridgeEnvelopeV1> {
+    fn decrypt_event(&self, event: &Event, sender33: &str) -> Result<BridgeEnvelope> {
         let ciphertext = event_content(event)?;
         let plaintext = decrypt_content_from_peer(self.share.seckey, sender33, &ciphertext)?;
         decode_bridge_envelope(&plaintext).map_err(|e| SignerError::InvalidRequest(e.to_string()))
@@ -864,7 +860,7 @@ impl SigningDevice {
     fn encrypt_for_peers(
         &self,
         peers: &[String],
-        envelope: &BridgeEnvelopeV1,
+        envelope: &BridgeEnvelope,
     ) -> Result<Vec<Event>> {
         peers
             .iter()
@@ -872,7 +868,7 @@ impl SigningDevice {
             .collect()
     }
 
-    fn encrypt_for_peer(&self, peer: &str, envelope: &BridgeEnvelopeV1) -> Result<Event> {
+    fn encrypt_for_peer(&self, peer: &str, envelope: &BridgeEnvelope) -> Result<Event> {
         let plaintext = encode_bridge_envelope(envelope)
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
         let content = encrypt_content_for_peer(self.share.seckey, peer, &plaintext)?;
@@ -881,7 +877,7 @@ impl SigningDevice {
 
     fn handle_inbound_request(
         &mut self,
-        envelope: BridgeEnvelopeV1,
+        envelope: BridgeEnvelope,
         sender: String,
     ) -> Result<Vec<Event>> {
         let sender_idx = self
@@ -892,7 +888,7 @@ impl SigningDevice {
         let now = now_unix_secs();
 
         match envelope.payload {
-            BridgePayloadV1::PingRequest(wire) => {
+            BridgePayload::PingRequest(wire) => {
                 let ping: PingPayload =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -918,11 +914,10 @@ impl SigningDevice {
                     None
                 };
 
-                let response = BridgeEnvelopeV1 {
-                    version: 1,
+                let response = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: now,
-                    payload: BridgePayloadV1::PingResponse(PingPayloadWire::from(PingPayload {
+                    payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
                         version: 1,
                         nonces,
                         policy_profile: Some(self.local_policy_profile_for(&sender)?),
@@ -930,7 +925,7 @@ impl SigningDevice {
                 };
                 self.encrypt_for_peers(&[sender], &response)
             }
-            BridgePayloadV1::OnboardRequest(wire) => {
+            BridgePayload::OnboardRequest(wire) => {
                 let request: bifrost_core::types::OnboardRequest =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -956,15 +951,14 @@ impl SigningDevice {
                     nonces,
                 };
 
-                let response = BridgeEnvelopeV1 {
-                    version: 1,
+                let response = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: now,
-                    payload: BridgePayloadV1::OnboardResponse(OnboardResponseWire::from(onboard)),
+                    payload: BridgePayload::OnboardResponse(OnboardResponseWire::from(onboard)),
                 };
                 self.encrypt_for_peers(&[sender], &response)
             }
-            BridgePayloadV1::SignRequest(wire) => {
+            BridgePayload::SignRequest(wire) => {
                 let session: SignSessionPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1027,15 +1021,14 @@ impl SigningDevice {
                     );
                 }
 
-                let response = BridgeEnvelopeV1 {
-                    version: 1,
+                let response = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: now,
-                    payload: BridgePayloadV1::SignResponse(PartialSigPackageWire::from(partial)),
+                    payload: BridgePayload::SignResponse(PartialSigPackageWire::from(partial)),
                 };
                 self.encrypt_for_peers(&[sender], &response)
             }
-            BridgePayloadV1::EcdhRequest(wire) => {
+            BridgePayload::EcdhRequest(wire) => {
                 let req: EcdhPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1050,19 +1043,18 @@ impl SigningDevice {
                 let response = ecdh_create_from_share(&req.members, &self.share, &targets)
                     .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
-                let envelope = BridgeEnvelopeV1 {
-                    version: 1,
+                let envelope = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: now,
-                    payload: BridgePayloadV1::EcdhResponse(EcdhPackageWire::from(response)),
+                    payload: BridgePayload::EcdhResponse(EcdhPackageWire::from(response)),
                 };
                 self.encrypt_for_peers(&[sender], &envelope)
             }
-            BridgePayloadV1::Error(_) => Ok(Vec::new()),
-            BridgePayloadV1::PingResponse(_)
-            | BridgePayloadV1::OnboardResponse(_)
-            | BridgePayloadV1::SignResponse(_)
-            | BridgePayloadV1::EcdhResponse(_) => Err(SignerError::InvalidRequest(
+            BridgePayload::Error(_) => Ok(Vec::new()),
+            BridgePayload::PingResponse(_)
+            | BridgePayload::OnboardResponse(_)
+            | BridgePayload::SignResponse(_)
+            | BridgePayload::EcdhResponse(_) => Err(SignerError::InvalidRequest(
                 "response payload without pending request".to_string(),
             )),
         }
@@ -1070,7 +1062,7 @@ impl SigningDevice {
 
     fn match_pending_response(
         &mut self,
-        envelope: &BridgeEnvelopeV1,
+        envelope: &BridgeEnvelope,
         sender: &str,
     ) -> Result<Vec<Event>> {
         let request_id = envelope.request_id.clone();
@@ -1090,7 +1082,7 @@ impl SigningDevice {
         }
 
         match (&op.op_type, &envelope.payload) {
-            (PendingOpType::Ping, BridgePayloadV1::PingResponse(wire)) => {
+            (PendingOpType::Ping, BridgePayload::PingResponse(wire)) => {
                 let ping: PingPayload =
                     wire.clone()
                         .try_into()
@@ -1114,7 +1106,7 @@ impl SigningDevice {
                 });
                 should_complete = true;
             }
-            (PendingOpType::Onboard, BridgePayloadV1::OnboardResponse(wire)) => {
+            (PendingOpType::Onboard, BridgePayload::OnboardResponse(wire)) => {
                 let onboard: OnboardResponse =
                     wire.clone()
                         .try_into()
@@ -1135,7 +1127,7 @@ impl SigningDevice {
                 });
                 should_complete = true;
             }
-            (PendingOpType::Ecdh, BridgePayloadV1::EcdhResponse(wire)) => {
+            (PendingOpType::Ecdh, BridgePayload::EcdhResponse(wire)) => {
                 let sender_idx = self
                     .member_idx_by_pubkey
                     .get(sender)
@@ -1178,7 +1170,7 @@ impl SigningDevice {
                     }
                 }
             }
-            (PendingOpType::Sign, BridgePayloadV1::SignResponse(wire)) => {
+            (PendingOpType::Sign, BridgePayload::SignResponse(wire)) => {
                 let partial: PartialSigPackage =
                     wire.clone()
                         .try_into()
@@ -1216,7 +1208,7 @@ impl SigningDevice {
                     }
                 }
             }
-            (_, BridgePayloadV1::Error(err)) => {
+            (_, BridgePayload::Error(err)) => {
                 return Err(SignerError::InvalidRequest(format!(
                     "peer rejected request: {}:{}",
                     err.code, err.message
@@ -1509,11 +1501,10 @@ mod tests {
             },
         );
 
-        let inbound = BridgeEnvelopeV1 {
-            version: 1,
+        let inbound = BridgeEnvelope {
             request_id: request_id.clone(),
             sent_at: now,
-            payload: BridgePayloadV1::OnboardRequest(OnboardRequestWire {
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                 share_pk: locked_peer.clone(),
                 idx: 7,
             }),

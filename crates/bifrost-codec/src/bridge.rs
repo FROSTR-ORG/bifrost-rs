@@ -8,7 +8,7 @@ use crate::wire::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum BridgePayloadV1 {
+pub enum BridgePayload {
     PingRequest(PingPayloadWire),
     PingResponse(PingPayloadWire),
     OnboardRequest(OnboardRequestWire),
@@ -21,29 +21,23 @@ pub enum BridgePayloadV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BridgeEnvelopeV1 {
-    pub version: u16,
+pub struct BridgeEnvelope {
     pub request_id: String,
     pub sent_at: u64,
-    pub payload: BridgePayloadV1,
+    pub payload: BridgePayload,
 }
 
-pub fn encode_bridge_envelope(msg: &BridgeEnvelopeV1) -> CodecResult<String> {
+pub fn encode_bridge_envelope(msg: &BridgeEnvelope) -> CodecResult<String> {
     Ok(serde_json::to_string(msg)?)
 }
 
-pub fn decode_bridge_envelope(raw: &str) -> CodecResult<BridgeEnvelopeV1> {
-    let envelope: BridgeEnvelopeV1 = serde_json::from_str(raw)?;
+pub fn decode_bridge_envelope(raw: &str) -> CodecResult<BridgeEnvelope> {
+    let envelope: BridgeEnvelope = serde_json::from_str(raw)?;
     validate_bridge_envelope(&envelope)?;
     Ok(envelope)
 }
 
-fn validate_bridge_envelope(envelope: &BridgeEnvelopeV1) -> CodecResult<()> {
-    if envelope.version != 1 {
-        return Err(CodecError::InvalidPayload(
-            "unsupported bridge envelope version",
-        ));
-    }
+fn validate_bridge_envelope(envelope: &BridgeEnvelope) -> CodecResult<()> {
     if envelope.request_id.is_empty() {
         return Err(CodecError::InvalidPayload("request_id must not be empty"));
     }
@@ -59,11 +53,10 @@ mod tests {
 
     #[test]
     fn bridge_envelope_roundtrip() {
-        let envelope = BridgeEnvelopeV1 {
-            version: 1,
+        let envelope = BridgeEnvelope {
             request_id: "req-1".to_string(),
             sent_at: 1700000000,
-            payload: BridgePayloadV1::Error(PeerErrorWire {
+            payload: BridgePayload::Error(PeerErrorWire {
                 code: "ERR".to_string(),
                 message: "boom".to_string(),
             }),
@@ -71,22 +64,21 @@ mod tests {
         let encoded = encode_bridge_envelope(&envelope).expect("encode");
         let decoded = decode_bridge_envelope(&encoded).expect("decode");
         assert_eq!(decoded.request_id, "req-1");
-        assert!(matches!(decoded.payload, BridgePayloadV1::Error(_)));
+        assert!(matches!(decoded.payload, BridgePayload::Error(_)));
     }
 
     #[test]
-    fn bridge_envelope_rejects_invalid_version() {
-        let envelope = BridgeEnvelopeV1 {
-            version: 2,
-            request_id: "req-1".to_string(),
+    fn bridge_envelope_rejects_empty_request_id() {
+        let envelope = BridgeEnvelope {
+            request_id: String::new(),
             sent_at: 1700000000,
-            payload: BridgePayloadV1::Error(PeerErrorWire {
+            payload: BridgePayload::Error(PeerErrorWire {
                 code: "ERR".to_string(),
                 message: "boom".to_string(),
             }),
         };
         let err = decode_bridge_envelope(&encode_bridge_envelope(&envelope).expect("encode"))
-            .expect_err("must reject unsupported version");
-        assert!(matches!(err, CodecError::InvalidPayload(_)));
+            .expect_err("must reject empty request_id");
+        assert!(matches!(err, CodecError::InvalidPayload("request_id must not be empty")));
     }
 }
