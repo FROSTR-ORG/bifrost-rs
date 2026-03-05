@@ -26,7 +26,7 @@
 - NIP-44 envelope decryption/encryption for peer events.
 - Peer policy enforcement, replay/TTL checks, nonce pool integration.
 
-## `bifrost-bridge`
+## `bifrost-bridge-tokio`
 
 - Runtime boundary between signer and transport adapter.
 - Subscription/publish loop orchestration.

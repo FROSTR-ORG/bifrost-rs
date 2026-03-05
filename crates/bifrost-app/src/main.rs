@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_app::runtime::{
-    DeviceLock, EncryptedFileStore, NostrSdkAdapter, load_config, load_or_init_signer, load_share,
+    DeviceLock, EncryptedFileStore, load_config, load_or_init_signer, load_share,
 };
-use bifrost_bridge::{Bridge, BridgeConfig};
+use bifrost_bridge_tokio::{Bridge, BridgeConfig, NostrSdkAdapter};
 use bifrost_core::types::PeerPolicy;
 use bifrost_signer::DeviceStore;
 use clap::{Parser, Subcommand};
@@ -77,15 +77,15 @@ async fn main() -> Result<()> {
         adapter,
         signer,
         BridgeConfig {
-            expire_tick: Duration::from_millis(config.options.bridge_expire_tick_ms),
-            relay_backoff: Duration::from_millis(config.options.bridge_relay_backoff_ms),
-            command_queue_capacity: config.options.bridge_command_queue_capacity,
-            inbound_queue_capacity: config.options.bridge_inbound_queue_capacity,
-            outbound_queue_capacity: config.options.bridge_outbound_queue_capacity,
-            command_overflow_policy: config.options.bridge_command_overflow_policy.into(),
-            inbound_overflow_policy: config.options.bridge_inbound_overflow_policy.into(),
-            outbound_overflow_policy: config.options.bridge_outbound_overflow_policy.into(),
-            inbound_dedupe_cache_limit: config.options.bridge_inbound_dedupe_cache_limit,
+            expire_tick: Duration::from_millis(config.options.router_expire_tick_ms),
+            relay_backoff: Duration::from_millis(config.options.router_relay_backoff_ms),
+            command_queue_capacity: config.options.router_command_queue_capacity,
+            inbound_queue_capacity: config.options.router_inbound_queue_capacity,
+            outbound_queue_capacity: config.options.router_outbound_queue_capacity,
+            command_overflow_policy: config.options.router_command_overflow_policy.into(),
+            inbound_overflow_policy: config.options.router_inbound_overflow_policy.into(),
+            outbound_overflow_policy: config.options.router_outbound_overflow_policy.into(),
+            inbound_dedupe_cache_limit: config.options.router_inbound_dedupe_cache_limit,
         },
     )
     .await?;
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
 
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,bifrost_bridge=info,bifrost_app=info"));
+        .unwrap_or_else(|_| EnvFilter::new("warn,bifrost_bridge_tokio=info,bifrost_app=info"));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 

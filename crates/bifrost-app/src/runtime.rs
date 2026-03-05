@@ -3,12 +3,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use async_trait::async_trait;
-use bifrost_bridge::{
+use bifrost_bridge_tokio::{
     DEFAULT_COMMAND_OVERFLOW_POLICY, DEFAULT_COMMAND_QUEUE_CAPACITY, DEFAULT_EXPIRE_TICK_MS,
     DEFAULT_INBOUND_DEDUPE_CACHE_LIMIT, DEFAULT_INBOUND_OVERFLOW_POLICY,
-    DEFAULT_INBOUND_QUEUE_CAPACITY, DEFAULT_OUTBOUND_OVERFLOW_POLICY,
-    DEFAULT_OUTBOUND_QUEUE_CAPACITY, DEFAULT_RELAY_BACKOFF_MS, QueueOverflowPolicy, RelayAdapter,
+    DEFAULT_INBOUND_QUEUE_CAPACITY, DEFAULT_OUTBOUND_OVERFLOW_POLICY, DEFAULT_OUTBOUND_QUEUE_CAPACITY,
+    DEFAULT_RELAY_BACKOFF_MS, QueueOverflowPolicy,
 };
 use bifrost_codec::{parse_group_package, parse_share_package};
 use bifrost_core::types::{PeerPolicy, SharePackage};
@@ -19,12 +18,9 @@ use bincode::{DefaultOptions, Options};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use fs2::FileExt;
-use nostr::{Event, Filter};
-use nostr_sdk::{Client, RelayPoolNotification};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -66,24 +62,24 @@ pub struct AppOptions {
     pub event_kind: u64,
     #[serde(default = "default_peer_selection_strategy")]
     pub peer_selection_strategy: PeerSelectionStrategy,
-    #[serde(default = "default_bridge_expire_tick_ms")]
-    pub bridge_expire_tick_ms: u64,
-    #[serde(default = "default_bridge_relay_backoff_ms")]
-    pub bridge_relay_backoff_ms: u64,
-    #[serde(default = "default_bridge_command_queue_capacity")]
-    pub bridge_command_queue_capacity: usize,
-    #[serde(default = "default_bridge_inbound_queue_capacity")]
-    pub bridge_inbound_queue_capacity: usize,
-    #[serde(default = "default_bridge_outbound_queue_capacity")]
-    pub bridge_outbound_queue_capacity: usize,
-    #[serde(default = "default_bridge_command_overflow_policy")]
-    pub bridge_command_overflow_policy: QueueOverflowPolicyConfig,
-    #[serde(default = "default_bridge_inbound_overflow_policy")]
-    pub bridge_inbound_overflow_policy: QueueOverflowPolicyConfig,
-    #[serde(default = "default_bridge_outbound_overflow_policy")]
-    pub bridge_outbound_overflow_policy: QueueOverflowPolicyConfig,
-    #[serde(default = "default_bridge_inbound_dedupe_cache_limit")]
-    pub bridge_inbound_dedupe_cache_limit: usize,
+    #[serde(default = "default_router_expire_tick_ms")]
+    pub router_expire_tick_ms: u64,
+    #[serde(default = "default_router_relay_backoff_ms")]
+    pub router_relay_backoff_ms: u64,
+    #[serde(default = "default_router_command_queue_capacity")]
+    pub router_command_queue_capacity: usize,
+    #[serde(default = "default_router_inbound_queue_capacity")]
+    pub router_inbound_queue_capacity: usize,
+    #[serde(default = "default_router_outbound_queue_capacity")]
+    pub router_outbound_queue_capacity: usize,
+    #[serde(default = "default_router_command_overflow_policy")]
+    pub router_command_overflow_policy: QueueOverflowPolicyConfig,
+    #[serde(default = "default_router_inbound_overflow_policy")]
+    pub router_inbound_overflow_policy: QueueOverflowPolicyConfig,
+    #[serde(default = "default_router_outbound_overflow_policy")]
+    pub router_outbound_overflow_policy: QueueOverflowPolicyConfig,
+    #[serde(default = "default_router_inbound_dedupe_cache_limit")]
+    pub router_inbound_dedupe_cache_limit: usize,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -124,15 +120,15 @@ impl Default for AppOptions {
             state_save_interval_secs: default_state_save_interval(),
             event_kind: default_event_kind(),
             peer_selection_strategy: default_peer_selection_strategy(),
-            bridge_expire_tick_ms: default_bridge_expire_tick_ms(),
-            bridge_relay_backoff_ms: default_bridge_relay_backoff_ms(),
-            bridge_command_queue_capacity: default_bridge_command_queue_capacity(),
-            bridge_inbound_queue_capacity: default_bridge_inbound_queue_capacity(),
-            bridge_outbound_queue_capacity: default_bridge_outbound_queue_capacity(),
-            bridge_command_overflow_policy: default_bridge_command_overflow_policy(),
-            bridge_inbound_overflow_policy: default_bridge_inbound_overflow_policy(),
-            bridge_outbound_overflow_policy: default_bridge_outbound_overflow_policy(),
-            bridge_inbound_dedupe_cache_limit: default_bridge_inbound_dedupe_cache_limit(),
+            router_expire_tick_ms: default_router_expire_tick_ms(),
+            router_relay_backoff_ms: default_router_relay_backoff_ms(),
+            router_command_queue_capacity: default_router_command_queue_capacity(),
+            router_inbound_queue_capacity: default_router_inbound_queue_capacity(),
+            router_outbound_queue_capacity: default_router_outbound_queue_capacity(),
+            router_command_overflow_policy: default_router_command_overflow_policy(),
+            router_inbound_overflow_policy: default_router_inbound_overflow_policy(),
+            router_outbound_overflow_policy: default_router_outbound_overflow_policy(),
+            router_inbound_dedupe_cache_limit: default_router_inbound_dedupe_cache_limit(),
         }
     }
 }
@@ -167,31 +163,31 @@ fn default_event_kind() -> u64 {
 fn default_peer_selection_strategy() -> PeerSelectionStrategy {
     PeerSelectionStrategy::DeterministicSorted
 }
-fn default_bridge_expire_tick_ms() -> u64 {
+fn default_router_expire_tick_ms() -> u64 {
     DEFAULT_EXPIRE_TICK_MS
 }
-fn default_bridge_relay_backoff_ms() -> u64 {
+fn default_router_relay_backoff_ms() -> u64 {
     DEFAULT_RELAY_BACKOFF_MS
 }
-fn default_bridge_command_queue_capacity() -> usize {
+fn default_router_command_queue_capacity() -> usize {
     DEFAULT_COMMAND_QUEUE_CAPACITY
 }
-fn default_bridge_inbound_queue_capacity() -> usize {
+fn default_router_inbound_queue_capacity() -> usize {
     DEFAULT_INBOUND_QUEUE_CAPACITY
 }
-fn default_bridge_outbound_queue_capacity() -> usize {
+fn default_router_outbound_queue_capacity() -> usize {
     DEFAULT_OUTBOUND_QUEUE_CAPACITY
 }
-fn default_bridge_command_overflow_policy() -> QueueOverflowPolicyConfig {
+fn default_router_command_overflow_policy() -> QueueOverflowPolicyConfig {
     DEFAULT_COMMAND_OVERFLOW_POLICY.into()
 }
-fn default_bridge_inbound_overflow_policy() -> QueueOverflowPolicyConfig {
+fn default_router_inbound_overflow_policy() -> QueueOverflowPolicyConfig {
     DEFAULT_INBOUND_OVERFLOW_POLICY.into()
 }
-fn default_bridge_outbound_overflow_policy() -> QueueOverflowPolicyConfig {
+fn default_router_outbound_overflow_policy() -> QueueOverflowPolicyConfig {
     DEFAULT_OUTBOUND_OVERFLOW_POLICY.into()
 }
-fn default_bridge_inbound_dedupe_cache_limit() -> usize {
+fn default_router_inbound_dedupe_cache_limit() -> usize {
     DEFAULT_INBOUND_DEDUPE_CACHE_LIMIT
 }
 
@@ -423,72 +419,4 @@ fn read_lock_holder(lock_path: &Path) -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-pub struct NostrSdkAdapter {
-    client: Client,
-    relays: Vec<String>,
-    notifications: Option<broadcast::Receiver<RelayPoolNotification>>,
-}
-
-impl NostrSdkAdapter {
-    pub fn new(relays: Vec<String>) -> Self {
-        Self {
-            client: Client::default(),
-            relays,
-            notifications: None,
-        }
-    }
-}
-
-#[async_trait]
-impl RelayAdapter for NostrSdkAdapter {
-    async fn connect(&mut self) -> Result<()> {
-        self.notifications = Some(self.client.notifications());
-        for relay in &self.relays {
-            self.client
-                .add_relay(relay)
-                .await
-                .with_context(|| format!("add relay {relay}"))?;
-        }
-        self.client.connect().await;
-        Ok(())
-    }
-
-    async fn disconnect(&mut self) -> Result<()> {
-        self.client.disconnect().await;
-        self.notifications = None;
-        Ok(())
-    }
-
-    async fn subscribe(&mut self, filters: Vec<Filter>) -> Result<()> {
-        for filter in filters {
-            self.client.subscribe(filter, None).await?;
-        }
-        Ok(())
-    }
-
-    async fn publish(&mut self, event: Event) -> Result<()> {
-        self.client.send_event(&event).await?;
-        Ok(())
-    }
-
-    async fn next_event(&mut self) -> Result<Event> {
-        let receiver = self
-            .notifications
-            .as_mut()
-            .ok_or_else(|| anyhow!("notifications receiver not initialized"))?;
-        loop {
-            let notification = match receiver.recv().await {
-                Ok(notification) => notification,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => {
-                    return Err(anyhow!("relay notifications channel closed"));
-                }
-            };
-            if let RelayPoolNotification::Event { event, .. } = notification {
-                return Ok((*event).clone());
-            }
-        }
-    }
 }

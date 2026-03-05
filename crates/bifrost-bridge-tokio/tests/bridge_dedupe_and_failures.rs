@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use bifrost_bridge::{Bridge, BridgeConfig, BridgeError, RelayAdapter};
+use bifrost_bridge_tokio::{Bridge, BridgeConfig, BridgeError, RelayAdapter};
 use bifrost_codec::wire::OnboardRequestWire;
 use bifrost_codec::{
     BridgeEnvelope, BridgePayload, decode_bridge_envelope, encode_bridge_envelope,
