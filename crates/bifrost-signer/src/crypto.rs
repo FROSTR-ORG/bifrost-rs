@@ -227,3 +227,24 @@ fn ct_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
     }
     diff == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decrypt_content_from_peer;
+
+    #[test]
+    fn decrypts_js_generated_nip44_payload() {
+        let local_seckey = hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
+            .expect("hex seckey");
+        let mut sk = [0u8; 32];
+        sk.copy_from_slice(&local_seckey);
+
+        let peer_pubkey33 = "02c8d330c2d4cc93bd48e2d865beef3b86c45d80326e53d0f897df055816651dbd";
+        let payload = "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHVjH09L8c2jhZOTvj0AILSiZ+7cwhoXDehgU1ieJdokoDSRlLk23Sveljn8K8WcJ/4wPFfu19mxGKiht58B8eQf0C/agzO4RGabcZqH0XwSTBBY07UklU6qnJ06V3ij5NjWXU+XreZRV0Bc/e52u/h6SO4tKELe2OFsh3H6sCjdlNgattHxKHfiO5QQPj+VpjGeXVk1PyThUPsCVVJTjK+IIWedUFXd2cXuPBcT6RzrYtKjnrG7W9KsgqCyaWRneaGAbAbD0G/N8k8lrq6tl8aPmLPyoin4V12s4cwk6+Zd94Sw";
+        let plaintext = decrypt_content_from_peer(sk, peer_pubkey33, payload).expect("decrypt");
+        assert_eq!(
+            plaintext,
+            "{\"request_id\":\"vec-1\",\"sent_at\":1,\"payload\":{\"type\":\"OnboardRequest\",\"data\":{\"share_pk\":\"0202d5c7c08125a237de798fff58eb980e0fa61a424bf2eb3f4dfd5960c0fc6640\",\"idx\":2}}}"
+        );
+    }
+}

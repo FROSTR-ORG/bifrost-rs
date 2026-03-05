@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bifrost_core::types::{Bytes33, GroupPackage, MemberPackage};
@@ -6,6 +7,12 @@ use rand_core::{OsRng, RngCore};
 use crate::{Result, SignerError};
 
 pub(crate) fn now_unix_secs() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return (js_sys::Date::now() / 1000.0).floor() as u64;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -107,4 +114,16 @@ pub(crate) fn xonly_from_compressed(pubkey33: &str) -> Result<String> {
         ));
     }
     Ok(pubkey33[2..].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::now_unix_secs;
+
+    #[test]
+    fn now_unix_secs_is_monotonic_non_decreasing() {
+        let a = now_unix_secs();
+        let b = now_unix_secs();
+        assert!(b >= a);
+    }
 }

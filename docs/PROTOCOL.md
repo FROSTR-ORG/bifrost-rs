@@ -4,11 +4,10 @@
 
 ## Peer Envelope (`bifrost-codec`)
 
-Envelope shape (`BridgeEnvelopeV1`):
+Envelope shape (`BridgeEnvelope`):
 
 ```json
 {
-  "version": 1,
   "request_id": "1700000000-2-1",
   "sent_at": 1700000000,
   "payload": { "type": "...", "data": {} }
@@ -23,7 +22,6 @@ Payload variants:
 - `Error`
 
 Validation boundaries:
-- version must equal `1`
 - request id must be non-empty and canonical (`<unix_ts>-<member_idx>-<seq>`)
 - payload-specific bounds and shape checks are enforced in wire conversions
 

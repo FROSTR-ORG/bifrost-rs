@@ -1,0 +1,14 @@
+{
+  "group_pk": "03c371c62b8c14c6c891a663d55c6d60f1a9d811666fa685641eab4b4f16af1986",
+  "threshold": 2,
+  "members": [
+    {
+      "idx": 1,
+      "pubkey": "02c8d330c2d4cc93bd48e2d865beef3b86c45d80326e53d0f897df055816651dbd"
+    },
+    {
+      "idx": 2,
+      "pubkey": "0202d5c7c08125a237de798fff58eb980e0fa61a424bf2eb3f4dfd5960c0fc6640"
+    }
+  ]
+}

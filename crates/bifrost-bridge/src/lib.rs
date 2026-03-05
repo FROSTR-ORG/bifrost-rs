@@ -12,7 +12,7 @@ use bifrost_signer::{
 use nostr::{Event, Filter};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{info, warn};
 
 #[async_trait]
 pub trait RelayAdapter: Send {
@@ -284,6 +284,7 @@ impl Bridge {
                     inbound = adapter.next_event() => {
                         match inbound {
                             Ok(event) => {
+                                let event_id = event.id.to_hex();
                                 let dropped = enqueue_inbound(
                                     &mut inbound_queue,
                                     &mut seen_inbound_ids,
@@ -293,6 +294,8 @@ impl Bridge {
                                 );
                                 if dropped {
                                     warn!("inbound queue full; dropped relay event");
+                                } else {
+                                    info!(event_id = %event_id, "relay event received");
                                 }
                             }
                             Err(err) => {
@@ -610,9 +613,11 @@ fn process_operation_command(
     completion: oneshot::Sender<std::result::Result<CompletedOperation, BridgeError>>,
     input: SignerInput,
 ) {
+    let op_kind = signer_input_kind(&input);
     match signer.apply(input) {
         Ok(effects) => {
             if let Some(request_id) = effects.latest_request_id.clone() {
+                info!(op_kind = op_kind, op_id = %op_id, request_id = %request_id, "operation started");
                 waiters.insert(request_id, OperationWaiter { op_id, completion });
             } else {
                 let _ =
@@ -638,6 +643,7 @@ fn dispatch_effects(
     let request_id = request_hint.or(effects.latest_request_id.clone());
 
     for event in effects.outbound {
+        let event_id = event.id.to_hex();
         if let Some(failed_request_id) = enqueue_outbound(
             outbound_queue,
             QueuedOutbound {
@@ -654,6 +660,8 @@ fn dispatch_effects(
                 failed_request_id,
                 "outbound queue overflow".to_string(),
             );
+        } else {
+            info!(event_id = %event_id, request_id = ?request_id, "outbound event queued");
         }
     }
 
@@ -662,6 +670,8 @@ fn dispatch_effects(
     }
     for completion in effects.completions {
         let request_id = completion.request_id().to_string();
+        let completion_kind = completed_operation_kind(&completion);
+        info!(request_id = %request_id, kind = completion_kind, "operation completed");
         if let Some(waiter) = waiters.remove(&request_id) {
             let _ = waiter.completion.send(Ok(completion));
         }
@@ -838,6 +848,27 @@ fn now_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn signer_input_kind(input: &SignerInput) -> &'static str {
+    match input {
+        SignerInput::BeginSign { .. } => "sign",
+        SignerInput::BeginEcdh { .. } => "ecdh",
+        SignerInput::BeginPing { .. } => "ping",
+        SignerInput::BeginOnboard { .. } => "onboard",
+        SignerInput::ProcessEvent { .. } => "process_event",
+        SignerInput::Expire { .. } => "expire",
+        SignerInput::FailRequest { .. } => "fail_request",
+    }
+}
+
+fn completed_operation_kind(operation: &CompletedOperation) -> &'static str {
+    match operation {
+        CompletedOperation::Sign { .. } => "sign",
+        CompletedOperation::Ecdh { .. } => "ecdh",
+        CompletedOperation::Ping { .. } => "ping",
+        CompletedOperation::Onboard { .. } => "onboard",
+    }
 }
 
 #[cfg(test)]

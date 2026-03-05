@@ -1,0 +1,17 @@
+[package]
+name = "bifrost-bridge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+nostr.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+bifrost-core = { path = "../bifrost-core" }
+bifrost-signer = { path = "../bifrost-signer" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

@@ -1,0 +1,51 @@
+{
+  "group_path": "/home/cscott/Repos/frostr/bifrost-infra/repos/bifrost-rs/dev/demo-2of2/group.json",
+  "share_path": "/home/cscott/Repos/frostr/bifrost-infra/repos/bifrost-rs/dev/demo-2of2/share-alice.json",
+  "state_path": "/home/cscott/Repos/frostr/bifrost-infra/repos/bifrost-rs/dev/demo-2of2/state-alice.json",
+  "relays": [
+    "ws://127.0.0.1:8194"
+  ],
+  "peers": [
+    {
+      "pubkey": "0202d5c7c08125a237de798fff58eb980e0fa61a424bf2eb3f4dfd5960c0fc6640",
+      "policy": {
+        "block_all": false,
+        "request": {
+          "echo": true,
+          "ping": true,
+          "onboard": true,
+          "sign": true,
+          "ecdh": true
+        },
+        "respond": {
+          "echo": true,
+          "ping": true,
+          "onboard": true,
+          "sign": true,
+          "ecdh": true
+        }
+      }
+    }
+  ],
+  "options": {
+    "sign_timeout_secs": 30,
+    "ecdh_timeout_secs": 30,
+    "ping_timeout_secs": 15,
+    "onboard_timeout_secs": 30,
+    "request_ttl_secs": 300,
+    "max_future_skew_secs": 30,
+    "request_cache_limit": 2048,
+    "state_save_interval_secs": 30,
+    "event_kind": 20000,
+    "peer_selection_strategy": "deterministic_sorted",
+    "bridge_expire_tick_ms": 1000,
+    "bridge_relay_backoff_ms": 50,
+    "bridge_command_queue_capacity": 128,
+    "bridge_inbound_queue_capacity": 4096,
+    "bridge_outbound_queue_capacity": 1024,
+    "bridge_command_overflow_policy": "fail",
+    "bridge_inbound_overflow_policy": "drop_oldest",
+    "bridge_outbound_overflow_policy": "fail",
+    "bridge_inbound_dedupe_cache_limit": 16384
+  }
+}
