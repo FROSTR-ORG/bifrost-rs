@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow.workspace = true
-bifrost-bridge-core = { path = "../bifrost-bridge-core" }
+bifrost-router = { path = "../bifrost-router" }
 bifrost-codec = { path = "../bifrost-codec" }
 bifrost-core = { path = "../bifrost-core" }
 bifrost-signer = { path = "../bifrost-signer" }

@@ -1,5 +1,5 @@
 [package]
-name = "bifrost-bridge"
+name = "bifrost-bridge-tokio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,12 @@ authors.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 nostr.workspace = true
+nostr-sdk.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 bifrost-core = { path = "../bifrost-core" }
+bifrost-router = { path = "../bifrost-router" }
 bifrost-signer = { path = "../bifrost-signer" }
 
 [dev-dependencies]

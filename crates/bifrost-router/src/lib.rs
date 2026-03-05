@@ -74,6 +74,12 @@ struct QueuedOutbound {
     request_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct OutboundEvent {
+    pub event: Event,
+    pub request_id: Option<String>,
+}
+
 pub struct BridgeCore {
     signer: SigningDevice,
     config: BridgeConfig,
@@ -84,7 +90,7 @@ pub struct BridgeCore {
     seen_inbound_order: VecDeque<String>,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
-    last_expire_at: u64,
+    last_expire_at_ms: u64,
 }
 
 impl BridgeCore {
@@ -100,7 +106,7 @@ impl BridgeCore {
             seen_inbound_order: VecDeque::new(),
             completions: VecDeque::new(),
             failures: VecDeque::new(),
-            last_expire_at: 0,
+            last_expire_at_ms: 0,
         })
     }
 
@@ -127,6 +133,40 @@ impl BridgeCore {
                 let _ = self.command_queue.pop_front();
                 self.command_queue.push_back(cmd);
                 Ok(())
+            }
+        }
+    }
+
+    pub fn submit_command(
+        &mut self,
+        cmd: BridgeCommand,
+    ) -> std::result::Result<String, BridgeCoreError> {
+        let op_type = pending_type_for_command(&cmd);
+        let input = match cmd {
+            BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
+            BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
+            BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
+            BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
+        };
+
+        match self.signer.apply(input) {
+            Ok(effects) => {
+                let request_id = effects
+                    .latest_request_id
+                    .clone()
+                    .ok_or_else(|| BridgeCoreError::Internal("missing request id".to_string()))?;
+                self.dispatch_effects(effects, Some(request_id.clone()));
+                Ok(request_id)
+            }
+            Err(err) => {
+                self.failures.push_back(OperationFailure {
+                    request_id: "local-command".to_string(),
+                    op_type,
+                    code: OperationFailureCode::PeerRejected,
+                    message: err.to_string(),
+                    failed_peer: None,
+                });
+                Err(BridgeCoreError::Internal(err.to_string()))
             }
         }
     }
@@ -160,12 +200,20 @@ impl BridgeCore {
         }
     }
 
-    pub fn tick(&mut self, now: u64) {
-        if self.should_expire(now) {
-            if let Ok(effects) = self.signer.apply(SignerInput::Expire { now }) {
-                self.dispatch_effects(effects, None);
+    pub fn tick(&mut self, now_unix_ms: u64) {
+        if self.should_expire(now_unix_ms) {
+            let signer_now_secs = now_unix_ms / 1_000;
+            match self.signer.apply(SignerInput::Expire {
+                now: signer_now_secs,
+            }) {
+                Ok(effects) => self.dispatch_effects(effects, None),
+                Err(err) => self.push_internal_failure(
+                    "internal-expire".to_string(),
+                    PendingOpType::Ping,
+                    err.to_string(),
+                ),
             }
-            self.last_expire_at = now;
+            self.last_expire_at_ms = now_unix_ms;
         }
 
         while let Some(cmd) = self.command_queue.pop_front() {
@@ -173,8 +221,14 @@ impl BridgeCore {
         }
 
         while let Some(event) = self.inbound_queue.pop_front() {
-            if let Ok(effects) = self.signer.apply(SignerInput::ProcessEvent { event }) {
-                self.dispatch_effects(effects, None);
+            let event_id = event.id.to_hex();
+            match self.signer.apply(SignerInput::ProcessEvent { event }) {
+                Ok(effects) => self.dispatch_effects(effects, None),
+                Err(err) => self.push_internal_failure(
+                    format!("internal-inbound-{event_id}"),
+                    PendingOpType::Ping,
+                    err.to_string(),
+                ),
             }
         }
     }
@@ -202,9 +256,19 @@ impl BridgeCore {
     }
 
     pub fn drain_outbound_events(&mut self) -> Vec<Event> {
+        self.drain_outbound_packets()
+            .into_iter()
+            .map(|queued| queued.event)
+            .collect()
+    }
+
+    pub fn drain_outbound_packets(&mut self) -> Vec<OutboundEvent> {
         self.outbound_queue
             .drain(..)
-            .map(|queued| queued.event)
+            .map(|queued| OutboundEvent {
+                event: queued.event,
+                request_id: queued.request_id,
+            })
             .collect()
     }
 
@@ -216,12 +280,40 @@ impl BridgeCore {
         self.failures.drain(..).collect()
     }
 
-    fn should_expire(&self, now: u64) -> bool {
-        if self.last_expire_at == 0 {
+    pub fn fail_request(
+        &mut self,
+        request_id: String,
+        message: String,
+    ) -> std::result::Result<(), BridgeCoreError> {
+        match self.signer.apply(SignerInput::FailRequest {
+            request_id,
+            code: OperationFailureCode::PeerRejected,
+            message,
+        }) {
+            Ok(effects) => {
+                self.dispatch_effects(effects, None);
+                Ok(())
+            }
+            Err(err) => {
+                self.push_internal_failure(
+                    "local-fail-request".to_string(),
+                    PendingOpType::Ping,
+                    err.to_string(),
+                );
+                Err(BridgeCoreError::Internal(err.to_string()))
+            }
+        }
+    }
+
+    fn should_expire(&self, now_unix_ms: u64) -> bool {
+        if self.last_expire_at_ms == 0 {
             return true;
         }
 
-        now.saturating_sub(self.last_expire_at) >= self.config.expire_tick.as_secs().max(1)
+        let expire_tick_ms = u64::try_from(self.config.expire_tick.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        now_unix_ms.saturating_sub(self.last_expire_at_ms) >= expire_tick_ms
     }
 
     fn process_command(&mut self, cmd: BridgeCommand) {
@@ -304,9 +396,22 @@ impl BridgeCore {
             }),
         }
     }
+
+    fn push_internal_failure(&mut self, request_id: String, op_type: PendingOpType, message: String) {
+        self.failures.push_back(OperationFailure {
+            request_id,
+            op_type,
+            code: OperationFailureCode::PeerRejected,
+            message,
+            failed_peer: None,
+        });
+    }
 }
 
 fn validate_config(config: BridgeConfig) -> Result<BridgeConfig> {
+    if config.expire_tick.is_zero() {
+        return Err(anyhow!("bridge.expire_tick must be greater than zero"));
+    }
     if config.command_queue_capacity == 0 {
         return Err(anyhow!(
             "bridge.command_queue_capacity must be greater than zero"

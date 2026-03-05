@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use bifrost_bridge::{Bridge, BridgeConfig, RelayAdapter};
+use bifrost_bridge_tokio::{Bridge, BridgeConfig, RelayAdapter};
 use bifrost_core::types::{GroupPackage, SharePackage};
 use bifrost_signer::{DeviceConfig, DeviceState, SigningDevice};
 use frostr_utils::{CreateKeysetConfig, create_keyset};

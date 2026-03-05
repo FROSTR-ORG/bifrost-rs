@@ -44,9 +44,9 @@ State/config:
 - `DeviceConfig`
 - `PendingOperation`, `CompletedOperation`
 
-## `bifrost-bridge`
+## `bifrost-bridge-tokio`
 
-Runtime trait and orchestration (`crates/bifrost-bridge/src/lib.rs`):
+Runtime trait and orchestration (`crates/bifrost-bridge-tokio/src/lib.rs`):
 - `RelayAdapter`: connect/disconnect/subscribe/publish/next_event.
 - `Bridge`: starts runtime loop, accepts commands, returns results.
 

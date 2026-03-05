@@ -4,7 +4,7 @@ Threat model and control map for `bifrost-rs`.
 
 ## System Boundary
 
-- Encrypted peer protocol over relay transport (`bifrost-bridge` + adapter).
+- Encrypted peer protocol over relay transport (`bifrost-bridge-tokio` + adapter).
 - Stateful cryptographic engine (`bifrost-signer`).
 - Core cryptographic/session primitives (`bifrost-core`).
 

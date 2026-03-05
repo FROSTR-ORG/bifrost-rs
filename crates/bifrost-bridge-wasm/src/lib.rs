@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use bifrost_bridge_core::{BridgeCommand, BridgeConfig, BridgeCore};
+use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
 use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
 use bifrost_core::types::{MethodPolicy, PeerPolicy};
 use bifrost_signer::{
@@ -10,6 +10,7 @@ use k256::SecretKey;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use nostr::Event;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -36,7 +37,27 @@ struct RuntimeConfigInput {
     #[serde(default)]
     device: Option<DeviceConfig>,
     #[serde(default)]
-    bridge: Option<BridgeConfig>,
+    bridge: Option<BridgeConfigInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct BridgeConfigInput {
+    #[serde(default)]
+    expire_tick_ms: Option<u64>,
+    #[serde(default)]
+    command_queue_capacity: Option<usize>,
+    #[serde(default)]
+    inbound_queue_capacity: Option<usize>,
+    #[serde(default)]
+    outbound_queue_capacity: Option<usize>,
+    #[serde(default)]
+    command_overflow_policy: Option<QueueOverflowPolicy>,
+    #[serde(default)]
+    inbound_overflow_policy: Option<QueueOverflowPolicy>,
+    #[serde(default)]
+    outbound_overflow_policy: Option<QueueOverflowPolicy>,
+    #[serde(default)]
+    inbound_dedupe_cache_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,12 +220,12 @@ impl WasmBridgeRuntime {
         Ok(())
     }
 
-    pub fn tick(&mut self, now_unix_secs: u64) -> HostResult<()> {
+    pub fn tick(&mut self, now_unix_ms: u64) -> HostResult<()> {
         let state = self
             .state
             .as_mut()
             .ok_or_else(|| to_host_error("runtime not initialized"))?;
-        state.core.tick(now_unix_secs);
+        state.core.tick(now_unix_ms);
         Ok(())
     }
 
@@ -346,8 +367,39 @@ fn build_core(
         None => SigningDevice::init(group, share, peers, device_cfg)?,
     };
 
-    let bridge_cfg = config.bridge.clone().unwrap_or_default();
+    let bridge_cfg = bridge_config_from_input(config.bridge.clone());
     BridgeCore::new(signer, bridge_cfg)
+}
+
+fn bridge_config_from_input(input: Option<BridgeConfigInput>) -> BridgeConfig {
+    let mut cfg = BridgeConfig::default();
+    if let Some(input) = input {
+        if let Some(expire_tick_ms) = input.expire_tick_ms {
+            cfg.expire_tick = Duration::from_millis(expire_tick_ms.max(1));
+        }
+        if let Some(capacity) = input.command_queue_capacity {
+            cfg.command_queue_capacity = capacity;
+        }
+        if let Some(capacity) = input.inbound_queue_capacity {
+            cfg.inbound_queue_capacity = capacity;
+        }
+        if let Some(capacity) = input.outbound_queue_capacity {
+            cfg.outbound_queue_capacity = capacity;
+        }
+        if let Some(policy) = input.command_overflow_policy {
+            cfg.command_overflow_policy = policy;
+        }
+        if let Some(policy) = input.inbound_overflow_policy {
+            cfg.inbound_overflow_policy = policy;
+        }
+        if let Some(policy) = input.outbound_overflow_policy {
+            cfg.outbound_overflow_policy = policy;
+        }
+        if let Some(limit) = input.inbound_dedupe_cache_limit {
+            cfg.inbound_dedupe_cache_limit = limit;
+        }
+    }
+    cfg
 }
 
 fn parse_command(input: CommandInput) -> Result<BridgeCommand> {

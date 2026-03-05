@@ -191,7 +191,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "bifrost-bridge",
+ "bifrost-bridge-tokio",
  "bifrost-codec",
  "bifrost-core",
  "bifrost-signer",
@@ -212,33 +212,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "bifrost-bridge"
+name = "bifrost-bridge-tokio"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "bifrost-codec",
  "bifrost-core",
+ "bifrost-router",
  "bifrost-signer",
  "frostr-utils",
  "hex",
  "nostr",
+ "nostr-sdk",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "bifrost-bridge-core"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "bifrost-core",
- "bifrost-signer",
- "nostr",
- "serde",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]
@@ -246,9 +235,9 @@ name = "bifrost-bridge-wasm"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "bifrost-bridge-core",
  "bifrost-codec",
  "bifrost-core",
+ "bifrost-router",
  "bifrost-signer",
  "console_error_panic_hook",
  "frostr-utils",
@@ -292,7 +281,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bifrost-app",
- "bifrost-bridge",
+ "bifrost-bridge-tokio",
  "bifrost-codec",
  "bifrost-core",
  "bifrost-signer",
@@ -309,6 +298,19 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tracing",
+]
+
+[[package]]
+name = "bifrost-router"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "bifrost-core",
+ "bifrost-signer",
+ "nostr",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
