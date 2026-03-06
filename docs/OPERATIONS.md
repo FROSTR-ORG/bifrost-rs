@@ -40,7 +40,7 @@ cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json set
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer>
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json onboard <peer>
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <33-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <32-byte-hex>
 ```
 
 ## Logs and State

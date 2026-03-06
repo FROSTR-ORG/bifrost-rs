@@ -20,6 +20,6 @@ pub use sign::{
 };
 pub use types::*;
 pub use validate::{
-    decode_fixed_hex, decode_hex32, decode_hex33, decode_sig64, encode_hex, validate_pubkey33,
-    validate_signature64,
+    decode_fixed_hex, decode_hex32, decode_hex32_pubkey, decode_sig64, encode_hex,
+    validate_pubkey32, validate_signature64,
 };

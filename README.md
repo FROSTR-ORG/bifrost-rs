@@ -60,7 +60,7 @@ cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json lis
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json status
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <33-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <32-byte-hex>
 ```
 
 5. Run runtime e2e:

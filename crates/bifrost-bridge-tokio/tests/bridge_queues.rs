@@ -44,7 +44,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         .members
         .iter()
         .filter(|member| member.idx != share.idx)
-        .map(|member| hex::encode(member.pubkey))
+        .map(|member| hex::encode(&member.pubkey[1..]))
         .collect::<Vec<_>>();
     SigningDevice::new(
         group.clone(),
@@ -65,7 +65,7 @@ async fn outbound_queue_overflow_fails_round() {
     .expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
-    let target_ecdh = group.members[1].pubkey;
+    let target_ecdh: [u8; 32] = group.members[1].pubkey[1..].try_into().expect("xonly target");
     let local_signer = build_signer(&group, &local_share);
 
     let (_inbound_tx, inbound_rx) = mpsc::unbounded_channel();

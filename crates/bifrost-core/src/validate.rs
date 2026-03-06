@@ -4,8 +4,10 @@ pub fn decode_hex32(value: &str) -> CoreResult<[u8; 32]> {
     decode_fixed_hex::<32>(value)
 }
 
-pub fn decode_hex33(value: &str) -> CoreResult<[u8; 33]> {
-    decode_fixed_hex::<33>(value)
+pub fn decode_hex32_pubkey(value: &str) -> CoreResult<[u8; 32]> {
+    let decoded = decode_fixed_hex::<32>(value)?;
+    validate_pubkey32(&decoded)?;
+    Ok(decoded)
 }
 
 pub fn decode_sig64(value: &str) -> CoreResult<[u8; 64]> {
@@ -26,8 +28,8 @@ pub fn encode_hex<const N: usize>(value: &[u8; N]) -> String {
     hex::encode(value)
 }
 
-pub fn validate_pubkey33(value: &[u8]) -> CoreResult<()> {
-    if value.len() != 33 {
+pub fn validate_pubkey32(value: &[u8]) -> CoreResult<()> {
+    if value.len() != 32 {
         return Err(CoreError::InvalidPubkey);
     }
     Ok(())
@@ -48,6 +50,6 @@ mod tests {
     fn decode_hex_helpers_enforce_size() {
         let hex32 = hex::encode([1u8; 32]);
         assert!(decode_hex32(&hex32).is_ok());
-        assert!(decode_hex33(&hex32).is_err());
+        assert!(decode_sig64(&hex32).is_err());
     }
 }

@@ -76,7 +76,7 @@ struct RuntimeSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DecodedOnboarding {
     share: SharePackageWire,
-    share_pubkey33: String,
+    share_pubkey32: String,
     peer_pk_xonly: String,
     relays: Vec<String>,
 }
@@ -85,9 +85,9 @@ struct DecodedOnboarding {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CommandInput {
     Sign { message_hex_32: String },
-    Ecdh { pubkey33_hex: String },
-    Ping { peer_pubkey33_hex: String },
-    Onboard { peer_pubkey33_hex: String },
+    Ecdh { pubkey32_hex: String },
+    Ping { peer_pubkey32_hex: String },
+    Onboard { peer_pubkey32_hex: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -338,7 +338,7 @@ impl WasmBridgeRuntime {
         let point = secret.public_key().to_encoded_point(true);
         let payload = DecodedOnboarding {
             share: SharePackageWire::from(decoded.share),
-            share_pubkey33: hex::encode(point.as_bytes()),
+            share_pubkey32: hex::encode(&point.as_bytes()[1..]),
             peer_pk_xonly: hex::encode(decoded.peer_pk),
             relays: decoded.relays,
         };
@@ -407,14 +407,14 @@ fn parse_command(input: CommandInput) -> Result<BridgeCommand> {
         CommandInput::Sign { message_hex_32 } => Ok(BridgeCommand::Sign {
             message: decode_fixed_hex::<32>(&message_hex_32, "message_hex_32")?,
         }),
-        CommandInput::Ecdh { pubkey33_hex } => Ok(BridgeCommand::Ecdh {
-            pubkey: decode_fixed_hex::<33>(&pubkey33_hex, "pubkey33_hex")?,
+        CommandInput::Ecdh { pubkey32_hex } => Ok(BridgeCommand::Ecdh {
+            pubkey: decode_fixed_hex::<32>(&pubkey32_hex, "pubkey32_hex")?,
         }),
-        CommandInput::Ping { peer_pubkey33_hex } => Ok(BridgeCommand::Ping {
-            peer: peer_pubkey33_hex,
+        CommandInput::Ping { peer_pubkey32_hex } => Ok(BridgeCommand::Ping {
+            peer: peer_pubkey32_hex,
         }),
-        CommandInput::Onboard { peer_pubkey33_hex } => Ok(BridgeCommand::Onboard {
-            peer: peer_pubkey33_hex,
+        CommandInput::Onboard { peer_pubkey32_hex } => Ok(BridgeCommand::Onboard {
+            peer: peer_pubkey32_hex,
         }),
     }
 }

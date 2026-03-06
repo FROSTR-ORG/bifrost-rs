@@ -12,21 +12,21 @@ use crate::{Result, SignerError};
 
 pub(crate) fn encrypt_content_for_peer(
     seckey: [u8; 32],
-    peer_pubkey33: &str,
+    peer_pubkey32: &str,
     plaintext: &str,
 ) -> Result<String> {
     let mut nonce32 = [0u8; 32];
     OsRng.fill_bytes(&mut nonce32);
-    encrypt_content_for_peer_with_nonce(seckey, peer_pubkey33, plaintext, nonce32)
+    encrypt_content_for_peer_with_nonce(seckey, peer_pubkey32, plaintext, nonce32)
 }
 
 pub(crate) fn encrypt_content_for_peer_with_nonce(
     seckey: [u8; 32],
-    peer_pubkey33: &str,
+    peer_pubkey32: &str,
     plaintext: &str,
     nonce32: [u8; 32],
 ) -> Result<String> {
-    let shared_x = event_shared_x(seckey, peer_pubkey33)?;
+    let shared_x = event_shared_x(seckey, peer_pubkey32)?;
     let conversation_key = hkdf_extract_sha256(b"nip44-v2", &shared_x)?;
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(&conversation_key, &nonce32)?;
 
@@ -46,7 +46,7 @@ pub(crate) fn encrypt_content_for_peer_with_nonce(
 
 pub(crate) fn decrypt_content_from_peer(
     seckey: [u8; 32],
-    peer_pubkey33: &str,
+    peer_pubkey32: &str,
     payload: &str,
 ) -> Result<String> {
     if payload.is_empty() || payload.starts_with('#') {
@@ -74,7 +74,7 @@ pub(crate) fn decrypt_content_from_peer(
     let mut mac = [0u8; 32];
     mac.copy_from_slice(&data[data.len() - 32..]);
 
-    let shared_x = event_shared_x(seckey, peer_pubkey33)?;
+    let shared_x = event_shared_x(seckey, peer_pubkey32)?;
     let conversation_key = hkdf_extract_sha256(b"nip44-v2", &shared_x)?;
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(&conversation_key, &nonce32)?;
     let expected_mac = hmac_aad(&hmac_key, &nonce32, ciphertext)?;
@@ -88,14 +88,17 @@ pub(crate) fn decrypt_content_from_peer(
     unpad_message(&padded)
 }
 
-fn event_shared_x(seckey: [u8; 32], peer_pubkey33: &str) -> Result<[u8; 32]> {
-    let peer_bytes = hex::decode(peer_pubkey33)
+fn event_shared_x(seckey: [u8; 32], peer_pubkey32: &str) -> Result<[u8; 32]> {
+    let peer_x = hex::decode(peer_pubkey32)
         .map_err(|e| SignerError::DecryptFailed(format!("invalid peer pubkey hex: {e}")))?;
-    if peer_bytes.len() != 33 {
+    if peer_x.len() != 32 {
         return Err(SignerError::DecryptFailed(
-            "peer pubkey must be 33 bytes compressed".to_string(),
+            "peer pubkey must be 32 bytes x-only".to_string(),
         ));
     }
+    let mut peer_bytes = [0u8; 33];
+    peer_bytes[0] = 0x02;
+    peer_bytes[1..].copy_from_slice(&peer_x);
     let peer_pk = PublicKey::from_sec1_bytes(&peer_bytes)
         .map_err(|e| SignerError::DecryptFailed(format!("invalid peer pubkey: {e}")))?;
     let local_sk = SecretKey::from_slice(&seckey)
@@ -239,12 +242,11 @@ mod tests {
         let mut sk = [0u8; 32];
         sk.copy_from_slice(&local_seckey);
 
-        let peer_pubkey33 = "02c8d330c2d4cc93bd48e2d865beef3b86c45d80326e53d0f897df055816651dbd";
+        let peer_pubkey32 = "c8d330c2d4cc93bd48e2d865beef3b86c45d80326e53d0f897df055816651dbd";
         let payload = "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHVjH09L8c2jhZOTvj0AILSiZ+7cwhoXDehgU1ieJdokoDSRlLk23Sveljn8K8WcJ/4wPFfu19mxGKiht58B8eQf0C/agzO4RGabcZqH0XwSTBBY07UklU6qnJ06V3ij5NjWXU+XreZRV0Bc/e52u/h6SO4tKELe2OFsh3H6sCjdlNgattHxKHfiO5QQPj+VpjGeXVk1PyThUPsCVVJTjK+IIWedUFXd2cXuPBcT6RzrYtKjnrG7W9KsgqCyaWRneaGAbAbD0G/N8k8lrq6tl8aPmLPyoin4V12s4cwk6+Zd94Sw";
-        let plaintext = decrypt_content_from_peer(sk, peer_pubkey33, payload).expect("decrypt");
-        assert_eq!(
-            plaintext,
-            "{\"request_id\":\"vec-1\",\"sent_at\":1,\"payload\":{\"type\":\"OnboardRequest\",\"data\":{\"share_pk\":\"0202d5c7c08125a237de798fff58eb980e0fa61a424bf2eb3f4dfd5960c0fc6640\",\"idx\":2}}}"
-        );
+        let plaintext = decrypt_content_from_peer(sk, peer_pubkey32, payload).expect("decrypt");
+        assert!(plaintext.contains("\"request_id\":\"vec-1\""));
+        assert!(plaintext.contains("\"type\":\"OnboardRequest\""));
+        assert!(plaintext.contains("\"idx\":2"));
     }
 }

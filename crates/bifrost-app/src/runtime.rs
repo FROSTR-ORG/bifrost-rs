@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_bridge_tokio::{
@@ -56,6 +57,14 @@ pub struct AppOptions {
     pub max_future_skew_secs: u64,
     #[serde(default = "default_request_cache_limit")]
     pub request_cache_limit: usize,
+    #[serde(default = "default_ecdh_cache_capacity")]
+    pub ecdh_cache_capacity: usize,
+    #[serde(default = "default_ecdh_cache_ttl_secs")]
+    pub ecdh_cache_ttl_secs: u64,
+    #[serde(default = "default_sig_cache_capacity")]
+    pub sig_cache_capacity: usize,
+    #[serde(default = "default_sig_cache_ttl_secs")]
+    pub sig_cache_ttl_secs: u64,
     #[serde(default = "default_state_save_interval")]
     pub state_save_interval_secs: u64,
     #[serde(default = "default_event_kind")]
@@ -117,6 +126,10 @@ impl Default for AppOptions {
             request_ttl_secs: default_request_ttl(),
             max_future_skew_secs: default_max_future_skew_secs(),
             request_cache_limit: default_request_cache_limit(),
+            ecdh_cache_capacity: default_ecdh_cache_capacity(),
+            ecdh_cache_ttl_secs: default_ecdh_cache_ttl_secs(),
+            sig_cache_capacity: default_sig_cache_capacity(),
+            sig_cache_ttl_secs: default_sig_cache_ttl_secs(),
             state_save_interval_secs: default_state_save_interval(),
             event_kind: default_event_kind(),
             peer_selection_strategy: default_peer_selection_strategy(),
@@ -153,6 +166,18 @@ fn default_max_future_skew_secs() -> u64 {
 }
 fn default_request_cache_limit() -> usize {
     2048
+}
+fn default_ecdh_cache_capacity() -> usize {
+    256
+}
+fn default_ecdh_cache_ttl_secs() -> u64 {
+    300
+}
+fn default_sig_cache_capacity() -> usize {
+    256
+}
+fn default_sig_cache_ttl_secs() -> u64 {
+    120
 }
 fn default_state_save_interval() -> u64 {
     30
@@ -228,8 +253,13 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
     let group = parse_group_package(&group_raw).context("parse group package")?;
     let share = parse_share_package(&share_raw).context("parse share package")?;
 
+    let state_path = PathBuf::from(expand_tilde(&config.state_path));
     let state = if store.exists() {
-        store.load().context("load state")?
+        let mut state = store.load().context("load state")?;
+        if !last_shutdown_clean(&state_path, &state) {
+            state.discard_volatile_for_dirty_restart(share.idx, share.seckey);
+        }
+        state
     } else {
         DeviceState::new(share.idx, share.seckey)
     };
@@ -247,6 +277,10 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
             request_ttl_secs: config.options.request_ttl_secs,
             max_future_skew_secs: config.options.max_future_skew_secs,
             request_cache_limit: config.options.request_cache_limit,
+            ecdh_cache_capacity: config.options.ecdh_cache_capacity,
+            ecdh_cache_ttl_secs: config.options.ecdh_cache_ttl_secs,
+            sig_cache_capacity: config.options.sig_cache_capacity,
+            sig_cache_ttl_secs: config.options.sig_cache_ttl_secs,
             state_save_interval_secs: config.options.state_save_interval_secs,
             event_kind: config.options.event_kind,
             peer_selection_strategy: config.options.peer_selection_strategy,
@@ -258,6 +292,87 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
     }
 
     Ok(signer)
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RunMarker {
+    clean_shutdown: bool,
+    run_id: String,
+    state_hash: Option<String>,
+    updated_at: u64,
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn run_marker_path(state_path: &Path) -> PathBuf {
+    state_path.with_extension("run.json")
+}
+
+fn hash_state(state: &DeviceState) -> Result<String> {
+    let bytes = DefaultOptions::new()
+        .with_limit(MAX_STATE_PLAINTEXT_BYTES as u64)
+        .serialize(state)?;
+    let digest = Sha256::digest(bytes);
+    Ok(hex::encode(digest))
+}
+
+pub fn last_shutdown_clean(state_path: &Path, state: &DeviceState) -> bool {
+    let path = run_marker_path(state_path);
+    let raw = match fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let marker = match serde_json::from_str::<RunMarker>(&raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if !marker.clean_shutdown {
+        return false;
+    }
+    let Some(expected_hash) = marker.state_hash else {
+        return false;
+    };
+    hash_state(state)
+        .map(|actual_hash| actual_hash == expected_hash)
+        .unwrap_or(false)
+}
+
+pub fn begin_run(state_path: &Path) -> Result<String> {
+    let mut run_bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut run_bytes);
+    let run_id = hex::encode(run_bytes);
+    let marker = RunMarker {
+        clean_shutdown: false,
+        run_id: run_id.clone(),
+        state_hash: None,
+        updated_at: now_unix_secs(),
+    };
+    let path = run_marker_path(state_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_vec(&marker)?)?;
+    Ok(run_id)
+}
+
+pub fn complete_clean_run(state_path: &Path, run_id: &str, state: &DeviceState) -> Result<()> {
+    let marker = RunMarker {
+        clean_shutdown: true,
+        run_id: run_id.to_string(),
+        state_hash: Some(hash_state(state)?),
+        updated_at: now_unix_secs(),
+    };
+    let path = run_marker_path(state_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_vec(&marker)?)?;
+    Ok(())
 }
 
 pub struct EncryptedFileStore {

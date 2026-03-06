@@ -771,7 +771,7 @@ mod tests {
         let wire = PartialSigPackageWire {
             idx: 1,
             sid: hex::encode([2u8; 32]),
-            pubkey: hex::encode([3u8; 33]),
+            pubkey: hex::encode([3u8; 32]),
             psigs: Vec::new(),
             nonce_code: None,
             replenish: None,
@@ -825,5 +825,31 @@ mod tests {
         let err: crate::error::CodecError =
             TryInto::<SignSessionPackage>::try_into(wire).expect_err("must reject");
         assert!(matches!(err, crate::error::CodecError::Hex));
+    }
+
+    #[test]
+    fn group_wire_rejects_member_pubkey32_when_verifying_share33_required() {
+        let wire = GroupPackageWire {
+            group_pk: hex::encode([1u8; 32]),
+            threshold: 1,
+            members: vec![MemberPackageWire {
+                idx: 1,
+                pubkey: hex::encode([2u8; 32]),
+            }],
+        };
+        let err: crate::error::CodecError =
+            TryInto::<GroupPackage>::try_into(wire).expect_err("must reject member pubkey32");
+        assert!(matches!(err, crate::error::CodecError::InvalidLength { .. }));
+    }
+
+    #[test]
+    fn onboard_wire_rejects_share_pk33_identity_key() {
+        let wire = OnboardRequestWire {
+            share_pk: hex::encode([3u8; 33]),
+            idx: 1,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<OnboardRequest>::try_into(wire).expect_err("must reject share_pk33");
+        assert!(matches!(err, crate::error::CodecError::InvalidLength { .. }));
     }
 }

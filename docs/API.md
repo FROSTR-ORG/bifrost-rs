@@ -43,6 +43,7 @@ State/config:
 - `DeviceState`
 - `DeviceConfig`
 - `PendingOperation`, `CompletedOperation`
+- `PersistenceHint` (batch/immediate/none persistence signal)
 
 ## `bifrost-bridge-tokio`
 
@@ -52,7 +53,7 @@ Runtime trait and orchestration (`crates/bifrost-bridge-tokio/src/lib.rs`):
 
 Bridge command surface:
 - `sign`, `ecdh`, `ping`, `onboard`
-- `status`, `policies`, `set_policy`, `snapshot_state`, `shutdown`
+- `status`, `policies`, `set_policy`, `snapshot_state`, `take_persistence_hint`, `shutdown`
 - explicit round-failure propagation for locked-peer timeout/invalid response conditions
 
 ## Runtime binaries

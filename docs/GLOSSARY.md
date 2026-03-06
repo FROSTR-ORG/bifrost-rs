@@ -10,7 +10,7 @@ FROST operations coordinated over relay transport.
 
 ## Group Package
 
-Threshold group metadata (`group_pk`, `threshold`, member set).
+Threshold group metadata (`group_pk`, `threshold`, member set). `group_pk` is an x-only 32-byte identity key; member entries carry 33-byte FROST verifying-share points.
 
 ## Share Package
 

@@ -52,7 +52,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         .members
         .iter()
         .filter(|member| member.idx != share.idx)
-        .map(|member| hex::encode(member.pubkey))
+        .map(|member| hex::encode(&member.pubkey[1..]))
         .collect::<Vec<_>>();
     SigningDevice::new(
         group.clone(),
@@ -74,7 +74,7 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let local_signer = build_signer(&group, &local_share);
-    let target_ecdh = group.members[2].pubkey;
+    let target_ecdh: [u8; 32] = group.members[2].pubkey[1..].try_into().expect("xonly target");
     let event_kind = DeviceConfig::default().event_kind as u16;
     let local_secret = SecretKey::from_slice(&local_share.seckey).expect("local secret");
     let local_keys = Keys::new(local_secret.clone());
@@ -181,12 +181,12 @@ async fn inbound_duplicate_event_is_processed_once() {
     let local_share = bundle.shares[0].clone();
     let remote_share = bundle.shares[1].clone();
     let local_pubkey_hex = hex::encode(
-        group
+        &group
             .members
             .iter()
             .find(|m| m.idx == local_share.idx)
             .expect("local member")
-            .pubkey,
+            .pubkey[1..],
     );
 
     let local_signer = build_signer(&group, &local_share);

@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bifrost_core::get_group_id;
 use bifrost_core::types::{GroupPackage, MemberPackage, SharePackage};
 use frost_secp256k1_tr_unofficial as frost;
+use frost_secp256k1_tr_unofficial::keys::EvenY;
 use rand_core::OsRng;
 
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
@@ -28,21 +29,23 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
         OsRng,
     )
     .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+    let pubkey_pkg = pubkey_pkg.into_even_y(None);
 
     let mut material = Vec::new();
     for (id, secret_share) in shares {
         let key_package = frost::keys::KeyPackage::try_from(secret_share)
-            .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+            .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+            .into_even_y(None);
         material.push((id, key_package));
     }
     material.sort_by_key(|(id, _)| id.serialize());
 
-    let mut group_pk = [0u8; 33];
+    let mut group_pk = [0u8; 32];
     group_pk.copy_from_slice(
         &pubkey_pkg
             .verifying_key()
             .serialize()
-            .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?,
+            .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?[1..],
     );
 
     let mut members = Vec::new();

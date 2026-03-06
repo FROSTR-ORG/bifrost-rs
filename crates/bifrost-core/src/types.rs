@@ -3,6 +3,8 @@ use zeroize::Zeroize;
 
 pub type Bytes32 = [u8; 32];
 pub type Bytes33 = [u8; 33];
+pub type IdentityPubkey32 = Bytes32;
+pub type VerifyingShare33 = Bytes33;
 
 mod serde_fixed_array {
     use serde::Deserialize;
@@ -164,13 +166,13 @@ mod serde_fixed_array {
 pub struct MemberPackage {
     pub idx: u16,
     #[serde(with = "serde_fixed_array::bytes33")]
-    pub pubkey: Bytes33,
+    pub pubkey: VerifyingShare33,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupPackage {
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub group_pk: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub group_pk: IdentityPubkey32,
     pub threshold: u16,
     pub members: Vec<MemberPackage>,
 }
@@ -265,8 +267,8 @@ pub struct PartialSigPackage {
     pub idx: u16,
     #[serde(with = "serde_fixed_array::bytes32")]
     pub sid: Bytes32,
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub pubkey: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub pubkey: IdentityPubkey32,
     pub psigs: Vec<PartialSigEntry>,
     pub nonce_code: Option<Bytes32>,
     pub replenish: Option<Vec<DerivedPublicNonce>>,
@@ -276,16 +278,16 @@ pub struct PartialSigPackage {
 pub struct SignatureEntry {
     #[serde(with = "serde_fixed_array::bytes32")]
     pub sighash: Bytes32,
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub pubkey: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub pubkey: IdentityPubkey32,
     #[serde(with = "serde_fixed_array::bytes64")]
     pub signature: [u8; 64],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EcdhEntry {
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub ecdh_pk: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub ecdh_pk: IdentityPubkey32,
     #[serde(with = "serde_fixed_array::bytes33")]
     pub keyshare: Bytes33,
 }
@@ -327,8 +329,8 @@ impl Default for MethodPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerScopedPolicyProfile {
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub for_peer: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub for_peer: IdentityPubkey32,
     pub revision: u64,
     pub updated: u64,
     pub block_all: bool,
@@ -351,8 +353,8 @@ pub struct PingPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnboardRequest {
-    #[serde(with = "serde_fixed_array::bytes33")]
-    pub share_pk: Bytes33,
+    #[serde(with = "serde_fixed_array::bytes32")]
+    pub share_pk: IdentityPubkey32,
     pub idx: u16,
 }
 

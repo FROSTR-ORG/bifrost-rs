@@ -13,7 +13,7 @@ pub fn create_partial_sig_package(
     session: &SignSessionPackage,
     share: &SharePackage,
     signing_nonces: &[frost::round1::SigningNonces],
-    pubkey: [u8; 33],
+    pubkey: [u8; 32],
 ) -> CoreResult<PartialSigPackage> {
     if session.hashes.is_empty() {
         return Err(CoreError::EmptySessionHashes);
@@ -73,7 +73,7 @@ pub fn create_partial_sig_packages_batch(
     sessions: &[SignSessionPackage],
     share: &SharePackage,
     signing_nonces: &[Vec<frost::round1::SigningNonces>],
-    pubkey: [u8; 33],
+    pubkey: [u8; 32],
 ) -> CoreResult<Vec<PartialSigPackage>> {
     if sessions.is_empty() {
         return Err(CoreError::EmptySessionHashes);
@@ -273,7 +273,8 @@ fn build_commitments_by_index(
 }
 
 fn build_public_key_package(group: &GroupPackage) -> CoreResult<frost::keys::PublicKeyPackage> {
-    let verifying_key = frost::VerifyingKey::deserialize(&group.group_pk)
+    let group_pk = pubkey32_to_even_compressed(group.group_pk);
+    let verifying_key = frost::VerifyingKey::deserialize(&group_pk)
         .map_err(|e| CoreError::Frost(e.to_string()))?;
 
     let mut verifying_shares = BTreeMap::new();
@@ -308,7 +309,8 @@ fn build_key_package(
 
     let verifying_share = frost::keys::VerifyingShare::deserialize(&member.pubkey)
         .map_err(|e| CoreError::Frost(e.to_string()))?;
-    let verifying_key = frost::VerifyingKey::deserialize(&group.group_pk)
+    let group_pk = pubkey32_to_even_compressed(group.group_pk);
+    let verifying_key = frost::VerifyingKey::deserialize(&group_pk)
         .map_err(|e| CoreError::Frost(e.to_string()))?;
 
     Ok(frost::keys::KeyPackage::new(
@@ -320,20 +322,31 @@ fn build_key_package(
     ))
 }
 
+fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
+    let mut out = [0u8; 33];
+    out[0] = 0x02;
+    out[1..].copy_from_slice(&pubkey);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frost_secp256k1_tr_unofficial::keys::EvenY;
     use rand_core::OsRng;
 
     fn two_member_fixture() -> (GroupPackage, Vec<SharePackage>) {
         let (shares, group_pub) =
             frost::keys::generate_with_dealer(2, 2, frost::keys::IdentifierList::Default, OsRng)
                 .expect("dealer");
+        let group_pub = group_pub.into_even_y(None);
 
         let mut members = Vec::new();
         let mut share_packages = Vec::new();
         for (id, secret_share) in shares {
-            let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+            let key_package = frost::keys::KeyPackage::try_from(secret_share)
+                .expect("key package")
+                .into_even_y(None);
             let mut member_pk = [0u8; 33];
             member_pk.copy_from_slice(
                 &key_package
@@ -356,12 +369,12 @@ mod tests {
         members.sort_by_key(|m| m.idx);
         share_packages.sort_by_key(|s| s.idx);
 
-        let mut group_pk = [0u8; 33];
+        let mut group_pk = [0u8; 32];
         group_pk.copy_from_slice(
             &group_pub
                 .verifying_key()
                 .serialize()
-                .expect("serialize group key"),
+                .expect("serialize group key")[1..],
         );
 
         (
@@ -378,11 +391,14 @@ mod tests {
         let (shares, group_pub) =
             frost::keys::generate_with_dealer(2, 2, frost::keys::IdentifierList::Default, OsRng)
                 .expect("dealer");
+        let group_pub = group_pub.into_even_y(None);
 
         let mut members = Vec::new();
         let mut share_packages = Vec::new();
         for (id, secret_share) in shares {
-            let kp = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+            let kp = frost::keys::KeyPackage::try_from(secret_share)
+                .expect("key package")
+                .into_even_y(None);
             let vk_bytes = kp
                 .verifying_share()
                 .serialize()
@@ -409,8 +425,8 @@ mod tests {
             .verifying_key()
             .serialize()
             .expect("serialize group key");
-        let mut group_pk = [0u8; 33];
-        group_pk.copy_from_slice(&group_key);
+        let mut group_pk = [0u8; 32];
+        group_pk.copy_from_slice(&group_key[1..]);
 
         let group = GroupPackage {
             group_pk,
@@ -478,7 +494,7 @@ mod tests {
             pkgs.push(PartialSigPackage {
                 idx: share.idx,
                 sid: session.sid,
-                pubkey: member.pubkey,
+                pubkey: member.pubkey[1..].try_into().expect("xonly pubkey"),
                 psigs: vec![PartialSigEntry {
                     hash_index: 0,
                     sighash: [7; 32],
@@ -569,7 +585,9 @@ mod tests {
                 .iter()
                 .find(|m| m.idx == share.idx)
                 .expect("member")
-                .pubkey,
+                .pubkey[1..]
+                .try_into()
+                .expect("xonly pubkey"),
         )
         .expect_err("must reject mismatch");
         assert!(matches!(err, CoreError::BatchItemCountMismatch));
@@ -629,7 +647,9 @@ mod tests {
                 .iter()
                 .find(|m| m.idx == share.idx)
                 .expect("member")
-                .pubkey;
+                .pubkey[1..]
+                .try_into()
+                .expect("xonly pubkey");
             let pkgs = create_partial_sig_packages_batch(
                 &group,
                 &sessions,

@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use bifrost_app::runtime::{
-    EncryptedFileStore, load_config, load_or_init_signer, load_share,
+    EncryptedFileStore, begin_run, complete_clean_run, load_config, load_or_init_signer,
+    load_share,
 };
 use bifrost_bridge_tokio::{Bridge, BridgeConfig, NostrSdkAdapter};
 use bifrost_core::types::PeerPolicy;
@@ -30,7 +31,8 @@ async fn main() -> Result<()> {
     let config = load_config(Path::new(&config_path))?;
     let share = load_share(&config.share_path)?;
     let state_path = PathBuf::from(bifrost_app::runtime::expand_tilde(&config.state_path));
-    let store = EncryptedFileStore::new(state_path, share);
+    let run_id = begin_run(&state_path)?;
+    let store = EncryptedFileStore::new(state_path.clone(), share);
     let signer = load_or_init_signer(&config, &store)?;
 
     let bridge = Bridge::start_with_config(
@@ -99,6 +101,7 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
     store.save(&state)?;
+    complete_clean_run(&state_path, &run_id, &state)?;
     bridge.shutdown().await;
 
     disable_raw_mode()?;

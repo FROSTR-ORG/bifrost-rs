@@ -34,5 +34,5 @@ Payload (TS parity model):
 - Onboarding package is intentionally minimal for bootstrap/phone-home flow.
 - New device uses this package to contact a peer and fetch full `group + nonces` through `onboard` RPC.
 - `bifrost-core` remains runtime-focused; `frostr-utils` is for tooling/integration.
-- `bifrost-node` consumes `frostr-utils::protocol` stateless sign/ECDH helpers as a runtime foundation.
+- `bifrost` signer/runtime crates consume `frostr-utils::protocol` stateless sign/ECDH helpers as a runtime foundation.
 - APIs are intended for external integration and internal utility reuse.

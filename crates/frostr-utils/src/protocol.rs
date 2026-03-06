@@ -1,5 +1,5 @@
 use bifrost_core::types::{
-    Bytes32, Bytes33, EcdhPackage, GroupPackage, PartialSigPackage, SharePackage,
+    Bytes32, EcdhPackage, GroupPackage, PartialSigPackage, SharePackage,
     SignSessionPackage, SignatureEntry,
 };
 use bifrost_core::{
@@ -23,9 +23,9 @@ pub fn sign_create_partial(
     session: &SignSessionPackage,
     share: &SharePackage,
     signing_nonces: &[frost::round1::SigningNonces],
-    signer_pubkey33: Option<Bytes33>,
+    signer_pubkey32: Option<Bytes32>,
 ) -> FrostUtilsResult<PartialSigPackage> {
-    let pubkey = if let Some(v) = signer_pubkey33 {
+    let pubkey = if let Some(v) = signer_pubkey32 {
         v
     } else {
         local_pubkey_from_share(share).map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
@@ -55,12 +55,12 @@ pub fn sign_finalize(
 pub fn ecdh_create_from_share(
     members: &[u16],
     share: &SharePackage,
-    targets: &[Bytes33],
+    targets: &[Bytes32],
 ) -> FrostUtilsResult<EcdhPackage> {
     create_ecdh_package(members, share, targets).map_err(|e| FrostUtilsError::Crypto(e.to_string()))
 }
 
-pub fn ecdh_finalize(pkgs: &[EcdhPackage], target: Bytes33) -> FrostUtilsResult<Bytes32> {
+pub fn ecdh_finalize(pkgs: &[EcdhPackage], target: Bytes32) -> FrostUtilsResult<Bytes32> {
     combine_ecdh_packages(pkgs, target).map_err(|e| FrostUtilsError::Crypto(e.to_string()))
 }
 
