@@ -17,6 +17,7 @@ cargo test --workspace --offline
 ```bash
 dev/scripts/toolchain_preflight.sh --require-cargo
 cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --threshold 11 --count 15
 scripts/devnet.sh smoke
 scripts/test-node-e2e.sh
 scripts/test-tui-e2e.sh
