@@ -26,10 +26,17 @@
 - NIP-44 envelope decryption/encryption for peer events.
 - Peer policy enforcement, replay/TTL checks, nonce pool integration.
 
+## `bifrost-router`
+
+- Runtime-agnostic router core (`BridgeCore`) for command/event queueing.
+- Inbound event deduplication and overflow handling.
+- Outbound event draining and signer completion/failure propagation.
+- Persistence-hint emission (`none`/`batch`/`immediate`) for host runtimes.
+
 ## `bifrost-bridge-tokio`
 
-- Runtime boundary between signer and transport adapter.
-- Subscription/publish loop orchestration.
+- Tokio runtime boundary between router and transport adapter.
+- Subscription/publish loop orchestration via router-exported filters/events.
 - Command dispatch (`sign`, `ecdh`, `ping`, `onboard`) and completion routing.
 
 ## Runtime binaries

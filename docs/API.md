@@ -45,11 +45,19 @@ State/config:
 - `PendingOperation`, `CompletedOperation`
 - `PersistenceHint` (batch/immediate/none persistence signal)
 
+## `bifrost-router`
+
+Runtime-agnostic router core (`crates/bifrost-router/src/lib.rs`):
+- `BridgeCore`: queueing, dedupe, and signer-effect dispatch.
+- `BridgeConfig`: bounded queue/dedupe limits and overflow policy control.
+- `BridgeCommand`: `sign`, `ecdh`, `ping`, `onboard` command surface.
+- `OutboundEvent`: encrypted relay event plus optional request-id correlation.
+
 ## `bifrost-bridge-tokio`
 
 Runtime trait and orchestration (`crates/bifrost-bridge-tokio/src/lib.rs`):
 - `RelayAdapter`: connect/disconnect/subscribe/publish/next_event.
-- `Bridge`: starts runtime loop, accepts commands, returns results.
+- `Bridge`: tokio runtime loop that drives `bifrost-router::BridgeCore`.
 
 Bridge command surface:
 - `sign`, `ecdh`, `ping`, `onboard`
@@ -60,4 +68,4 @@ Bridge command surface:
 
 - `bifrost`: CLI (`sign`, `ecdh`, `ping`, `onboard`, `listen`, `status`, `policies`, `set-policy`)
 - `bifrost-tui`: terminal dashboard.
-- `bifrost-devtools`: `keygen`, `relay`, and `e2e-node` runtime e2e command.
+- `bifrost-devtools`: `keygen`, `relay`, `e2e-node`, and `e2e-full` runtime e2e commands.

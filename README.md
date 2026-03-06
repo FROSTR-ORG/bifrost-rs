@@ -10,7 +10,8 @@ Rust implementation of the FROSTR threshold-signing stack.
 - Nostr-native encrypted peer messaging (NIP-44-compatible envelope handling).
 - Hard-cut runtime split between:
   - `bifrost-signer` for cryptographic/stateful signing-device logic.
-  - `bifrost-bridge` for runtime orchestration between signer and relay adapter.
+  - `bifrost-router` for runtime-agnostic routing/queueing between signer and transport.
+  - `bifrost-bridge-tokio` / `bifrost-bridge-wasm` for platform-specific bridge runtimes.
 - `bifrost` CLI for command execution.
 - `bifrost-tui` for operator status views.
 - `bifrost-devtools` for local relay + key/config generation.
@@ -19,7 +20,7 @@ Rust implementation of the FROSTR threshold-signing stack.
 
 - Alpha.
 - Hard-cut migration in progress.
-- Runtime documentation reflects the current signer/bridge architecture only.
+- Runtime documentation reflects the current signer/router/bridge architecture only.
 
 ## Workspace Layout
 
@@ -27,7 +28,9 @@ Rust implementation of the FROSTR threshold-signing stack.
 - `crates/frostr-utils`: keyset/onboarding helpers.
 - `crates/bifrost-codec`: strict wire/envelope validation.
 - `crates/bifrost-signer`: signing-device runtime and policy/state management.
-- `crates/bifrost-bridge`: async runtime coordinator and relay adapter boundary.
+- `crates/bifrost-router`: runtime-agnostic routing core (queueing, dedupe, command processing).
+- `crates/bifrost-bridge-tokio`: async tokio bridge runtime and Nostr adapter boundary.
+- `crates/bifrost-bridge-wasm`: wasm bridge runtime boundary.
 - `crates/bifrost-app`: production CLI package (`bifrost`) plus shared runtime glue.
 - `crates/bifrost-dev`: developer tooling package (`bifrost-tui`, `bifrost-devtools`).
 - `docs/`: product and operations documentation.

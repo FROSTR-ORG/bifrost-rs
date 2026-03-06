@@ -47,12 +47,13 @@ Current test classes in repo:
   - `bifrost-core`
   - `bifrost-codec`
   - `bifrost-signer`
-  - `bifrost-bridge`
+  - `bifrost-router`
+  - `bifrost-bridge-tokio`
   - `frostr-utils`
 - Integration tests (`tests/` targets):
-  - `crates/bifrost-bridge/tests/bridge_flow.rs`
-  - `crates/bifrost-bridge/tests/bridge_queues.rs`
-  - `crates/bifrost-bridge/tests/bridge_dedupe_and_failures.rs`
+  - `crates/bifrost-bridge-tokio/tests/bridge_flow.rs`
+  - `crates/bifrost-bridge-tokio/tests/bridge_queues.rs`
+  - `crates/bifrost-bridge-tokio/tests/bridge_dedupe_and_failures.rs`
   - `crates/bifrost-app/tests/config_options.rs`
   - `crates/bifrost-app/tests/state_store_limits.rs`
 - End-to-end/runtime tests:
@@ -70,7 +71,7 @@ Coverage status:
 
 - Crypto/core changes: add deterministic correctness + reject-path tests.
 - Codec changes: add strict malformed/bounds tests.
-- Signer/bridge runtime changes: add request lifecycle, failure-mapping, and timeout-path tests.
+- Signer/router/bridge runtime changes: add request lifecycle, failure-mapping, and timeout-path tests.
 - App changes (`bifrost-app` / `bifrost-dev` bins/runtime): add CLI/TUI/devtools integration checks.
 
 ## CI Expectation
