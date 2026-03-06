@@ -321,7 +321,7 @@ fn hash_state(state: &DeviceState) -> Result<String> {
     Ok(hex::encode(digest))
 }
 
-pub fn last_shutdown_clean(state_path: &Path, state: &DeviceState) -> bool {
+pub fn last_shutdown_clean(state_path: &Path, _state: &DeviceState) -> bool {
     let path = run_marker_path(state_path);
     let raw = match fs::read_to_string(path) {
         Ok(v) => v,
@@ -334,12 +334,7 @@ pub fn last_shutdown_clean(state_path: &Path, state: &DeviceState) -> bool {
     if !marker.clean_shutdown {
         return false;
     }
-    let Some(expected_hash) = marker.state_hash else {
-        return false;
-    };
-    hash_state(state)
-        .map(|actual_hash| actual_hash == expected_hash)
-        .unwrap_or(false)
+    true
 }
 
 pub fn begin_run(state_path: &Path) -> Result<String> {

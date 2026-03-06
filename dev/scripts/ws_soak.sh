@@ -62,18 +62,17 @@ run_with_retry() {
 
   for i in $(seq 1 "$ITERATIONS"); do
     echo "--- bridge/signer forced-fault iteration $i/$ITERATIONS ---"
-    run cargo test -p bifrost-bridge --offline ecdh_round_fails_on_invalid_locked_peer_response
-    run cargo test -p bifrost-bridge --offline outbound_queue_overflow_fails_round
-    run cargo test -p bifrost-bridge --offline resolve_failure_maps_timeout_code
+    run cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    run cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    run cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
   done
 
   echo "--- codec/signer crypto regression ---"
-  run cargo test -p bifrost-codec --offline bridge_envelope_rejects_invalid_version
+  run cargo test -p bifrost-codec --offline bridge_envelope_rejects_empty_request_id
   run cargo test -p bifrost-signer --offline invalid_locked_peer_response_fails_round_terminally
 
   echo "--- runtime smoke regression ---"
-  run_with_retry 3 cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194
-  run_with_retry 3 scripts/devnet.sh smoke
+  run_with_retry 3 cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --out-dir dev/data --relay ws://127.0.0.1:8194 --threshold 11 --count 15 --sign-iterations 20 --ecdh-iterations 20
 
   echo "ws soak completed: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } 2>&1 | tee "$OUT"

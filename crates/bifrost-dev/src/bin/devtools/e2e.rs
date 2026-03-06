@@ -86,11 +86,15 @@ fn run_node_flow(
     thread::sleep(Duration::from_secs(2));
 
     let alice_cfg = out_dir.join("bifrost-alice.json");
-    let peer = extract_first_peer(&alice_cfg)?;
+    let peers = extract_peers(&alice_cfg)?;
     run_bifrost_and_record(root, &alice_cfg, out_file, "status", &["status"])?;
     run_bifrost_and_record(root, &alice_cfg, out_file, "policies", &["policies"])?;
-    run_bifrost_and_record(root, &alice_cfg, out_file, "ping", &["ping", &peer])?;
-    run_bifrost_and_record(root, &alice_cfg, out_file, "onboard", &["onboard", &peer])?;
+    for peer in &peers {
+        run_bifrost_and_record(root, &alice_cfg, out_file, "ping", &["ping", peer])?;
+    }
+    for peer in &peers {
+        run_bifrost_and_record(root, &alice_cfg, out_file, "onboard", &["onboard", peer])?;
+    }
 
     let sign_output = run_bifrost_capture(
         root,
@@ -123,8 +127,15 @@ fn run_ecdh_flow(
     thread::sleep(Duration::from_secs(2));
 
     let alice_cfg = out_dir.join("bifrost-alice.json");
-    let peer = extract_first_peer(&alice_cfg)?;
-    let ecdh_output = run_bifrost_capture(root, &alice_cfg, &["ecdh", &peer])?;
+    let peers = extract_peers(&alice_cfg)?;
+    let target_peer = peers
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("missing peer for ecdh flow"))?;
+    for peer in &peers {
+        run_bifrost_and_record(root, &alice_cfg, out_file, "ping-ecdh", &["ping", peer])?;
+    }
+    let ecdh_output = run_bifrost_capture(root, &alice_cfg, &["ecdh", &target_peer])?;
     append_output(out_file, "ecdh", &ecdh_output)?;
     let secret = extract_last_hex_line(&ecdh_output, 64).context("invalid ecdh output")?;
     if secret.len() != 64 {
@@ -266,7 +277,7 @@ fn start_responders(
     Ok(processes)
 }
 
-fn extract_first_peer(config_path: &Path) -> Result<String> {
+fn extract_peers(config_path: &Path) -> Result<Vec<String>> {
     let raw = fs::read_to_string(config_path)
         .with_context(|| format!("read {}", config_path.display()))?;
     let parsed: Value =
@@ -283,12 +294,13 @@ fn extract_first_peer(config_path: &Path) -> Result<String> {
         })
         .collect::<Vec<_>>();
     peers.sort();
-    peers.into_iter().next().ok_or_else(|| {
-        anyhow!(
-            "failed to extract peer pubkey from {}",
+    if peers.is_empty() {
+        return Err(anyhow!(
+            "failed to extract peer pubkeys from {}",
             config_path.display()
-        )
-    })
+        ));
+    }
+    Ok(peers)
 }
 
 fn run_bifrost_and_record(
