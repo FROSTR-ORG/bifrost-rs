@@ -4,16 +4,38 @@ All notable changes to `bifrost-rs` should be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-06
+
+### Changed
+
+- Added `RouterPort` boundary in `bifrost-router` and refactored `bifrost-bridge-tokio` to consume router through the trait boundary.
+- Added explicit router request lifecycle phases (`created`, `awaiting_responses`, `completed`, `failed`, `expired`) and runtime request-phase query support.
+- Added structured lifecycle logging for accepted/rejected/failed operations in bridge runtime paths.
+- Hardened runtime clean-shutdown detection to avoid false dirty-restart volatility drops.
+- Updated stress harness and soak runner to current architecture (`bifrost-bridge-tokio` tests + `e2e-full` runtime stress).
+
+### Added
+
+- Architecture hardening implementation plan: `design/plans/plan-c-architecture-hardening-2026-03-06.md`.
+- Stress evidence artifact: `dev/audit/work/evidence/ws-soak-2026-03-06.txt`.
+
+### Fixed
+
+- `ws_soak` stale crate/test references after hard-cut crate renames.
+- Intermittent runtime stress failures (`nonce unavailable`) caused by over-strict restart-cleanliness checks.
+
+### Documentation
+
+- Remediated runtime/testing terminology drift across root docs and `docs/` to align on signer/router/platform-bridge architecture.
+
+## [0.2.0] - 2026-03-04
+
 ### Changed
 
 - Hard-cut runtime naming now reflects current crate boundaries:
   - `bifrost-router` (runtime-agnostic routing core)
   - `bifrost-bridge-tokio` / `bifrost-bridge-wasm` (platform bridge runtimes)
 - Documentation updated to use signer/router/bridge terminology consistently.
-
-## [0.2.0] - 2026-03-04
-
-### Changed
 
 - Hard-cut runtime architecture now centered on:
   - `bifrost-signer` (stateful cryptographic engine)

@@ -1,0 +1,2270 @@
+ws soak started: 2026-03-06T08:09:37Z
+iterations: 25
+$ dev/scripts/toolchain_preflight.sh --require-cargo
+toolchain preflight ok: cargo=cargo 1.93.1 (083ac5135 2025-12-15) rustc=rustc 1.93.1 (01f6ddf75 2026-02-11)
+--- bridge/signer forced-fault iteration 1/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+   Compiling tungstenite v0.26.2
+   Compiling tokio-rustls v0.26.4
+   Compiling bifrost-signer v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-signer)
+   Compiling tokio-tungstenite v0.26.2
+   Compiling async-wsocket v0.13.2
+   Compiling nostr-relay-pool v0.44.0
+   Compiling bifrost-router v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-router)
+   Compiling nostr-sdk v0.44.1
+   Compiling bifrost-bridge-tokio v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-bridge-tokio)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.80s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 2/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.67s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 3/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 4/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.85s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 5/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.15s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.63s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 6/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.63s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 7/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.72s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 8/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.64s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 9/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 10/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.66s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 11/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.69s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 12/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.63s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 13/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 14/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 15/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s
+
+--- bridge/signer forced-fault iteration 16/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.69s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 17/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.67s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 18/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.64s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 19/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.13s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.65s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 20/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.14s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.72s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 21/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.66s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 22/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.83s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 23/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.67s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 24/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.67s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- bridge/signer forced-fault iteration 25/25 ---
+$ cargo test -p bifrost-bridge-tokio --offline ecdh_round_fails_on_invalid_locked_peer_response
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test ecdh_round_fails_on_invalid_locked_peer_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.14s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-bridge-tokio --offline outbound_queue_overflow_fails_round
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 1 test
+test outbound_queue_overflow_fails_round ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test -p bifrost-bridge-tokio --offline inbound_duplicate_event_is_processed_once
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_bridge_tokio-367264058538e404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_dedupe_and_failures.rs (target/debug/deps/bridge_dedupe_and_failures-c9310cc9ccf2d77a)
+
+running 1 test
+test inbound_duplicate_event_is_processed_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.66s
+
+     Running tests/bridge_flow.rs (target/debug/deps/bridge_flow-2fdd9cbc29f0db74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/bridge_queues.rs (target/debug/deps/bridge_queues-4d87bb0e2db736f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+--- codec/signer crypto regression ---
+$ cargo test -p bifrost-codec --offline bridge_envelope_rejects_empty_request_id
+   Compiling syn v2.0.114
+   Compiling libc v0.2.180
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling ff v0.13.1
+   Compiling group v0.13.0
+   Compiling either v1.15.0
+   Compiling itertools v0.14.0
+   Compiling once_cell v1.21.3
+   Compiling zeroize_derive v1.4.3
+   Compiling serde_derive v1.0.228
+   Compiling zeroize v1.8.2
+   Compiling generic-array v0.14.7
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling der v0.7.10
+   Compiling serde v1.0.228
+   Compiling hmac v0.12.1
+   Compiling thiserror-impl v2.0.18
+   Compiling spki v0.7.3
+   Compiling pkcs8 v0.10.2
+   Compiling heapless v0.7.17
+   Compiling hkdf v0.12.4
+   Compiling thiserror v2.0.18
+   Compiling sec1 v0.7.3
+   Compiling cobs v0.3.0
+   Compiling crypto-bigint v0.5.5
+   Compiling thiserror-nostd-notrait-impl v1.0.57
+   Compiling thiserror-nostd-notrait v1.0.57
+   Compiling postcard v1.1.3
+   Compiling elliptic-curve v0.13.8
+   Compiling serdect v0.2.0
+   Compiling rfc6979 v0.4.0
+   Compiling signature v2.2.0
+   Compiling visibility v0.1.1
+   Compiling derive-getters v0.5.0
+   Compiling ecdsa v0.16.9
+   Compiling sha2 v0.10.9
+   Compiling frost-core-unofficial v2.2.0
+   Compiling k256 v0.13.4
+   Compiling frost-rerandomized-unofficial v2.2.0
+   Compiling frost-secp256k1-tr-unofficial v2.2.0
+   Compiling bifrost-core v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-core)
+   Compiling bifrost-codec v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-codec)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.11s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_codec-196dee30c9d2802a)
+
+running 1 test
+test bridge::tests::bridge_envelope_rejects_empty_request_id ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+$ cargo test -p bifrost-signer --offline invalid_locked_peer_response_fails_round_terminally
+   Compiling syn v2.0.114
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.5
+   Compiling synstructure v0.13.2
+   Compiling zeroize_derive v1.4.3
+   Compiling zerofrom-derive v0.1.6
+   Compiling zeroize v1.8.2
+   Compiling generic-array v0.14.7
+   Compiling crypto-common v0.1.7
+   Compiling zerofrom v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling serde_derive v1.0.228
+   Compiling yoke v0.8.1
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling zerovec-derive v0.11.2
+   Compiling zerovec v0.11.5
+   Compiling displaydoc v0.2.5
+   Compiling serde v1.0.228
+   Compiling der v0.7.10
+   Compiling hmac v0.12.1
+   Compiling thiserror-impl v2.0.18
+   Compiling thiserror v2.0.18
+   Compiling spki v0.7.3
+   Compiling tinystr v0.8.2
+   Compiling pkcs8 v0.10.2
+   Compiling icu_locale_core v2.1.1
+   Compiling cobs v0.3.0
+   Compiling sec1 v0.7.3
+   Compiling hkdf v0.12.4
+   Compiling heapless v0.7.17
+   Compiling zerotrie v0.2.3
+   Compiling potential_utf v0.1.4
+   Compiling crypto-bigint v0.5.5
+   Compiling thiserror-nostd-notrait-impl v1.0.57
+   Compiling thiserror-nostd-notrait v1.0.57
+   Compiling icu_provider v2.1.1
+   Compiling elliptic-curve v0.13.8
+   Compiling icu_collections v2.1.1
+   Compiling postcard v1.1.3
+   Compiling rfc6979 v0.4.0
+   Compiling serdect v0.2.0
+   Compiling signature v2.2.0
+   Compiling visibility v0.1.1
+   Compiling derive-getters v0.5.0
+   Compiling ecdsa v0.16.9
+   Compiling frost-core-unofficial v2.2.0
+   Compiling sha2 v0.10.9
+   Compiling k256 v0.13.4
+   Compiling frost-rerandomized-unofficial v2.2.0
+   Compiling icu_properties v2.1.2
+   Compiling icu_normalizer v2.1.1
+   Compiling block-padding v0.3.3
+   Compiling inout v0.1.4
+   Compiling idna_adapter v1.2.1
+   Compiling frost-secp256k1-tr-unofficial v2.2.0
+   Compiling idna v1.1.0
+   Compiling bifrost-core v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-core)
+   Compiling cipher v0.4.4
+   Compiling chacha20 v0.9.1
+   Compiling url v2.5.8
+   Compiling secp256k1 v0.29.1
+   Compiling bitcoin_hashes v0.14.1
+   Compiling frostr-utils v0.2.0 (/home/cmd/repos/bifrost-rs/crates/frostr-utils)
+   Compiling nostr v0.44.2
+   Compiling bifrost-codec v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-codec)
+   Compiling bifrost-signer v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-signer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.03s
+     Running unittests src/lib.rs (target/debug/deps/bifrost_signer-b3c22fb47e50332b)
+
+running 1 test
+test tests::invalid_locked_peer_response_fails_round_terminally ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s
+
+--- runtime smoke regression ---
+$ cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194 (attempt 1/3)
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running `target/debug/bifrost-devtools e2e-node --out-dir dev/data --relay 'ws://127.0.0.1:8194'`
+devnet material generated in dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+   Compiling bifrost-app v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-app)
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.65s
+Error: bifrost command failed (Some(1))
+stdout:
+2026-03-06T08:13:09.502749Z  WARN bifrost_bridge_tokio: operation rejected op_id=op-1 phase="failed" error=bridge internal failure: nonce unavailable
+2026-03-06T08:13:09.520218Z  INFO bifrost_bridge_tokio: relay event received event_id=72113f0dc145c973626a4492065b893b1bb84d57005c58f2ca6bf2ebf02bf815
+stderr:
+Error: bridge internal failure: bridge internal failure: nonce unavailable
+$ cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194 (attempt 2/3)
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.36
+   Compiling rustls-webpki v0.103.9
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.26.2
+   Compiling tokio-tungstenite v0.26.2
+   Compiling async-wsocket v0.13.2
+   Compiling nostr-relay-pool v0.44.0
+   Compiling tungstenite v0.24.0
+   Compiling nostr-sdk v0.44.1
+   Compiling bifrost-bridge-tokio v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-bridge-tokio)
+   Compiling bifrost-app v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-app)
+   Compiling tokio-tungstenite v0.24.0
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 30.70s
+     Running `target/debug/bifrost-devtools e2e-node --out-dir dev/data --relay 'ws://127.0.0.1:8194'`
+devnet material generated in dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+   Compiling bifrost-app v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-app)
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.39s
+Error: bifrost command failed (Some(1))
+stdout:
+2026-03-06T08:14:30.368278Z  WARN bifrost_bridge_tokio: operation rejected op_id=op-1 phase="failed" error=bridge internal failure: nonce unavailable
+stderr:
+Error: bridge internal failure: bridge internal failure: nonce unavailable
+$ cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194 (attempt 3/3)
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.36
+   Compiling rustls-webpki v0.103.9
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.26.2
+   Compiling tokio-tungstenite v0.26.2
+   Compiling async-wsocket v0.13.2
+   Compiling nostr-relay-pool v0.44.0
+   Compiling tungstenite v0.24.0
+   Compiling nostr-sdk v0.44.1
+   Compiling bifrost-bridge-tokio v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-bridge-tokio)
+   Compiling bifrost-app v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-app)
+   Compiling tokio-tungstenite v0.24.0
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.52s
+     Running `target/debug/bifrost-devtools e2e-node --out-dir dev/data --relay 'ws://127.0.0.1:8194'`
+devnet material generated in dev/data
+members: alice, bob, carol
+threshold: 2-of-3
+relay: ws://127.0.0.1:8194
+   Compiling bifrost-app v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-app)
+   Compiling bifrost-dev v0.2.0 (/home/cmd/repos/bifrost-rs/crates/bifrost-dev)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.00s
+Error: bifrost command failed (Some(1))
+stdout:
+2026-03-06T08:15:32.197707Z  WARN bifrost_bridge_tokio: operation rejected op_id=op-1 phase="failed" error=bridge internal failure: nonce unavailable
+stderr:
+Error: bridge internal failure: bridge internal failure: nonce unavailable
