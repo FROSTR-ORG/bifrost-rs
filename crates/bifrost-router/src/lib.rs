@@ -16,6 +16,16 @@ pub enum QueueOverflowPolicy {
     DropOldest,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestPhase {
+    Created,
+    AwaitingResponses,
+    Completed,
+    Failed,
+    Expired,
+}
+
 pub const DEFAULT_EXPIRE_TICK_MS: u64 = 1_000;
 pub const DEFAULT_COMMAND_QUEUE_CAPACITY: usize = 128;
 pub const DEFAULT_INBOUND_QUEUE_CAPACITY: usize = 4_096;
@@ -90,8 +100,40 @@ pub struct BridgeCore {
     seen_inbound_order: VecDeque<String>,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
+    request_phases: HashMap<String, RequestPhase>,
     last_expire_at_ms: u64,
     persistence_hint: PersistenceHint,
+}
+
+pub trait RouterPort {
+    type Error;
+
+    fn submit_command(
+        &mut self,
+        cmd: BridgeCommand,
+    ) -> std::result::Result<String, Self::Error>;
+    fn enqueue_inbound_event(&mut self, event: Event) -> bool;
+    fn tick(&mut self, now_unix_ms: u64);
+    fn drain_outbound_packets(&mut self) -> Vec<OutboundEvent>;
+    fn drain_completions(&mut self) -> Vec<CompletedOperation>;
+    fn drain_failures(&mut self) -> Vec<OperationFailure>;
+    fn fail_request(
+        &mut self,
+        request_id: String,
+        message: String,
+    ) -> std::result::Result<(), Self::Error>;
+    fn status(&self) -> DeviceStatus;
+    fn policies(&self) -> HashMap<String, PeerPolicy>;
+    fn snapshot_state(&self) -> DeviceState;
+    fn set_policy(
+        &mut self,
+        peer: String,
+        policy: PeerPolicy,
+    ) -> std::result::Result<(), Self::Error>;
+    fn take_persistence_hint(&mut self) -> PersistenceHint;
+    fn subscription_filters(&self) -> Result<Vec<Filter>>;
+    fn request_phase(&self, request_id: &str) -> Option<RequestPhase>;
+    fn request_phases(&self) -> HashMap<String, RequestPhase>;
 }
 
 impl BridgeCore {
@@ -107,6 +149,7 @@ impl BridgeCore {
             seen_inbound_order: VecDeque::new(),
             completions: VecDeque::new(),
             failures: VecDeque::new(),
+            request_phases: HashMap::new(),
             last_expire_at_ms: 0,
             persistence_hint: PersistenceHint::None,
         })
@@ -157,6 +200,8 @@ impl BridgeCore {
                     .latest_request_id
                     .clone()
                     .ok_or_else(|| BridgeCoreError::Internal("missing request id".to_string()))?;
+                self.request_phases
+                    .insert(request_id.clone(), RequestPhase::Created);
                 self.dispatch_effects(effects, Some(request_id.clone()));
                 Ok(request_id)
             }
@@ -290,6 +335,14 @@ impl BridgeCore {
         self.failures.drain(..).collect()
     }
 
+    pub fn request_phase(&self, request_id: &str) -> Option<RequestPhase> {
+        self.request_phases.get(request_id).copied()
+    }
+
+    pub fn request_phases(&self) -> HashMap<String, RequestPhase> {
+        self.request_phases.clone()
+    }
+
     pub fn fail_request(
         &mut self,
         request_id: String,
@@ -350,6 +403,17 @@ impl BridgeCore {
     fn dispatch_effects(&mut self, effects: SignerEffects, request_hint: Option<String>) {
         self.persistence_hint = self.persistence_hint.merge(effects.persistence_hint);
         let request_id = request_hint.or(effects.latest_request_id.clone());
+        let has_outbound = !effects.outbound.is_empty();
+
+        if let Some(request_id) = request_id.as_ref() {
+            self.request_phases
+                .entry(request_id.clone())
+                .or_insert(RequestPhase::Created);
+            if has_outbound {
+                self.request_phases
+                    .insert(request_id.clone(), RequestPhase::AwaitingResponses);
+            }
+        }
 
         for event in effects.outbound {
             if let Some(failed_request_id) = self.enqueue_outbound(QueuedOutbound {
@@ -364,10 +428,14 @@ impl BridgeCore {
         }
 
         for completion in effects.completions {
+            self.request_phases
+                .insert(completion.request_id().to_string(), RequestPhase::Completed);
             self.completions.push_back(completion);
         }
 
         for failure in effects.failures {
+            self.request_phases
+                .insert(failure.request_id.clone(), RequestPhase::Failed);
             self.failures.push_back(failure);
         }
     }
@@ -416,6 +484,81 @@ impl BridgeCore {
             message,
             failed_peer: None,
         });
+    }
+}
+
+impl RouterPort for BridgeCore {
+    type Error = BridgeCoreError;
+
+    fn submit_command(
+        &mut self,
+        cmd: BridgeCommand,
+    ) -> std::result::Result<String, Self::Error> {
+        BridgeCore::submit_command(self, cmd)
+    }
+
+    fn enqueue_inbound_event(&mut self, event: Event) -> bool {
+        BridgeCore::enqueue_inbound_event(self, event)
+    }
+
+    fn tick(&mut self, now_unix_ms: u64) {
+        BridgeCore::tick(self, now_unix_ms)
+    }
+
+    fn drain_outbound_packets(&mut self) -> Vec<OutboundEvent> {
+        BridgeCore::drain_outbound_packets(self)
+    }
+
+    fn drain_completions(&mut self) -> Vec<CompletedOperation> {
+        BridgeCore::drain_completions(self)
+    }
+
+    fn drain_failures(&mut self) -> Vec<OperationFailure> {
+        BridgeCore::drain_failures(self)
+    }
+
+    fn fail_request(
+        &mut self,
+        request_id: String,
+        message: String,
+    ) -> std::result::Result<(), Self::Error> {
+        BridgeCore::fail_request(self, request_id, message)
+    }
+
+    fn status(&self) -> DeviceStatus {
+        BridgeCore::status(self)
+    }
+
+    fn policies(&self) -> HashMap<String, PeerPolicy> {
+        BridgeCore::policies(self)
+    }
+
+    fn snapshot_state(&self) -> DeviceState {
+        BridgeCore::snapshot_state(self)
+    }
+
+    fn set_policy(
+        &mut self,
+        peer: String,
+        policy: PeerPolicy,
+    ) -> std::result::Result<(), Self::Error> {
+        BridgeCore::set_policy(self, peer, policy)
+    }
+
+    fn take_persistence_hint(&mut self) -> PersistenceHint {
+        BridgeCore::take_persistence_hint(self)
+    }
+
+    fn subscription_filters(&self) -> Result<Vec<Filter>> {
+        BridgeCore::subscription_filters(self)
+    }
+
+    fn request_phase(&self, request_id: &str) -> Option<RequestPhase> {
+        BridgeCore::request_phase(self, request_id)
+    }
+
+    fn request_phases(&self) -> HashMap<String, RequestPhase> {
+        BridgeCore::request_phases(self)
     }
 }
 
