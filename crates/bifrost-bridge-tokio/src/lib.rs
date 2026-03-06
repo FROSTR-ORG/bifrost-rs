@@ -5,7 +5,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bifrost_core::types::PeerPolicy;
-use bifrost_router::{BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore};
+use bifrost_router::{
+    BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore, RequestPhase,
+    RouterPort,
+};
 use bifrost_signer::{
     CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode,
     PersistenceHint, SigningDevice,
@@ -117,6 +120,10 @@ enum BridgeCommand {
     },
     TakePersistenceHint {
         reply: oneshot::Sender<std::result::Result<PersistenceHint, BridgeError>>,
+    },
+    RequestPhase {
+        request_id: String,
+        reply: oneshot::Sender<std::result::Result<Option<RequestPhase>, BridgeError>>,
     },
     Shutdown,
 }
@@ -264,6 +271,9 @@ impl Bridge {
                             }
                             BridgeCommand::TakePersistenceHint { reply } => {
                                 let _ = reply.send(Ok(core.take_persistence_hint()));
+                            }
+                            BridgeCommand::RequestPhase { request_id, reply } => {
+                                let _ = reply.send(Ok(core.request_phase(&request_id)));
                             }
                         }
                     }
@@ -463,6 +473,21 @@ impl Bridge {
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
     }
 
+    pub async fn request_phase(
+        &self,
+        request_id: String,
+    ) -> std::result::Result<Option<RequestPhase>, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::RequestPhase {
+                request_id,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
     pub async fn shutdown(mut self) {
         let _ = self.cmd_tx.send(BridgeCommand::Shutdown).await;
         if let Some(handle) = self.join_handle.take() {
@@ -477,7 +502,7 @@ impl Bridge {
 }
 
 fn handle_operation_command(
-    core: &mut BridgeCore,
+    core: &mut impl RouterPort<Error = bifrost_router::BridgeCoreError>,
     waiters: &mut HashMap<String, OperationWaiter>,
     op_id: String,
     completion: oneshot::Sender<std::result::Result<CompletedOperation, BridgeError>>,
@@ -485,16 +510,28 @@ fn handle_operation_command(
 ) {
     match core.submit_command(input) {
         Ok(request_id) => {
+            info!(
+                op_id = %op_id,
+                request_id = %request_id,
+                phase = "created",
+                "operation accepted"
+            );
             waiters.insert(request_id, OperationWaiter { op_id, completion });
         }
         Err(err) => {
+            warn!(
+                op_id = %op_id,
+                phase = "failed",
+                error = %err,
+                "operation rejected"
+            );
             let _ = completion.send(Err(BridgeError::Internal(err.to_string())));
         }
     }
 }
 
 async fn flush_router<A: RelayAdapter>(
-    core: &mut BridgeCore,
+    core: &mut impl RouterPort<Error = bifrost_router::BridgeCoreError>,
     adapter: &mut A,
     waiters: &mut HashMap<String, OperationWaiter>,
 ) {
@@ -510,6 +547,12 @@ async fn flush_router<A: RelayAdapter>(
             if let Err(err) = adapter.publish(queued.event).await {
                 warn!(%err, "bridge publish failed");
                 if let Some(request_id) = queued.request_id {
+                    warn!(
+                        request_id = %request_id,
+                        phase = "failed",
+                        code = "relay_publish_failed",
+                        "operation failed during publish"
+                    );
                     let _ = core.fail_request(request_id, format!("relay publish failed: {err}"));
                 }
             }
@@ -591,6 +634,7 @@ fn resolve_failure(waiters: &mut HashMap<String, OperationWaiter>, failure: Oper
         warn!(
             op_id = %waiter.op_id,
             request_id = %request_id,
+            phase = "failed",
             code = ?failure.code,
             "bridge operation failed"
         );
