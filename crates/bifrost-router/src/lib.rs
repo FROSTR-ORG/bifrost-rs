@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use bifrost_core::types::PeerPolicy;
 use bifrost_signer::{
     CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode,
-    PendingOpType, SignerEffects, SignerInput, SigningDevice,
+    PendingOpType, PersistenceHint, SignerEffects, SignerInput, SigningDevice,
 };
 use nostr::{Event, Filter};
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ impl Default for BridgeConfig {
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
     Sign { message: [u8; 32] },
-    Ecdh { pubkey: [u8; 33] },
+    Ecdh { pubkey: [u8; 32] },
     Ping { peer: String },
     Onboard { peer: String },
 }
@@ -91,6 +91,7 @@ pub struct BridgeCore {
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
     last_expire_at_ms: u64,
+    persistence_hint: PersistenceHint,
 }
 
 impl BridgeCore {
@@ -107,6 +108,7 @@ impl BridgeCore {
             completions: VecDeque::new(),
             failures: VecDeque::new(),
             last_expire_at_ms: 0,
+            persistence_hint: PersistenceHint::None,
         })
     }
 
@@ -252,7 +254,15 @@ impl BridgeCore {
     ) -> std::result::Result<(), BridgeCoreError> {
         self.signer
             .set_peer_policy(&peer, policy)
-            .map_err(|e| BridgeCoreError::Internal(e.to_string()))
+            .map_err(|e| BridgeCoreError::Internal(e.to_string()))?;
+        self.persistence_hint = self.persistence_hint.merge(PersistenceHint::Immediate);
+        Ok(())
+    }
+
+    pub fn take_persistence_hint(&mut self) -> PersistenceHint {
+        let hint = self.persistence_hint;
+        self.persistence_hint = PersistenceHint::None;
+        hint
     }
 
     pub fn drain_outbound_events(&mut self) -> Vec<Event> {
@@ -338,6 +348,7 @@ impl BridgeCore {
     }
 
     fn dispatch_effects(&mut self, effects: SignerEffects, request_hint: Option<String>) {
+        self.persistence_hint = self.persistence_hint.merge(effects.persistence_hint);
         let request_id = request_hint.or(effects.latest_request_id.clone());
 
         for event in effects.outbound {
@@ -482,7 +493,7 @@ mod tests {
             PendingOpType::Sign
         ));
         assert!(matches!(
-            pending_type_for_command(&BridgeCommand::Ecdh { pubkey: [2u8; 33] }),
+            pending_type_for_command(&BridgeCommand::Ecdh { pubkey: [2u8; 32] }),
             PendingOpType::Ecdh
         ));
         assert!(matches!(

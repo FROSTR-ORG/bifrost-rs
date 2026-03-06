@@ -19,6 +19,7 @@ use frostr_utils::{
     validate_sign_session,
 };
 use nostr::{Event, Filter};
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 mod crypto;
@@ -29,9 +30,8 @@ use crypto::{decrypt_content_from_peer, encrypt_content_for_peer};
 pub use error::{Result, SignerError};
 use event_io::{build_signed_event, event_content, event_kind, event_pubkey_xonly};
 use util::{
-    decode_33, decode_member_index, decode_member_pubkey, decode_pubkey33,
-    is_valid_compressed_pubkey_hex, now_unix_secs, parse_request_id_components, shuffle_strings,
-    xonly_from_compressed,
+    decode_32, decode_member_index, decode_member_pubkey, decode_pubkey32, is_valid_pubkey32_hex,
+    now_unix_secs, parse_request_id_components, shuffle_strings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -94,6 +94,9 @@ pub struct DeviceState {
     pub nonce_pool: NoncePool,
     pub replay_cache: HashMap<String, u64>,
     pub ecdh_cache: HashMap<String, EcdhCacheEntry>,
+    pub ecdh_cache_order: VecDeque<String>,
+    pub sig_cache: HashMap<String, SigCacheEntry>,
+    pub sig_cache_order: VecDeque<String>,
     pub policies: HashMap<String, PeerPolicy>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
     pub pending_operations: HashMap<String, PendingOperation>,
@@ -103,7 +106,7 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
         let mut nonce_pool =
@@ -113,6 +116,9 @@ impl DeviceState {
             nonce_pool,
             replay_cache: HashMap::new(),
             ecdh_cache: HashMap::new(),
+            ecdh_cache_order: VecDeque::new(),
+            sig_cache: HashMap::new(),
+            sig_cache_order: VecDeque::new(),
             policies: HashMap::new(),
             remote_scoped_policies: HashMap::new(),
             pending_operations: HashMap::new(),
@@ -120,6 +126,12 @@ impl DeviceState {
             last_active: now_unix_secs(),
             version: Self::VERSION,
         }
+    }
+
+    pub fn discard_volatile_for_dirty_restart(&mut self, group_member_idx: u16, share_seckey: [u8; 32]) {
+        self.nonce_pool = NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
+        self.pending_operations.clear();
+        self.last_active = now_unix_secs();
     }
 }
 
@@ -135,6 +147,10 @@ pub struct DeviceConfig {
     pub state_save_interval_secs: u64,
     pub event_kind: u64,
     pub peer_selection_strategy: PeerSelectionStrategy,
+    pub ecdh_cache_capacity: usize,
+    pub ecdh_cache_ttl_secs: u64,
+    pub sig_cache_capacity: usize,
+    pub sig_cache_ttl_secs: u64,
 }
 
 impl Default for DeviceConfig {
@@ -150,6 +166,10 @@ impl Default for DeviceConfig {
             state_save_interval_secs: 30,
             event_kind: 20_000,
             peer_selection_strategy: PeerSelectionStrategy::DeterministicSorted,
+            ecdh_cache_capacity: 256,
+            ecdh_cache_ttl_secs: 300,
+            sig_cache_capacity: 256,
+            sig_cache_ttl_secs: 120,
         }
     }
 }
@@ -250,7 +270,7 @@ pub enum SignerInput {
         message: [u8; 32],
     },
     BeginEcdh {
-        pubkey: [u8; 33],
+        pubkey: [u8; 32],
     },
     BeginPing {
         peer: String,
@@ -277,6 +297,26 @@ pub struct SignerEffects {
     pub completions: Vec<CompletedOperation>,
     pub failures: Vec<OperationFailure>,
     pub latest_request_id: Option<String>,
+    pub persistence_hint: PersistenceHint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PersistenceHint {
+    #[default]
+    None,
+    Batch,
+    Immediate,
+}
+
+impl PersistenceHint {
+    pub fn merge(self, other: PersistenceHint) -> PersistenceHint {
+        use PersistenceHint::{Batch, Immediate, None};
+        match (self, other) {
+            (Immediate, _) | (_, Immediate) => Immediate,
+            (Batch, _) | (_, Batch) => Batch,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,8 +338,17 @@ pub struct OperationFailure {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EcdhCacheEntry {
     pub key_hex: String,
-    pub value_hex: String,
+    pub shared_secret: [u8; 32],
     pub stored_at: u64,
+    pub last_accessed_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigCacheEntry {
+    pub key_hex: String,
+    pub signatures_hex: Vec<String>,
+    pub stored_at: u64,
+    pub last_accessed_at: u64,
 }
 
 pub struct SigningDevice {
@@ -307,7 +356,6 @@ pub struct SigningDevice {
     share: SharePackage,
     peers: Vec<String>,
     member_idx_by_pubkey: HashMap<String, u16>,
-    xonly_to_peer33: HashMap<String, String>,
     share_public_key_hex: String,
     state: DeviceState,
     config: DeviceConfig,
@@ -315,6 +363,7 @@ pub struct SigningDevice {
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
     latest_request_id: Option<String>,
+    boot_nonce: u64,
 }
 
 impl SigningDevice {
@@ -328,36 +377,44 @@ impl SigningDevice {
         if group.threshold == 0 || group.members.is_empty() {
             return Err(SignerError::InvalidConfig("invalid group".to_string()));
         }
+        if state.version != DeviceState::VERSION {
+            return Err(SignerError::StateCorrupted(format!(
+                "unsupported device state version {} (expected {})",
+                state.version,
+                DeviceState::VERSION
+            )));
+        }
 
         let share_idx = share.idx;
         let share_public_key_hex = decode_member_pubkey(&group, share_idx)?;
-        let local_xonly = xonly_from_compressed(&share_public_key_hex)?;
-
         let mut member_idx_by_pubkey = HashMap::new();
-        let mut xonly_to_peer33 = HashMap::new();
         for peer in &peers {
-            if !is_valid_compressed_pubkey_hex(peer) {
+            if !is_valid_pubkey32_hex(peer) {
                 return Err(SignerError::InvalidConfig(
-                    "peer public keys must be compressed secp256k1 hex".to_string(),
+                    "peer public keys must be x-only secp256k1 hex".to_string(),
                 ));
             }
             let idx = decode_member_index(&group.members, peer)?;
             member_idx_by_pubkey.insert(peer.clone(), idx);
-            xonly_to_peer33.insert(xonly_from_compressed(peer)?, peer.clone());
             state.nonce_pool.init_peer(idx);
         }
-        xonly_to_peer33.insert(local_xonly, share_public_key_hex.clone());
 
         state.nonce_pool.init_peer(share_idx);
         state.last_active = now_unix_secs();
         let device_id = DeviceId::new(format!("{}-{}", share_public_key_hex, share_idx));
+        state.ecdh_cache_order
+            .retain(|k| state.ecdh_cache.contains_key(k));
+        state.sig_cache_order
+            .retain(|k| state.sig_cache.contains_key(k));
+        let mut boot_bytes = [0u8; 8];
+        OsRng.fill_bytes(&mut boot_bytes);
+        let boot_nonce = u64::from_le_bytes(boot_bytes);
 
         Ok(Self {
             group,
             share,
             peers,
             member_idx_by_pubkey,
-            xonly_to_peer33,
             share_public_key_hex: share_public_key_hex.clone(),
             state,
             config,
@@ -365,6 +422,7 @@ impl SigningDevice {
             completions: VecDeque::new(),
             failures: VecDeque::new(),
             latest_request_id: None,
+            boot_nonce,
         })
     }
 
@@ -390,12 +448,99 @@ impl SigningDevice {
         self.latest_request_id.clone()
     }
 
+    fn ecdh_cache_get(&mut self, target: [u8; 32], now: u64) -> Option<[u8; 32]> {
+        let key = hex::encode(target);
+        self.state
+            .ecdh_cache
+            .retain(|_, entry| now.saturating_sub(entry.stored_at) <= self.config.ecdh_cache_ttl_secs);
+        self.state
+            .ecdh_cache_order
+            .retain(|k| self.state.ecdh_cache.contains_key(k));
+        let entry = self.state.ecdh_cache.get_mut(&key)?;
+        entry.last_accessed_at = now;
+        Self::touch_lru_key(&mut self.state.ecdh_cache_order, &key);
+        Some(entry.shared_secret)
+    }
+
+    fn ecdh_cache_put(&mut self, target: [u8; 32], secret: [u8; 32], now: u64) {
+        let key = hex::encode(target);
+        self.state.ecdh_cache.insert(
+            key.clone(),
+            EcdhCacheEntry {
+                key_hex: key.clone(),
+                shared_secret: secret,
+                stored_at: now,
+                last_accessed_at: now,
+            },
+        );
+        Self::touch_lru_key(&mut self.state.ecdh_cache_order, &key);
+        Self::evict_lru(
+            &mut self.state.ecdh_cache,
+            &mut self.state.ecdh_cache_order,
+            self.config.ecdh_cache_capacity,
+        );
+    }
+
+    fn sig_cache_get(&mut self, message: [u8; 32], now: u64) -> Option<Vec<[u8; 64]>> {
+        let key = hex::encode(message);
+        self.state
+            .sig_cache
+            .retain(|_, entry| now.saturating_sub(entry.stored_at) <= self.config.sig_cache_ttl_secs);
+        self.state
+            .sig_cache_order
+            .retain(|k| self.state.sig_cache.contains_key(k));
+        let entry = self.state.sig_cache.get_mut(&key)?;
+        entry.last_accessed_at = now;
+        Self::touch_lru_key(&mut self.state.sig_cache_order, &key);
+        let mut out = Vec::with_capacity(entry.signatures_hex.len());
+        for hex_sig in &entry.signatures_hex {
+            let bytes = hex::decode(hex_sig).ok()?;
+            if bytes.len() != 64 {
+                return None;
+            }
+            let mut sig = [0u8; 64];
+            sig.copy_from_slice(&bytes);
+            out.push(sig);
+        }
+        Some(out)
+    }
+
+    fn sig_cache_put(&mut self, message: [u8; 32], signatures: Vec<[u8; 64]>, now: u64) {
+        let key = hex::encode(message);
+        self.state.sig_cache.insert(
+            key.clone(),
+            SigCacheEntry {
+                key_hex: key.clone(),
+                signatures_hex: signatures.into_iter().map(hex::encode).collect(),
+                stored_at: now,
+                last_accessed_at: now,
+            },
+        );
+        Self::touch_lru_key(&mut self.state.sig_cache_order, &key);
+        Self::evict_lru(
+            &mut self.state.sig_cache,
+            &mut self.state.sig_cache_order,
+            self.config.sig_cache_capacity,
+        );
+    }
+
+    fn touch_lru_key(order: &mut VecDeque<String>, key: &str) {
+        order.retain(|k| k != key);
+        order.push_back(key.to_string());
+    }
+
+    fn evict_lru<V>(map: &mut HashMap<String, V>, order: &mut VecDeque<String>, capacity: usize) {
+        while map.len() > capacity {
+            if let Some(oldest) = order.pop_front() {
+                map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
     pub fn subscription_filters(&self) -> Result<Vec<Filter>> {
-        let mut authors = self
-            .peers
-            .iter()
-            .filter_map(|p| xonly_from_compressed(p).ok())
-            .collect::<Vec<_>>();
+        let mut authors = self.peers.clone();
         authors.sort_unstable();
         authors.dedup();
 
@@ -415,14 +560,13 @@ impl SigningDevice {
         }
 
         let sender_xonly = event_pubkey_xonly(event)?;
-        let sender = self
-            .xonly_to_peer33
-            .get(&sender_xonly)
-            .cloned()
-            .ok_or_else(|| SignerError::UnknownPeer(sender_xonly.clone()))?;
-        if sender == self.share_public_key_hex {
+        if sender_xonly == self.share_public_key_hex {
             return Ok(Vec::new());
         }
+        if !self.member_idx_by_pubkey.contains_key(&sender_xonly) {
+            return Err(SignerError::UnknownPeer(sender_xonly));
+        }
+        let sender = sender_xonly;
 
         let envelope = self.decrypt_event(event, &sender)?;
         let now = now_unix_secs();
@@ -461,6 +605,17 @@ impl SigningDevice {
     }
 
     pub fn initiate_sign(&mut self, message: [u8; 32]) -> Result<Vec<Event>> {
+        let now = now_unix_secs();
+        let request_id = self.next_request_id();
+        self.latest_request_id = Some(request_id.clone());
+        if let Some(signatures) = self.sig_cache_get(message, now) {
+            self.completions.push_back(CompletedOperation::Sign {
+                request_id,
+                signatures,
+            });
+            return Ok(Vec::new());
+        }
+
         let needed = self.group.threshold.saturating_sub(1) as usize;
         let selected = self.select_locked_peers(needed)?;
 
@@ -549,8 +704,6 @@ impl SigningDevice {
         )
         .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
-        let request_id = self.next_request_id();
-        let now = now_unix_secs();
         self.state.pending_operations.insert(
             request_id.clone(),
             PendingOperation {
@@ -577,7 +730,18 @@ impl SigningDevice {
         self.encrypt_for_peers(&selected, &envelope)
     }
 
-    pub fn initiate_ecdh(&mut self, target: [u8; 33]) -> Result<Vec<Event>> {
+    pub fn initiate_ecdh(&mut self, target: [u8; 32]) -> Result<Vec<Event>> {
+        let now = now_unix_secs();
+        let request_id = self.next_request_id();
+        self.latest_request_id = Some(request_id.clone());
+        if let Some(shared_secret) = self.ecdh_cache_get(target, now) {
+            self.completions.push_back(CompletedOperation::Ecdh {
+                request_id,
+                shared_secret,
+            });
+            return Ok(Vec::new());
+        }
+
         let needed = self.group.threshold.saturating_sub(1) as usize;
         let selected = self.select_locked_peers(needed)?;
 
@@ -596,13 +760,10 @@ impl SigningDevice {
 
         let local_pkg = ecdh_create_from_share(&members, &self.share, &[target])
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
-        let request_id = self.next_request_id();
-        self.latest_request_id = Some(request_id.clone());
-        let now = now_unix_secs();
-
         if needed == 0 {
             let shared_secret = ecdh_finalize(&[local_pkg], target)
                 .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+            self.ecdh_cache_put(target, shared_secret, now);
             self.completions.push_back(CompletedOperation::Ecdh {
                 request_id,
                 shared_secret,
@@ -727,24 +888,32 @@ impl SigningDevice {
             SignerInput::BeginSign { message } => {
                 effects.outbound = self.initiate_sign(message)?;
                 effects.latest_request_id = self.latest_request_id();
+                effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::BeginEcdh { pubkey } => {
                 effects.outbound = self.initiate_ecdh(pubkey)?;
                 effects.latest_request_id = self.latest_request_id();
+                effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::BeginPing { peer } => {
                 effects.outbound = self.initiate_ping(&peer)?;
                 effects.latest_request_id = self.latest_request_id();
+                effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::BeginOnboard { peer } => {
                 effects.outbound = self.initiate_onboard(&peer)?;
                 effects.latest_request_id = self.latest_request_id();
+                effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::ProcessEvent { event } => {
                 effects.outbound = self.process_event(&event)?;
+                effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::Expire { now } => {
                 effects.failures.extend(self.expire_stale(now));
+                if !effects.failures.is_empty() {
+                    effects.persistence_hint = PersistenceHint::Batch;
+                }
             }
             SignerInput::FailRequest {
                 request_id,
@@ -752,6 +921,7 @@ impl SigningDevice {
                 message,
             } => {
                 self.fail_request(&request_id, code, message);
+                effects.persistence_hint = PersistenceHint::Batch;
             }
         }
         effects.completions.extend(self.take_completions());
@@ -1159,9 +1329,11 @@ impl SigningDevice {
                         let mut all = Vec::with_capacity(1 + responses.len());
                         all.push(local_pkg.clone());
                         all.extend(responses.iter().cloned());
-                        let target = decode_pubkey33(target)?;
+                        let target_key = target.clone();
+                        let target = decode_pubkey32(&target_key)?;
                         let shared_secret = ecdh_finalize(&all, target)
                             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+                        self.ecdh_cache_put(target, shared_secret, now);
                         completion = Some(CompletedOperation::Ecdh {
                             request_id: request_id.clone(),
                             shared_secret,
@@ -1200,6 +1372,13 @@ impl SigningDevice {
                     if partials.len() >= op.threshold {
                         let signatures = sign_finalize(&self.group, session, partials)
                             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+                        if let Some(message) = session.hashes.first().copied() {
+                            self.sig_cache_put(
+                                message,
+                                signatures.iter().map(|s| s.signature).collect(),
+                                now,
+                            );
+                        }
                         completion = Some(CompletedOperation::Sign {
                             request_id: request_id.clone(),
                             signatures: signatures.into_iter().map(|s| s.signature).collect(),
@@ -1312,7 +1491,7 @@ impl SigningDevice {
         peer: &str,
         profile: PeerScopedPolicyProfile,
     ) -> Result<()> {
-        let local = decode_33(&self.share_public_key_hex)?;
+        let local = decode_32(&self.share_public_key_hex)?;
         if profile.for_peer != local {
             return Ok(());
         }
@@ -1326,7 +1505,7 @@ impl SigningDevice {
         let now = now_unix_secs();
         let policy = self.state.policies.get(peer).cloned().unwrap_or_default();
         Ok(PeerScopedPolicyProfile {
-            for_peer: decode_33(peer)?,
+            for_peer: decode_32(peer)?,
             revision: now,
             updated: now,
             block_all: policy.block_all,
@@ -1341,7 +1520,7 @@ impl SigningDevice {
                 "request id must not be empty".to_string(),
             ));
         }
-        let (issued_at, _, _) = parse_request_id_components(request_id)
+        let (issued_at, _, _, _) = parse_request_id_components(request_id)
             .ok_or_else(|| SignerError::InvalidRequest("invalid request id format".to_string()))?;
         if issued_at > now.saturating_add(self.config.max_future_skew_secs) {
             return Err(SignerError::InvalidRequest(
@@ -1382,9 +1561,10 @@ impl SigningDevice {
 
     fn next_request_id(&mut self) -> String {
         let id = format!(
-            "{}-{}-{}",
+            "{}-{}-{}-{}",
             now_unix_secs(),
             self.share.idx,
+            self.boot_nonce,
             self.state.request_seq
         );
         self.state.request_seq = self.state.request_seq.saturating_add(1);
@@ -1419,7 +1599,7 @@ mod tests {
             .members
             .iter()
             .filter(|member| member.idx != local_share.idx)
-            .map(|member| hex::encode(member.pubkey))
+            .map(|member| hex::encode(&member.pubkey[1..]))
             .collect::<Vec<_>>();
 
         let signer = SigningDevice::new(
@@ -1485,7 +1665,10 @@ mod tests {
         let local_pubkey =
             decode_member_pubkey(&fixture.group, fixture.local_share.idx).expect("local pubkey");
         let now = now_unix_secs();
-        let request_id = format!("{now}-{}-1", fixture.local_share.idx);
+        let request_id = format!(
+            "{now}-{}-{}-1",
+            fixture.local_share.idx, fixture.signer.boot_nonce
+        );
 
         fixture.signer.state.pending_operations.insert(
             request_id.clone(),

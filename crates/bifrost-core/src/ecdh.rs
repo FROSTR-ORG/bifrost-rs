@@ -8,14 +8,14 @@ use crate::types::{Bytes32, Bytes33, EcdhEntry, EcdhPackage, SharePackage};
 pub fn create_ecdh_package(
     members: &[u16],
     share: &SharePackage,
-    ecdh_pks: &[Bytes33],
+    ecdh_pks: &[Bytes32],
 ) -> CoreResult<EcdhPackage> {
     let sk = SecretKey::from_slice(&share.seckey).map_err(|_| CoreError::InvalidScalar)?;
     let scalar = *sk.to_nonzero_scalar().as_ref();
     let mut entries = Vec::with_capacity(ecdh_pks.len());
 
     for ecdh_pk in ecdh_pks {
-        let point = point_from_bytes(*ecdh_pk)?;
+        let point = point_from_pubkey32(*ecdh_pk)?;
         let shared = (ProjectivePoint::from(point) * scalar).to_affine();
 
         let mut keyshare = [0u8; 33];
@@ -34,7 +34,7 @@ pub fn create_ecdh_package(
     })
 }
 
-pub fn combine_ecdh_packages(pkgs: &[EcdhPackage], ecdh_pk: Bytes33) -> CoreResult<Bytes32> {
+pub fn combine_ecdh_packages(pkgs: &[EcdhPackage], ecdh_pk: Bytes32) -> CoreResult<Bytes32> {
     if pkgs.is_empty() {
         return Err(CoreError::EmptyMembers);
     }
@@ -60,12 +60,20 @@ pub fn combine_ecdh_packages(pkgs: &[EcdhPackage], ecdh_pk: Bytes33) -> CoreResu
     Ok(hasher.finalize().into())
 }
 
-pub fn local_pubkey_from_share(share: &SharePackage) -> CoreResult<Bytes33> {
+pub fn local_pubkey_from_share(share: &SharePackage) -> CoreResult<Bytes32> {
     let sk = SecretKey::from_slice(&share.seckey).map_err(|_| CoreError::InvalidScalar)?;
-    let ep = sk.public_key().to_encoded_point(true);
-    let mut out = [0u8; 33];
-    out.copy_from_slice(ep.as_bytes());
+    let ep = sk.public_key().to_encoded_point(false);
+    let x = ep.x().ok_or(CoreError::InvalidPubkey)?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(x);
     Ok(out)
+}
+
+fn point_from_pubkey32(bytes: Bytes32) -> CoreResult<AffinePoint> {
+    let mut compressed = [0u8; 33];
+    compressed[0] = 0x02;
+    compressed[1..].copy_from_slice(&bytes);
+    point_from_bytes(compressed)
 }
 
 fn point_from_bytes(bytes: Bytes33) -> CoreResult<AffinePoint> {
@@ -86,6 +94,6 @@ mod tests {
             seckey: [11; 32],
         };
         let pk = local_pubkey_from_share(&share).expect("pubkey");
-        assert_eq!(pk.len(), 33);
+        assert_eq!(pk.len(), 32);
     }
 }

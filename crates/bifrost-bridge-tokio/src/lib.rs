@@ -6,7 +6,10 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bifrost_core::types::PeerPolicy;
 use bifrost_router::{BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore};
-use bifrost_signer::{CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode, SigningDevice};
+use bifrost_signer::{
+    CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode,
+    PersistenceHint, SigningDevice,
+};
 use nostr::{Event, Filter};
 use nostr_sdk::{Client, RelayPoolNotification};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -85,7 +88,7 @@ enum BridgeCommand {
     },
     Ecdh {
         op_id: String,
-        pubkey: [u8; 33],
+        pubkey: [u8; 32],
         completion: oneshot::Sender<std::result::Result<CompletedOperation, BridgeError>>,
     },
     Ping {
@@ -111,6 +114,9 @@ enum BridgeCommand {
         peer: String,
         policy: PeerPolicy,
         reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
+    },
+    TakePersistenceHint {
+        reply: oneshot::Sender<std::result::Result<PersistenceHint, BridgeError>>,
     },
     Shutdown,
 }
@@ -256,6 +262,9 @@ impl Bridge {
                                     .map_err(|e| BridgeError::Internal(e.to_string()));
                                 let _ = reply.send(result);
                             }
+                            BridgeCommand::TakePersistenceHint { reply } => {
+                                let _ = reply.send(Ok(core.take_persistence_hint()));
+                            }
                         }
                     }
                     inbound = adapter.next_event() => {
@@ -328,7 +337,7 @@ impl Bridge {
 
     pub async fn ecdh(
         &self,
-        pubkey: [u8; 33],
+        pubkey: [u8; 32],
         timeout: Duration,
     ) -> std::result::Result<EcdhResult, BridgeError> {
         let (tx, rx) = oneshot::channel();
@@ -440,6 +449,15 @@ impl Bridge {
                 policy,
                 reply: tx,
             })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn take_persistence_hint(&self) -> std::result::Result<PersistenceHint, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::TakePersistenceHint { reply: tx })
             .await
             .map_err(|_| BridgeError::CommandChannelClosed)?;
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?

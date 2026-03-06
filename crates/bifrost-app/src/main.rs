@@ -3,11 +3,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_app::runtime::{
-    DeviceLock, EncryptedFileStore, load_config, load_or_init_signer, load_share,
+    DeviceLock, EncryptedFileStore, begin_run, complete_clean_run, load_config,
+    load_or_init_signer, load_share,
 };
 use bifrost_bridge_tokio::{Bridge, BridgeConfig, NostrSdkAdapter};
 use bifrost_core::types::PeerPolicy;
-use bifrost_signer::DeviceStore;
+use bifrost_signer::{DeviceStore, PersistenceHint};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
@@ -23,7 +24,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Sign { message_hex32: String },
-    Ecdh { pubkey_hex33: String },
+    Ecdh { pubkey_hex32: String },
     Ping { peer: String },
     Onboard { peer: String },
     Listen,
@@ -58,11 +59,13 @@ async fn main() -> Result<()> {
         }
         Commands::SetPolicy { peer, policy_json } => {
             let _lock = DeviceLock::acquire_exclusive(&state_path)?;
+            let run_id = begin_run(&state_path)?;
             let mut signer = load_or_init_signer(&config, &store)?;
             let policy: PeerPolicy =
                 serde_json::from_str(&policy_json).context("invalid policy json")?;
             signer.set_peer_policy(&peer, policy)?;
             store.save(signer.state())?;
+            complete_clean_run(&state_path, &run_id, signer.state())?;
             println!("updated policy for {peer}");
             return Ok(());
         }
@@ -70,6 +73,7 @@ async fn main() -> Result<()> {
     }
 
     let _lock = DeviceLock::acquire_exclusive(&state_path)?;
+    let run_id = begin_run(&state_path)?;
     let signer = load_or_init_signer(&config, &store)?;
 
     let adapter = NostrSdkAdapter::new(config.relays.clone());
@@ -106,8 +110,8 @@ async fn main() -> Result<()> {
                 return Err(anyhow!("empty signature set"));
             }
         }
-        Commands::Ecdh { pubkey_hex33 } => {
-            let pubkey = decode_hex33(&pubkey_hex33)?;
+        Commands::Ecdh { pubkey_hex32 } => {
+            let pubkey = decode_hex32(&pubkey_hex32)?;
             let result = bridge
                 .ecdh(
                     pubkey,
@@ -140,12 +144,16 @@ async fn main() -> Result<()> {
             loop {
                 tokio::select! {
                     _ = save_tick.tick() => {
-                        let state = bridge.snapshot_state().await.map_err(|e| anyhow!(e.to_string()))?;
-                        store.save(&state)?;
+                        let hint = bridge.take_persistence_hint().await.map_err(|e| anyhow!(e.to_string()))?;
+                        if !matches!(hint, PersistenceHint::None) {
+                            let state = bridge.snapshot_state().await.map_err(|e| anyhow!(e.to_string()))?;
+                            store.save(&state)?;
+                        }
                     }
                     _ = tokio::signal::ctrl_c() => {
                         let state = bridge.snapshot_state().await.map_err(|e| anyhow!(e.to_string()))?;
                         store.save(&state)?;
+                        complete_clean_run(&state_path, &run_id, &state)?;
                         break;
                     }
                 }
@@ -159,6 +167,7 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
     store.save(&state)?;
+    complete_clean_run(&state_path, &run_id, &state)?;
     bridge.shutdown().await;
     Ok(())
 }
@@ -175,16 +184,6 @@ fn decode_hex32(value: &str) -> Result<[u8; 32]> {
         return Err(anyhow!("expected 32 bytes"));
     }
     let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn decode_hex33(value: &str) -> Result<[u8; 33]> {
-    let bytes = hex::decode(value).context("invalid hex33")?;
-    if bytes.len() != 33 {
-        return Err(anyhow!("expected 33 bytes"));
-    }
-    let mut out = [0u8; 33];
     out.copy_from_slice(&bytes);
     Ok(out)
 }

@@ -47,7 +47,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         .members
         .iter()
         .filter(|member| member.idx != share.idx)
-        .map(|member| hex::encode(member.pubkey))
+        .map(|member| hex::encode(&member.pubkey[1..]))
         .collect::<Vec<_>>();
     SigningDevice::new(
         group.clone(),
@@ -72,15 +72,15 @@ async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
         .members
         .iter()
         .filter(|member| member.idx != local_share.idx)
-        .map(|member| hex::encode(member.pubkey))
+        .map(|member| hex::encode(&member.pubkey[1..]))
         .collect::<Vec<_>>();
     let target_member = group
         .members
         .iter()
         .find(|member| member.idx != local_share.idx)
         .expect("target member");
-    let target_peer = hex::encode(target_member.pubkey);
-    let target_ecdh = target_member.pubkey;
+    let target_peer = hex::encode(&target_member.pubkey[1..]);
+    let target_ecdh: [u8; 32] = target_member.pubkey[1..].try_into().expect("xonly target");
 
     let local_signer = build_signer(&group, &local_share);
     let mut peer_signers = bundle

@@ -8,7 +8,7 @@ Envelope shape (`BridgeEnvelope`):
 
 ```json
 {
-  "request_id": "1700000000-2-1",
+  "request_id": "1700000000-2-8847265512043916403-1",
   "sent_at": 1700000000,
   "payload": { "type": "...", "data": {} }
 }
@@ -22,7 +22,7 @@ Payload variants:
 - `Error`
 
 Validation boundaries:
-- request id must be non-empty and canonical (`<unix_ts>-<member_idx>-<seq>`)
+- request id must be non-empty and canonical (`<unix_ts>-<member_idx>-<boot_nonce>-<seq>`)
 - payload-specific bounds and shape checks are enforced in wire conversions
 
 ## Relay Event Layer
@@ -40,7 +40,7 @@ Validation boundaries:
 5. Round succeeds only if all locked peers return valid responses before timeout.
 6. On missing/invalid locked-peer response, round fails terminally and caller must start a new request.
 
-## Compatibility Notes
+## Notes
 
-- This is a hard-cut design replacing the legacy daemon/RPC runtime path.
+- This is a hard-cut runtime design.
 - Core operation semantics (`ping`, `onboard`, `sign`, `ecdh`) are preserved.

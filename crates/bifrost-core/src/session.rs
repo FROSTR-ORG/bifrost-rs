@@ -140,7 +140,7 @@ mod tests {
 
     fn sample_group() -> GroupPackage {
         GroupPackage {
-            group_pk: [7; 33],
+            group_pk: [7; 32],
             threshold: 2,
             members: vec![
                 MemberPackage {

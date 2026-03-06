@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn group_package_roundtrip_json() {
         let group = GroupPackage {
-            group_pk: [9u8; 33],
+            group_pk: [9u8; 32],
             threshold: 2,
             members: vec![
                 bifrost_core::types::MemberPackage {

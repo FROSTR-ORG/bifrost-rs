@@ -50,7 +50,7 @@ cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json pol
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json onboard <peer_pubkey_hex>
 cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <33-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <32-byte-hex>
 ```
 
 ## 6. Optional TUI

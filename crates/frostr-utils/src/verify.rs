@@ -39,7 +39,8 @@ pub fn verify_group_config(group: &GroupPackage) -> FrostUtilsResult<()> {
             .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
     }
 
-    frost::VerifyingKey::deserialize(&group.group_pk)
+    let group_pk = pubkey32_to_even_compressed(group.group_pk);
+    frost::VerifyingKey::deserialize(&group_pk)
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
     Ok(())
@@ -76,7 +77,7 @@ pub fn verify_share(share: &SharePackage, group: &GroupPackage) -> FrostUtilsRes
         ));
     }
 
-    let group_key = frost::VerifyingKey::deserialize(&group.group_pk)
+    let group_key = frost::VerifyingKey::deserialize(&pubkey32_to_even_compressed(group.group_pk))
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
     let key_package = frost::keys::KeyPackage::new(
@@ -116,6 +117,7 @@ pub fn verify_share(share: &SharePackage, group: &GroupPackage) -> FrostUtilsRes
     Ok(())
 }
 
+
 pub fn verify_keyset(bundle: &KeysetBundle) -> FrostUtilsResult<KeysetVerificationReport> {
     verify_group_config(&bundle.group)?;
     if bundle.shares.len() != bundle.group.members.len() {
@@ -133,6 +135,13 @@ pub fn verify_keyset(bundle: &KeysetBundle) -> FrostUtilsResult<KeysetVerificati
         threshold: bundle.group.threshold,
         verified_shares: bundle.shares.len(),
     })
+}
+
+fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
+    let mut out = [0u8; 33];
+    out[0] = 0x02;
+    out[1..].copy_from_slice(&pubkey);
+    out
 }
 
 #[cfg(test)]
