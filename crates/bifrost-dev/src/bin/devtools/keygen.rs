@@ -6,8 +6,9 @@ use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
 use frostr_utils::{CreateKeysetConfig, create_keyset};
 use serde::Serialize;
 
-const DEFAULT_NAMES: [&str; 8] = [
-    "alice", "bob", "carol", "dave", "erin", "frank", "grace", "heidi",
+const DEFAULT_NAMES: [&str; 20] = [
+    "alice", "bob", "carol", "dave", "erin", "frank", "grace", "heidi", "ivan", "judy", "karl",
+    "laura", "mallory", "nia", "oscar", "peggy", "quentin", "ruth", "sybil", "trent",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +122,7 @@ pub fn run_keygen_command(args: &[String]) -> Result<()> {
             .iter()
             .filter(|m| m.idx != share.idx)
             .map(|m| DevicePeerConfig {
-                pubkey: hex::encode(m.pubkey),
+                pubkey: hex::encode(&m.pubkey[1..]),
                 policy: PeerPolicyConfig {
                     block_all: false,
                     request: MethodPolicyConfig {

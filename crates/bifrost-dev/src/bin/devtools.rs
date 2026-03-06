@@ -8,7 +8,7 @@ mod relay;
 use std::env;
 
 use anyhow::{Context, Result};
-use e2e::{print_e2e_usage, run_e2e_node_command};
+use e2e::{print_e2e_usage, run_e2e_full_command, run_e2e_node_command};
 use keygen::{print_keygen_usage, run_keygen_command};
 use relay::NostrRelay;
 
@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
     match cmd {
         "keygen" => run_keygen_command(&args[1..]),
         "e2e-node" => run_e2e_node_command(&args[1..]),
+        "e2e-full" => run_e2e_full_command(&args[1..]),
         "relay" => run_relay_command(&args[1..]).await,
         "help" | "--help" | "-h" => {
             print_usage();
@@ -63,7 +64,7 @@ async fn run_relay_command(args: &[String]) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "bifrost-devtools <command> [args]\n\ncommands:\n  keygen [--out-dir DIR] [--threshold N] [--count N] [--relay URL]\n  e2e-node [--out-dir DIR] [--relay URL]\n  relay [--port N|N]"
+        "bifrost-devtools <command> [args]\n\ncommands:\n  keygen [--out-dir DIR] [--threshold N] [--count N] [--relay URL]\n  e2e-node [--out-dir DIR] [--relay URL]\n  e2e-full [--out-dir DIR] [--relay URL] [--threshold N] [--count N] [--sign-iterations N] [--ecdh-iterations N] [--seed N]\n  relay [--port N|N]"
     );
     print_keygen_usage();
     print_e2e_usage();
