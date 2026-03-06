@@ -21,6 +21,7 @@ Use semantic versioning:
    - `cargo test --workspace --offline`
 2. Runtime smoke/e2e passes:
    - `cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194`
+   - `cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --threshold 11 --count 15`
    - `scripts/devnet.sh smoke`
    - `scripts/test-node-e2e.sh`
    - `scripts/test-tui-e2e.sh`
@@ -34,7 +35,7 @@ Use semantic versioning:
    - `SECURITY.md`
    - `RELEASE.md`
    - `dev/artifacts/current-status.md`
-   - `dev/audit/checklist-v0.1.0.md` (or next checklist)
+   - `dev/audit/checklist-vX.Y.Z.md` (for the release candidate)
    - `dev/audit/AUDIT.md`
 5. `CHANGELOG.md` updated for the version.
 6. Security scan captured:

@@ -20,7 +20,8 @@ Security-sensitive areas include:
 - `bifrost-core` cryptographic flows and nonce lifecycle
 - `bifrost-codec` validation and parsing boundaries
 - `bifrost-signer` authorization/binding/replay controls
-- `bifrost-bridge` relay orchestration and queueing controls
+- `bifrost-router` routing/queueing/deduplication controls
+- `bifrost-bridge-tokio` and `bifrost-bridge-wasm` platform bridge controls
 - `bifrost-app` state persistence and runtime configuration safety
 
 ## Disclosure Policy

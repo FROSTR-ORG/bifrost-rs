@@ -63,6 +63,7 @@ cargo run -p bifrost-dev --bin bifrost-tui -- --config ./data/bifrost-alice.json
 
 ```bash
 cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --threshold 11 --count 15
 ```
 
 ## Next Reading

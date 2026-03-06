@@ -4,6 +4,13 @@ All notable changes to `bifrost-rs` should be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Hard-cut runtime naming now reflects current crate boundaries:
+  - `bifrost-router` (runtime-agnostic routing core)
+  - `bifrost-bridge-tokio` / `bifrost-bridge-wasm` (platform bridge runtimes)
+- Documentation updated to use signer/router/bridge terminology consistently.
+
 ## [0.2.0] - 2026-03-04
 
 ### Changed
