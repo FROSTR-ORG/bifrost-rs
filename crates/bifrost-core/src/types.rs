@@ -356,6 +356,8 @@ pub struct OnboardRequest {
     #[serde(with = "serde_fixed_array::bytes32")]
     pub share_pk: IdentityPubkey32,
     pub idx: u16,
+    #[serde(default)]
+    pub challenge: Option<Bytes32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,9 +27,16 @@ Validation boundaries:
 
 ## Relay Event Layer
 
-- Events are subscribed by `authors` and `kind` (default `20000`).
+- Events are subscribed by `authors`, `#p`, and `kind` (default `20000`).
 - Event `content` carries an encrypted blob.
 - No payload structure should be inferred from relay metadata.
+
+### Recipient Routing (`p` tag)
+
+- Every Bifrost protocol event MUST include exactly one lowercase `p` tag.
+- The `p` value MUST be the recipient identity key (`pubkey32`, lowercase hex).
+- Events with zero `p` tags or multiple `p` tags are invalid and must be dropped.
+- Events whose single `p` does not match a local device recipient are ignored.
 
 ## Request Flow
 

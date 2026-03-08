@@ -30,3 +30,8 @@ coverage/
 *.out
 *.profraw
 *.profdata
+
+# Local demo runtime state
+dev/demo-2of2/state-*.json
+dev/demo-2of2/state-*.lock
+dev/demo-2of2/state-*.run.json

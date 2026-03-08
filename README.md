@@ -40,37 +40,44 @@ Rust implementation of the FROSTR threshold-signing stack.
 1. Generate local key/config artifacts:
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
 ```
 
 2. Start a local relay:
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- relay 8194
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose relay 8194
 ```
 
 3. Start signer listeners (separate terminals):
 
 ```bash
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-bob.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-bob.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-carol.json listen
 ```
 
 4. Run commands from one node:
 
 ```bash
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json status
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <32-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json status
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json sign <32-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ecdh <32-byte-hex>
 ```
 
 5. Run runtime e2e:
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
 ```
+
+## Observability
+
+- `bifrost --verbose` enables JSON info-level runtime logs.
+- `bifrost --debug` enables JSON debug-level runtime logs.
+- `bifrost-devtools --verbose` and `--debug` follow the same model.
+- `RUST_LOG=...` remains available when you need explicit crate-level filter overrides.
 
 ## Verification Matrix
 

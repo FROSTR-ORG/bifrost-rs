@@ -127,7 +127,7 @@ async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
     }
 
     let onboard = bridge
-        .onboard(target_peer.clone(), Duration::from_secs(5))
+        .onboard(target_peer.clone(), None, Duration::from_secs(5))
         .await
         .expect("onboard");
     assert_eq!(onboard.group_member_count, group.members.len());

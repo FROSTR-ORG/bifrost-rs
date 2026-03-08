@@ -274,8 +274,8 @@ fn build_commitments_by_index(
 
 fn build_public_key_package(group: &GroupPackage) -> CoreResult<frost::keys::PublicKeyPackage> {
     let group_pk = pubkey32_to_even_compressed(group.group_pk);
-    let verifying_key = frost::VerifyingKey::deserialize(&group_pk)
-        .map_err(|e| CoreError::Frost(e.to_string()))?;
+    let verifying_key =
+        frost::VerifyingKey::deserialize(&group_pk).map_err(|e| CoreError::Frost(e.to_string()))?;
 
     let mut verifying_shares = BTreeMap::new();
     for member in &group.members {
@@ -310,8 +310,8 @@ fn build_key_package(
     let verifying_share = frost::keys::VerifyingShare::deserialize(&member.pubkey)
         .map_err(|e| CoreError::Frost(e.to_string()))?;
     let group_pk = pubkey32_to_even_compressed(group.group_pk);
-    let verifying_key = frost::VerifyingKey::deserialize(&group_pk)
-        .map_err(|e| CoreError::Frost(e.to_string()))?;
+    let verifying_key =
+        frost::VerifyingKey::deserialize(&group_pk).map_err(|e| CoreError::Frost(e.to_string()))?;
 
     Ok(frost::keys::KeyPackage::new(
         identifier,

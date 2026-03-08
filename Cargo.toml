@@ -41,5 +41,5 @@ nostr = { version = "0.44", features = ["std", "nip44"] }
 nostr-sdk = { version = "0.44" }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 frost-secp256k1-tr-unofficial = "2.2.0"

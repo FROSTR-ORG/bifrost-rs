@@ -142,6 +142,8 @@ pub struct PeerErrorWire {
 pub struct OnboardRequestWire {
     pub share_pk: String,
     pub idx: u16,
+    #[serde(default)]
+    pub challenge: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -683,6 +685,10 @@ impl TryFrom<OnboardRequestWire> for OnboardRequest {
         Ok(Self {
             share_pk: hexbytes::decode(&value.share_pk)?,
             idx: value.idx,
+            challenge: value
+                .challenge
+                .map(|raw| hexbytes::decode(&raw))
+                .transpose()?,
         })
     }
 }
@@ -692,6 +698,7 @@ impl From<OnboardRequest> for OnboardRequestWire {
         Self {
             share_pk: hexbytes::encode(&value.share_pk),
             idx: value.idx,
+            challenge: value.challenge.map(|challenge| hexbytes::encode(&challenge)),
         }
     }
 }
@@ -839,7 +846,10 @@ mod tests {
         };
         let err: crate::error::CodecError =
             TryInto::<GroupPackage>::try_into(wire).expect_err("must reject member pubkey32");
-        assert!(matches!(err, crate::error::CodecError::InvalidLength { .. }));
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidLength { .. }
+        ));
     }
 
     #[test]
@@ -847,9 +857,26 @@ mod tests {
         let wire = OnboardRequestWire {
             share_pk: hex::encode([3u8; 33]),
             idx: 1,
+            challenge: None,
         };
         let err: crate::error::CodecError =
             TryInto::<OnboardRequest>::try_into(wire).expect_err("must reject share_pk33");
-        assert!(matches!(err, crate::error::CodecError::InvalidLength { .. }));
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidLength { .. }
+        ));
+    }
+
+    #[test]
+    fn onboard_wire_roundtrips_optional_challenge() {
+        let request = OnboardRequest {
+            share_pk: [5u8; 32],
+            idx: 2,
+            challenge: Some([7u8; 32]),
+        };
+        let wire = OnboardRequestWire::from(request.clone());
+        assert_eq!(wire.challenge, Some(hex::encode([7u8; 32])));
+        let decoded = OnboardRequest::try_from(wire).expect("decode");
+        assert_eq!(decoded, request);
     }
 }

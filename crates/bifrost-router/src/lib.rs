@@ -75,7 +75,10 @@ pub enum BridgeCommand {
     Sign { message: [u8; 32] },
     Ecdh { pubkey: [u8; 32] },
     Ping { peer: String },
-    Onboard { peer: String },
+    Onboard {
+        peer: String,
+        challenge: Option<[u8; 32]>,
+    },
 }
 
 #[derive(Debug)]
@@ -108,10 +111,7 @@ pub struct BridgeCore {
 pub trait RouterPort {
     type Error;
 
-    fn submit_command(
-        &mut self,
-        cmd: BridgeCommand,
-    ) -> std::result::Result<String, Self::Error>;
+    fn submit_command(&mut self, cmd: BridgeCommand) -> std::result::Result<String, Self::Error>;
     fn enqueue_inbound_event(&mut self, event: Event) -> bool;
     fn tick(&mut self, now_unix_ms: u64);
     fn drain_outbound_packets(&mut self) -> Vec<OutboundEvent>;
@@ -161,6 +161,10 @@ impl BridgeCore {
             .map_err(|e| anyhow!(e.to_string()))
     }
 
+    pub fn is_event_routable(&self, event: &Event) -> bool {
+        self.signer.has_exact_local_recipient_tag(event)
+    }
+
     pub fn enqueue_command(
         &mut self,
         cmd: BridgeCommand,
@@ -191,7 +195,7 @@ impl BridgeCore {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
-            BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
+            BridgeCommand::Onboard { peer, challenge } => SignerInput::BeginOnboard { peer, challenge },
         };
 
         match self.signer.apply(input) {
@@ -219,6 +223,10 @@ impl BridgeCore {
     }
 
     pub fn enqueue_inbound_event(&mut self, event: Event) -> bool {
+        if !self.is_event_routable(&event) {
+            return false;
+        }
+
         let event_id = event.id.to_hex();
         if self.seen_inbound_ids.contains(&event_id) {
             return false;
@@ -385,7 +393,7 @@ impl BridgeCore {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
-            BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
+            BridgeCommand::Onboard { peer, challenge } => SignerInput::BeginOnboard { peer, challenge },
         };
 
         match self.signer.apply(input) {
@@ -476,7 +484,12 @@ impl BridgeCore {
         }
     }
 
-    fn push_internal_failure(&mut self, request_id: String, op_type: PendingOpType, message: String) {
+    fn push_internal_failure(
+        &mut self,
+        request_id: String,
+        op_type: PendingOpType,
+        message: String,
+    ) {
         self.failures.push_back(OperationFailure {
             request_id,
             op_type,
@@ -490,10 +503,7 @@ impl BridgeCore {
 impl RouterPort for BridgeCore {
     type Error = BridgeCoreError;
 
-    fn submit_command(
-        &mut self,
-        cmd: BridgeCommand,
-    ) -> std::result::Result<String, Self::Error> {
+    fn submit_command(&mut self, cmd: BridgeCommand) -> std::result::Result<String, Self::Error> {
         BridgeCore::submit_command(self, cmd)
     }
 
@@ -647,7 +657,8 @@ mod tests {
         ));
         assert!(matches!(
             pending_type_for_command(&BridgeCommand::Onboard {
-                peer: "peer-b".to_string()
+                peer: "peer-b".to_string(),
+                challenge: None,
             }),
             PendingOpType::Onboard
         ));

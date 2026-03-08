@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use bifrost_app::runtime::{
-    EncryptedFileStore, begin_run, complete_clean_run, load_config, load_or_init_signer,
-    load_share,
+    EncryptedFileStore, begin_run, complete_clean_run, load_config, load_or_init_signer, load_share,
 };
 use bifrost_bridge_tokio::{Bridge, BridgeConfig, NostrSdkAdapter};
 use bifrost_core::types::PeerPolicy;

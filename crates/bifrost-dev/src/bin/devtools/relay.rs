@@ -111,7 +111,7 @@ impl NostrRelay {
             let relay = self.clone();
             tokio::spawn(async move {
                 if let Err(err) = relay.handle_client(stream).await {
-                    tracing::debug!("relay client ended: {err}");
+                    tracing::debug!(domain = "relay", event = "client_ended", error = %err);
                 }
             });
         }

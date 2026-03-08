@@ -74,7 +74,9 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let local_signer = build_signer(&group, &local_share);
-    let target_ecdh: [u8; 32] = group.members[2].pubkey[1..].try_into().expect("xonly target");
+    let target_ecdh: [u8; 32] = group.members[2].pubkey[1..]
+        .try_into()
+        .expect("xonly target");
     let event_kind = DeviceConfig::default().event_kind as u16;
     let local_secret = SecretKey::from_slice(&local_share.seckey).expect("local secret");
     let local_keys = Keys::new(local_secret.clone());
@@ -123,6 +125,7 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                     payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                         share_pk: hex::encode(share.seckey),
                         idx: 999,
+                        challenge: None,
                     }),
                 };
                 let malformed_plain = encode_bridge_envelope(&malformed).expect("encode envelope");

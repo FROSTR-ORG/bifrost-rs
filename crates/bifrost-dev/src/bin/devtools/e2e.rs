@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -209,6 +209,7 @@ fn start_responders(
     relay: &str,
 ) -> Result<ProcessSet> {
     let relay_port = relay_port(relay)?;
+    ensure_devtools_relay_port(relay_port)?;
     let relay_port_arg = relay_port.to_string();
     let mut processes = ProcessSet::default();
 
@@ -382,6 +383,98 @@ fn relay_port(relay: &str) -> Result<u16> {
         .with_context(|| format!("invalid relay port in URL: {relay}"))
 }
 
+fn ensure_devtools_relay_port(port: u16) -> Result<()> {
+    let owners = relay_port_owners(port)?;
+    if owners.is_empty() {
+        return Ok(());
+    }
+    if owners
+        .iter()
+        .all(|owner| owner.command.contains("bifrost-devtool"))
+    {
+        for owner in &owners {
+            let status = Command::new("kill")
+                .args(["-TERM", &owner.pid.to_string()])
+                .status()
+                .with_context(|| format!("terminate stale relay pid {}", owner.pid))?;
+            if !status.success() {
+                bail!("failed to terminate stale relay pid {}", owner.pid);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if relay_port_owners(port)?.is_empty() {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        for owner in relay_port_owners(port)? {
+            let _ = Command::new("kill")
+                .args(["-KILL", &owner.pid.to_string()])
+                .status();
+        }
+        thread::sleep(Duration::from_millis(100));
+        if relay_port_owners(port)?.is_empty() {
+            return Ok(());
+        }
+        bail!("relay port {port} remained occupied after stale relay termination");
+    }
+
+    let detail = owners
+        .into_iter()
+        .map(|owner| format!("pid={} cmd={}", owner.pid, owner.command))
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!("relay port {port} is in use by non-devtools process: {detail}");
+}
+
+#[derive(Debug, Clone)]
+struct PortOwner {
+    pid: u32,
+    command: String,
+}
+
+fn relay_port_owners(port: u16) -> Result<Vec<PortOwner>> {
+    let output = Command::new("ss")
+        .args(["-ltnp"])
+        .output()
+        .context("inspect listening tcp sockets via ss")?;
+    if !output.status.success() {
+        bail!("ss failed ({:?})", output.status.code().unwrap_or_default());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let needle = format!(":{port}");
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if !line.contains(&needle) || !line.contains("pid=") {
+            continue;
+        }
+        let Some(pid_pos) = line.find("pid=") else {
+            continue;
+        };
+        let pid_digits = line[pid_pos + 4..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>();
+        let Ok(pid) = pid_digits.parse::<u32>() else {
+            continue;
+        };
+        let command = extract_process_name(line).unwrap_or_else(|| "unknown".to_string());
+        if out.iter().any(|item: &PortOwner| item.pid == pid) {
+            continue;
+        }
+        out.push(PortOwner { pid, command });
+    }
+    Ok(out)
+}
+
+fn extract_process_name(line: &str) -> Option<String> {
+    let start = line.find("((")?;
+    let rest = &line[start + 2..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
 pub fn run_e2e_full_command(args: &[String]) -> Result<()> {
     #[cfg(not(unix))]
     {
@@ -408,7 +501,10 @@ pub fn run_e2e_full_command(args: &[String]) -> Result<()> {
                     idx += 2;
                 }
                 "--relay" => {
-                    relay = args.get(idx + 1).context("missing value for --relay")?.clone();
+                    relay = args
+                        .get(idx + 1)
+                        .context("missing value for --relay")?
+                        .clone();
                     idx += 2;
                 }
                 "--threshold" => {
@@ -622,8 +718,14 @@ fn derive_self_pubkey(parsed_cfg: &Value) -> Result<String> {
 }
 
 #[cfg(unix)]
-fn start_relay_process(processes: &mut ProcessSet, root: &Path, logs_dir: &Path, relay: &str) -> Result<()> {
+fn start_relay_process(
+    processes: &mut ProcessSet,
+    root: &Path,
+    logs_dir: &Path,
+    relay: &str,
+) -> Result<()> {
     let relay_port = relay_port(relay)?;
+    ensure_devtools_relay_port(relay_port)?;
     let relay_port_arg = relay_port.to_string();
     processes.spawn_logged(
         Command::new("cargo")
@@ -721,8 +823,8 @@ fn send_control(
     request_seq: &mut u64,
     command: Value,
 ) -> Result<Value> {
-    let mut stream =
-        UnixStream::connect(socket_path).with_context(|| format!("connect {}", socket_path.display()))?;
+    let mut stream = UnixStream::connect(socket_path)
+        .with_context(|| format!("connect {}", socket_path.display()))?;
     let request_id = format!("ctl-{}", *request_seq);
     *request_seq = request_seq.saturating_add(1);
     let request = json!({
@@ -775,7 +877,11 @@ fn run_onboarding_chain(
             request_seq,
             json!({"command":"onboard","peer":to.self_pubkey}),
         )?;
-        append_output(out_file, "onboard", &format!("{} -> {} : {}", from.name, to.name, result))?;
+        append_output(
+            out_file,
+            "onboard",
+            &format!("{} -> {} : {}", from.name, to.name, result),
+        )?;
     }
     Ok(())
 }
@@ -849,7 +955,10 @@ fn randomize_policies(
             append_output(
                 out_file,
                 "policy",
-                &format!("{} -> {} send={send} receive={receive}", nodes[i].name, nodes[j].name),
+                &format!(
+                    "{} -> {} send={send} receive={receive}",
+                    nodes[i].name, nodes[j].name
+                ),
             )?;
         }
     }
@@ -898,7 +1007,11 @@ fn run_sign_iterations(
             request_seq,
             json!({"command":"sign","message_hex32":message}),
         )?;
-        append_output(out_file, "sign", &format!("iter={n} node={} result={result}", nodes[idx].name))?;
+        append_output(
+            out_file,
+            "sign",
+            &format!("iter={n} node={} result={result}", nodes[idx].name),
+        )?;
     }
     Ok(())
 }
@@ -924,7 +1037,14 @@ fn run_ecdh_iterations(
             request_seq,
             json!({"command":"ecdh","pubkey_hex32":nodes[target].self_pubkey}),
         )?;
-        append_output(out_file, "ecdh", &format!("iter={n} node={} target={} result={result}", nodes[initiator].name, nodes[target].name))?;
+        append_output(
+            out_file,
+            "ecdh",
+            &format!(
+                "iter={n} node={} target={} result={result}",
+                nodes[initiator].name, nodes[target].name
+            ),
+        )?;
     }
     Ok(())
 }
@@ -962,10 +1082,7 @@ impl Lcg {
     }
 
     fn next_u64(&mut self) -> u64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
         self.state
     }
 
@@ -1025,26 +1142,132 @@ impl ProcessSet {
         let log_err = log
             .try_clone()
             .with_context(|| format!("clone {}", log_path.display()))?;
-        let child = command
+        let mut child = command
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err))
             .spawn()
             .with_context(|| format!("spawn command for {}", log_path.display()))?;
+        thread::sleep(Duration::from_millis(200));
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("probe {}", log_path.display()))?
+        {
+            let tail = tail_log(&log_path, 40);
+            bail!(
+                "child exited early for {} with status {:?}\n{}",
+                log_path.display(),
+                status.code(),
+                tail
+            );
+        }
         self.children.push(child);
         Ok(())
     }
 
     fn stop_all(&mut self) {
         for child in &mut self.children {
-            let _ = child.kill();
-            let _ = child.wait();
+            #[cfg(unix)]
+            {
+                let _ = Command::new("kill")
+                    .args(["-INT", &child.id().to_string()])
+                    .status();
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
         }
         self.children.clear();
     }
 }
 
+fn tail_log(path: &Path, max_lines: usize) -> String {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return "log unavailable".to_string();
+    };
+    let lines = raw.lines().collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
 impl Drop for ProcessSet {
     fn drop(&mut self) {
         self.stop_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_out_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("bifrost-dev-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    fn free_local_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        port
+    }
+
+    #[test]
+    fn relay_port_owned_by_non_devtools_process_fails_fast() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        let err = ensure_devtools_relay_port(port).expect_err("expected non-devtools owner error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-devtools process"),
+            "unexpected error message: {msg}"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    #[ignore = "slow end-to-end regression; run explicitly in CI nightly or pre-release"]
+    fn e2e_node_command_sequence_regression() {
+        let out_dir = temp_out_dir("node-sequence");
+        fs::create_dir_all(&out_dir).expect("create temp out dir");
+        let relay = format!("ws://127.0.0.1:{}", free_local_port());
+        let args = vec![
+            "--out-dir".to_string(),
+            out_dir.to_string_lossy().to_string(),
+            "--relay".to_string(),
+            relay,
+        ];
+
+        run_e2e_node_command(&args).expect("e2e-node should pass command-sequenced flow");
+
+        let output_path = out_dir.join("logs/node-e2e-output.txt");
+        let output = fs::read_to_string(&output_path).expect("read e2e output");
+        assert!(
+            output.contains("### sign"),
+            "missing sign section in {}",
+            output_path.display()
+        );
+        assert!(
+            !output.contains("nonce unavailable"),
+            "nonce regression detected in {}",
+            output_path.display()
+        );
+
+        let _ = fs::remove_dir_all(out_dir);
     }
 }

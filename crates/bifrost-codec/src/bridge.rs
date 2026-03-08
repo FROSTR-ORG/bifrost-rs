@@ -79,6 +79,9 @@ mod tests {
         };
         let err = decode_bridge_envelope(&encode_bridge_envelope(&envelope).expect("encode"))
             .expect_err("must reject empty request_id");
-        assert!(matches!(err, CodecError::InvalidPayload("request_id must not be empty")));
+        assert!(matches!(
+            err,
+            CodecError::InvalidPayload("request_id must not be empty")
+        ));
     }
 }

@@ -16,14 +16,21 @@ cargo test --workspace --offline
 
 ```bash
 dev/scripts/toolchain_preflight.sh --require-cargo
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --threshold 11 --count 15
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-full --threshold 11 --count 15
 scripts/devnet.sh smoke
 scripts/test-node-e2e.sh
 scripts/test-tui-e2e.sh
 ```
 
 `bifrost-devtools e2e-node` is the cross-platform primary path. The shell scripts remain as POSIX wrappers and TUI-specific checks.
+
+Observability controls:
+- `bifrost --verbose`
+- `bifrost --debug`
+- `bifrost-devtools --verbose`
+- `bifrost-devtools --debug`
+- `RUST_LOG=...` remains the low-level override when explicit crate filtering is needed
 
 ## WS Soak / Fault Regression
 
@@ -57,7 +64,7 @@ Current test classes in repo:
   - `crates/bifrost-app/tests/config_options.rs`
   - `crates/bifrost-app/tests/state_store_limits.rs`
 - End-to-end/runtime tests:
-  - `cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node`
+  - `cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node`
   - `scripts/test-node-e2e.sh`
   - `scripts/test-tui-e2e.sh`
   - `scripts/devnet.sh smoke`

@@ -15,12 +15,13 @@ use bifrost_core::types::{
     PeerScopedPolicyProfile, PingPayload, SharePackage, SignSessionPackage, SignSessionTemplate,
 };
 use frostr_utils::{
-    ecdh_create_from_share, ecdh_finalize, sign_create_partial, sign_finalize, sign_verify_partial,
-    validate_sign_session,
+    InviteToken, build_invite_token, ecdh_create_from_share, ecdh_finalize, sign_create_partial,
+    sign_finalize, sign_verify_partial, validate_sign_session,
 };
-use nostr::{Event, Filter};
+use nostr::{Alphabet, Event, Filter, SingleLetterTag, TagKind};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 mod crypto;
 mod error;
@@ -100,6 +101,8 @@ pub struct DeviceState {
     pub policies: HashMap<String, PeerPolicy>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
     pub pending_operations: HashMap<String, PendingOperation>,
+    #[serde(default)]
+    pub pending_invites: HashMap<String, PendingInviteRecord>,
     pub request_seq: u64,
     pub last_active: u64,
     pub version: u32,
@@ -122,14 +125,20 @@ impl DeviceState {
             policies: HashMap::new(),
             remote_scoped_policies: HashMap::new(),
             pending_operations: HashMap::new(),
+            pending_invites: HashMap::new(),
             request_seq: 1,
             last_active: now_unix_secs(),
             version: Self::VERSION,
         }
     }
 
-    pub fn discard_volatile_for_dirty_restart(&mut self, group_member_idx: u16, share_seckey: [u8; 32]) {
-        self.nonce_pool = NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
+    pub fn discard_volatile_for_dirty_restart(
+        &mut self,
+        group_member_idx: u16,
+        share_seckey: [u8; 32],
+    ) {
+        self.nonce_pool =
+            NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
         self.pending_operations.clear();
         self.last_active = now_unix_secs();
     }
@@ -196,6 +205,17 @@ pub struct PendingOperation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingInviteRecord {
+    pub challenge_hex: String,
+    pub callback_peer_pubkey_hex: String,
+    pub relays: Vec<String>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub consumed_at: Option<u64>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PendingOpType {
     Sign,
     Ecdh,
@@ -222,7 +242,9 @@ pub enum PendingOpContext {
         responses: Vec<EcdhPackage>,
     },
     PingRequest,
-    OnboardRequest,
+    OnboardRequest {
+        challenge: Option<[u8; 32]>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +299,7 @@ pub enum SignerInput {
     },
     BeginOnboard {
         peer: String,
+        challenge: Option<[u8; 32]>,
     },
     ProcessEvent {
         event: Event,
@@ -364,6 +387,7 @@ pub struct SigningDevice {
     failures: VecDeque<OperationFailure>,
     latest_request_id: Option<String>,
     boot_nonce: u64,
+    runtime_persistence_hint: PersistenceHint,
 }
 
 impl SigningDevice {
@@ -402,9 +426,11 @@ impl SigningDevice {
         state.nonce_pool.init_peer(share_idx);
         state.last_active = now_unix_secs();
         let device_id = DeviceId::new(format!("{}-{}", share_public_key_hex, share_idx));
-        state.ecdh_cache_order
+        state
+            .ecdh_cache_order
             .retain(|k| state.ecdh_cache.contains_key(k));
-        state.sig_cache_order
+        state
+            .sig_cache_order
             .retain(|k| state.sig_cache.contains_key(k));
         let mut boot_bytes = [0u8; 8];
         OsRng.fill_bytes(&mut boot_bytes);
@@ -423,6 +449,7 @@ impl SigningDevice {
             failures: VecDeque::new(),
             latest_request_id: None,
             boot_nonce,
+            runtime_persistence_hint: PersistenceHint::None,
         })
     }
 
@@ -448,11 +475,106 @@ impl SigningDevice {
         self.latest_request_id.clone()
     }
 
+    pub fn local_pubkey32(&self) -> &str {
+        &self.share_public_key_hex
+    }
+
+    pub fn pending_invites(&self) -> Vec<PendingInviteRecord> {
+        let mut invites = self.state.pending_invites.values().cloned().collect::<Vec<_>>();
+        invites.sort_by_key(|record| (record.created_at, record.challenge_hex.clone()));
+        invites
+    }
+
+    pub fn create_invite(
+        &mut self,
+        relays: Vec<String>,
+        expires_in_secs: u64,
+        label: Option<String>,
+    ) -> Result<InviteToken> {
+        if expires_in_secs == 0 {
+            return Err(SignerError::InvalidRequest(
+                "invite expiration must be greater than zero".to_string(),
+            ));
+        }
+
+        let created_at = now_unix_secs();
+        let expires_at = created_at.saturating_add(expires_in_secs);
+        let callback_peer_pk = decode_32(self.local_pubkey32())?;
+
+        loop {
+            let mut challenge = [0u8; 32];
+            OsRng.fill_bytes(&mut challenge);
+            let challenge_hex = hex::encode(challenge);
+            if self.state.pending_invites.contains_key(&challenge_hex) {
+                continue;
+            }
+
+            let token = build_invite_token(
+                callback_peer_pk,
+                relays.clone(),
+                challenge,
+                created_at,
+                expires_at,
+                label.clone(),
+            )
+            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+            debug!(
+                device_id = %self.device_id,
+                callback_peer_pubkey = %self.local_pubkey32(),
+                challenge_hex = %challenge_hex,
+                relay_count = token.relays.len(),
+                created_at,
+                expires_at,
+                label = ?label,
+                "created pending invite"
+            );
+            self.state.pending_invites.insert(
+                challenge_hex.clone(),
+                PendingInviteRecord {
+                    challenge_hex,
+                    callback_peer_pubkey_hex: self.local_pubkey32().to_string(),
+                    relays: token.relays.clone(),
+                    created_at,
+                    expires_at,
+                    consumed_at: None,
+                    label: label.clone(),
+                },
+            );
+            self.state.last_active = created_at;
+            self.mark_persistence_hint(PersistenceHint::Immediate);
+            return Ok(token);
+        }
+    }
+
+    pub fn revoke_pending_invite(&mut self, challenge_hex: &str) -> bool {
+        let removed = self.state.pending_invites.remove(challenge_hex).is_some();
+        if removed {
+            self.state.last_active = now_unix_secs();
+            self.mark_persistence_hint(PersistenceHint::Immediate);
+        }
+        removed
+    }
+
+    pub fn has_exact_local_recipient_tag(&self, event: &Event) -> bool {
+        let recipients = extract_recipient_p_tags(event);
+        recipients.len() == 1 && recipients[0] == self.share_public_key_hex
+    }
+
+    fn mark_persistence_hint(&mut self, hint: PersistenceHint) {
+        self.runtime_persistence_hint = self.runtime_persistence_hint.merge(hint);
+    }
+
+    fn take_runtime_persistence_hint(&mut self) -> PersistenceHint {
+        let hint = self.runtime_persistence_hint;
+        self.runtime_persistence_hint = PersistenceHint::None;
+        hint
+    }
+
     fn ecdh_cache_get(&mut self, target: [u8; 32], now: u64) -> Option<[u8; 32]> {
         let key = hex::encode(target);
-        self.state
-            .ecdh_cache
-            .retain(|_, entry| now.saturating_sub(entry.stored_at) <= self.config.ecdh_cache_ttl_secs);
+        self.state.ecdh_cache.retain(|_, entry| {
+            now.saturating_sub(entry.stored_at) <= self.config.ecdh_cache_ttl_secs
+        });
         self.state
             .ecdh_cache_order
             .retain(|k| self.state.ecdh_cache.contains_key(k));
@@ -483,9 +605,9 @@ impl SigningDevice {
 
     fn sig_cache_get(&mut self, message: [u8; 32], now: u64) -> Option<Vec<[u8; 64]>> {
         let key = hex::encode(message);
-        self.state
-            .sig_cache
-            .retain(|_, entry| now.saturating_sub(entry.stored_at) <= self.config.sig_cache_ttl_secs);
+        self.state.sig_cache.retain(|_, entry| {
+            now.saturating_sub(entry.stored_at) <= self.config.sig_cache_ttl_secs
+        });
         self.state
             .sig_cache_order
             .retain(|k| self.state.sig_cache.contains_key(k));
@@ -547,6 +669,7 @@ impl SigningDevice {
         let raw = serde_json::json!({
             "kinds": [self.config.event_kind],
             "authors": authors,
+            "#p": [self.share_public_key_hex],
         });
         serde_json::from_value::<Filter>(raw)
             .map(|v| vec![v])
@@ -556,6 +679,10 @@ impl SigningDevice {
     pub fn process_event(&mut self, event: &Event) -> Result<Vec<Event>> {
         let kind = event_kind(event)?;
         if kind != self.config.event_kind {
+            return Ok(Vec::new());
+        }
+
+        if !self.has_exact_local_recipient_tag(event) {
             return Ok(Vec::new());
         }
 
@@ -617,7 +744,7 @@ impl SigningDevice {
         }
 
         let needed = self.group.threshold.saturating_sub(1) as usize;
-        let selected = self.select_locked_peers(needed)?;
+        let selected = self.select_signing_peers(needed)?;
 
         let mut members = Vec::with_capacity(selected.len() + 1);
         members.push(self.share.idx);
@@ -849,7 +976,11 @@ impl SigningDevice {
         self.encrypt_for_peers(&[peer.to_string()], &envelope)
     }
 
-    pub fn initiate_onboard(&mut self, peer: &str) -> Result<Vec<Event>> {
+    pub fn initiate_onboard(
+        &mut self,
+        peer: &str,
+        challenge: Option<[u8; 32]>,
+    ) -> Result<Vec<Event>> {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
@@ -867,7 +998,7 @@ impl SigningDevice {
                 target_peers: vec![peer.to_string()],
                 threshold: 1,
                 collected_responses: Vec::new(),
-                context: PendingOpContext::OnboardRequest,
+                context: PendingOpContext::OnboardRequest { challenge },
             },
         );
 
@@ -877,6 +1008,7 @@ impl SigningDevice {
             payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                 share_pk: self.share_public_key_hex.clone(),
                 idx: self.share.idx,
+                challenge: challenge.map(hex::encode),
             }),
         };
         self.encrypt_for_peers(&[peer.to_string()], &envelope)
@@ -900,19 +1032,20 @@ impl SigningDevice {
                 effects.latest_request_id = self.latest_request_id();
                 effects.persistence_hint = PersistenceHint::Batch;
             }
-            SignerInput::BeginOnboard { peer } => {
-                effects.outbound = self.initiate_onboard(&peer)?;
+            SignerInput::BeginOnboard { peer, challenge } => {
+                effects.outbound = self.initiate_onboard(&peer, challenge)?;
                 effects.latest_request_id = self.latest_request_id();
                 effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::ProcessEvent { event } => {
                 effects.outbound = self.process_event(&event)?;
-                effects.persistence_hint = PersistenceHint::Batch;
+                effects.persistence_hint = PersistenceHint::Batch.merge(self.take_runtime_persistence_hint());
             }
             SignerInput::Expire { now } => {
                 effects.failures.extend(self.expire_stale(now));
-                if !effects.failures.is_empty() {
-                    effects.persistence_hint = PersistenceHint::Batch;
+                let runtime_hint = self.take_runtime_persistence_hint();
+                if !effects.failures.is_empty() || !matches!(runtime_hint, PersistenceHint::None) {
+                    effects.persistence_hint = PersistenceHint::Batch.merge(runtime_hint);
                 }
             }
             SignerInput::FailRequest {
@@ -962,6 +1095,13 @@ impl SigningDevice {
                 true
             }
         });
+        let invite_count_before = self.state.pending_invites.len();
+        self.state.pending_invites.retain(|_, invite| {
+            invite.consumed_at.is_none() && invite.expires_at > now
+        });
+        if self.state.pending_invites.len() != invite_count_before {
+            self.mark_persistence_hint(PersistenceHint::Immediate);
+        }
         stale
     }
 
@@ -1003,6 +1143,32 @@ impl SigningDevice {
         Ok(selected)
     }
 
+    fn select_signing_peers(&self, needed: usize) -> Result<Vec<String>> {
+        let mut selected = self
+            .peers
+            .iter()
+            .filter(|peer| {
+                self.member_idx_by_pubkey
+                    .get(*peer)
+                    .copied()
+                    .map(|idx| self.state.nonce_pool.can_sign(idx))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if selected.len() < needed {
+            return Err(SignerError::NonceUnavailable);
+        }
+
+        match self.config.peer_selection_strategy {
+            PeerSelectionStrategy::DeterministicSorted => selected.sort_unstable(),
+            PeerSelectionStrategy::Random => shuffle_strings(&mut selected),
+        }
+        selected.truncate(needed);
+        Ok(selected)
+    }
+
     fn fail_pending_operation(
         &mut self,
         request_id: &str,
@@ -1027,11 +1193,7 @@ impl SigningDevice {
         decode_bridge_envelope(&plaintext).map_err(|e| SignerError::InvalidRequest(e.to_string()))
     }
 
-    fn encrypt_for_peers(
-        &self,
-        peers: &[String],
-        envelope: &BridgeEnvelope,
-    ) -> Result<Vec<Event>> {
+    fn encrypt_for_peers(&self, peers: &[String], envelope: &BridgeEnvelope) -> Result<Vec<Event>> {
         peers
             .iter()
             .map(|peer| self.encrypt_for_peer(peer, envelope))
@@ -1042,7 +1204,98 @@ impl SigningDevice {
         let plaintext = encode_bridge_envelope(envelope)
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
         let content = encrypt_content_for_peer(self.share.seckey, peer, &plaintext)?;
-        build_signed_event(self.share.seckey, self.config.event_kind, content)
+        let tags = vec![vec!["p".to_string(), peer.to_string()]];
+        build_signed_event(self.share.seckey, self.config.event_kind, tags, content)
+    }
+
+    fn validate_inbound_onboard_challenge(
+        &mut self,
+        challenge: Option<[u8; 32]>,
+        sender: &str,
+        now: u64,
+    ) -> Result<()> {
+        let Some(challenge) = challenge else {
+            debug!(
+                device_id = %self.device_id,
+                sender,
+                "accepted onboarding request without invite challenge"
+            );
+            return Ok(());
+        };
+
+        let challenge_hex = hex::encode(challenge);
+        debug!(
+            device_id = %self.device_id,
+            sender,
+            challenge_hex = %challenge_hex,
+            pending_invite_count = self.state.pending_invites.len(),
+            "validating inbound onboarding challenge"
+        );
+        let pending_invite_count = self.state.pending_invites.len();
+        let invite = self
+            .state
+            .pending_invites
+            .get_mut(&challenge_hex)
+            .ok_or_else(|| {
+                warn!(
+                    device_id = %self.device_id,
+                    sender,
+                    challenge_hex = %challenge_hex,
+                    pending_invite_count,
+                    "rejecting onboarding request with unknown invite challenge"
+                );
+                SignerError::InvalidRequest("unknown invite challenge".to_string())
+            })?;
+
+        if invite.callback_peer_pubkey_hex != self.share_public_key_hex {
+            warn!(
+                device_id = %self.device_id,
+                sender,
+                challenge_hex = %challenge_hex,
+                expected_callback_peer = %self.share_public_key_hex,
+                actual_callback_peer = %invite.callback_peer_pubkey_hex,
+                "rejecting onboarding request due to callback peer mismatch"
+            );
+            return Err(SignerError::InvalidRequest(
+                "invite callback peer mismatch".to_string(),
+            ));
+        }
+        if invite.expires_at <= now {
+            warn!(
+                device_id = %self.device_id,
+                sender,
+                challenge_hex = %challenge_hex,
+                expires_at = invite.expires_at,
+                now,
+                "rejecting onboarding request with expired invite challenge"
+            );
+            return Err(SignerError::InvalidRequest(
+                "invite challenge expired".to_string(),
+            ));
+        }
+        if invite.consumed_at.is_some() {
+            warn!(
+                device_id = %self.device_id,
+                sender,
+                challenge_hex = %challenge_hex,
+                consumed_at = ?invite.consumed_at,
+                "rejecting onboarding request with consumed invite challenge"
+            );
+            return Err(SignerError::InvalidRequest(
+                "invite challenge already consumed".to_string(),
+            ));
+        }
+
+        invite.consumed_at = Some(now);
+        self.mark_persistence_hint(PersistenceHint::Immediate);
+        debug!(
+            device_id = %self.device_id,
+            sender,
+            challenge_hex = %challenge_hex,
+            consumed_at = now,
+            "accepted onboarding request with invite challenge"
+        );
+        Ok(())
     }
 
     fn handle_inbound_request(
@@ -1100,6 +1353,15 @@ impl SigningDevice {
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
                     })?;
+                debug!(
+                    device_id = %self.device_id,
+                    sender = %sender,
+                    sender_idx,
+                    request_idx = request.idx,
+                    request_share_pk = %hex::encode(request.share_pk),
+                    request_challenge = ?request.challenge.map(hex::encode),
+                    "received onboard request"
+                );
                 if request.idx != sender_idx {
                     return Err(SignerError::InvalidSenderBinding(
                         "onboard idx mismatch".to_string(),
@@ -1110,6 +1372,7 @@ impl SigningDevice {
                         "onboard share_pk mismatch".to_string(),
                     ));
                 }
+                self.validate_inbound_onboard_challenge(request.challenge, &sender, now)?;
 
                 let nonces = self
                     .state
@@ -1126,6 +1389,13 @@ impl SigningDevice {
                     sent_at: now,
                     payload: BridgePayload::OnboardResponse(OnboardResponseWire::from(onboard)),
                 };
+                debug!(
+                    device_id = %self.device_id,
+                    sender = %sender,
+                    request_id = %response.request_id,
+                    group_member_count = self.group.members.len(),
+                    "sending onboard response"
+                );
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::SignRequest(wire) => {
@@ -1221,8 +1491,16 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &envelope)
             }
             BridgePayload::Error(_) => Ok(Vec::new()),
-            BridgePayload::PingResponse(_)
-            | BridgePayload::OnboardResponse(_)
+            BridgePayload::PingResponse(_) => {
+                debug!(
+                    device_id = %self.device_id,
+                    sender = %sender,
+                    request_id = %envelope.request_id,
+                    "ignoring stale ping response without matching pending request"
+                );
+                Ok(Vec::new())
+            }
+            BridgePayload::OnboardResponse(_)
             | BridgePayload::SignResponse(_)
             | BridgePayload::EcdhResponse(_) => Err(SignerError::InvalidRequest(
                 "response payload without pending request".to_string(),
@@ -1572,6 +1850,18 @@ impl SigningDevice {
     }
 }
 
+fn extract_recipient_p_tags(event: &Event) -> Vec<String> {
+    let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+    event
+        .tags
+        .iter()
+        .filter_map(|tag| match tag.kind() {
+            TagKind::SingleLetter(letter) if letter == p_tag => tag.content().map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1658,6 +1948,75 @@ mod tests {
     }
 
     #[test]
+    fn sign_selection_prefers_nonce_ready_peers() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let mut sorted_peers = fixture.signer.peers.clone();
+        sorted_peers.sort_unstable();
+        let chosen_peer = sorted_peers[1].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &chosen_peer);
+        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(fixture.local_share.idx, 10)
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, generated);
+
+        let selected = fixture.signer.select_signing_peers(1).expect("select signing peer");
+        assert_eq!(selected, vec![chosen_peer]);
+    }
+
+    #[test]
+    fn initiate_sign_succeeds_with_mixed_nonce_readiness() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let mut sorted_peers = fixture.signer.peers.clone();
+        sorted_peers.sort_unstable();
+        let ready_peer = sorted_peers[1].clone();
+        let ready_share = share_for_peer(&fixture.group, &fixture.shares, &ready_peer);
+        let mut peer_state = DeviceState::new(ready_share.idx, ready_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(fixture.local_share.idx, 10)
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(ready_share.idx, generated);
+
+        let outbound = fixture
+            .signer
+            .initiate_sign([42u8; 32])
+            .expect("initiate sign");
+
+        assert_eq!(outbound.len(), 1);
+
+        let request_id = fixture
+            .signer
+            .latest_request_id()
+            .expect("latest request id");
+        let pending = fixture
+            .signer
+            .state
+            .pending_operations
+            .get(&request_id)
+            .expect("pending sign operation");
+
+        assert!(matches!(pending.op_type, PendingOpType::Sign));
+        assert_eq!(pending.target_peers, vec![ready_peer.clone()]);
+
+        let PendingOpContext::SignSession { session, .. } = &pending.context else {
+            panic!("expected sign-session context");
+        };
+
+        let ready_idx = decode_member_index(&fixture.group.members, &ready_peer).expect("ready idx");
+        assert_eq!(session.members, vec![fixture.local_share.idx, ready_idx]);
+    }
+
+    #[test]
     fn invalid_locked_peer_response_fails_round_terminally() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
         let locked_peer = fixture.signer.peers[0].clone();
@@ -1690,6 +2049,7 @@ mod tests {
             payload: BridgePayload::OnboardRequest(OnboardRequestWire {
                 share_pk: locked_peer.clone(),
                 idx: 7,
+                challenge: None,
             }),
         };
         let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
@@ -1700,9 +2060,13 @@ mod tests {
             [9u8; 32],
         )
         .expect("encrypt");
-        let event =
-            build_signed_event(peer_share.seckey, fixture.signer.config.event_kind, content)
-                .expect("build event");
+        let event = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind,
+            vec![vec!["p".to_string(), local_pubkey.clone()]],
+            content,
+        )
+        .expect("build event");
 
         let outbound = fixture.signer.process_event(&event).expect("process event");
         assert!(outbound.is_empty());
@@ -1724,5 +2088,52 @@ mod tests {
             OperationFailureCode::InvalidLockedPeerResponse
         );
         assert_eq!(failure.failed_peer, Some(locked_peer));
+    }
+
+    #[test]
+    fn recipient_tag_validation_requires_single_matching_p_tag() {
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let local = fixture.signer.local_pubkey32().to_string();
+
+        let event_ok = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind,
+            vec![vec!["p".to_string(), local.clone()]],
+            "payload".to_string(),
+        )
+        .expect("event ok");
+        assert!(fixture.signer.has_exact_local_recipient_tag(&event_ok));
+
+        let event_missing = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind,
+            vec![],
+            "payload".to_string(),
+        )
+        .expect("event missing");
+        assert!(!fixture.signer.has_exact_local_recipient_tag(&event_missing));
+
+        let event_multi = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind,
+            vec![
+                vec!["p".to_string(), local.clone()],
+                vec!["p".to_string(), peer.clone()],
+            ],
+            "payload".to_string(),
+        )
+        .expect("event multi");
+        assert!(!fixture.signer.has_exact_local_recipient_tag(&event_multi));
+
+        let event_wrong = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind,
+            vec![vec!["p".to_string(), peer]],
+            "payload".to_string(),
+        )
+        .expect("event wrong");
+        assert!(!fixture.signer.has_exact_local_recipient_tag(&event_wrong));
     }
 }

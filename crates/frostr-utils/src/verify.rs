@@ -117,7 +117,6 @@ pub fn verify_share(share: &SharePackage, group: &GroupPackage) -> FrostUtilsRes
     Ok(())
 }
 
-
 pub fn verify_keyset(bundle: &KeysetBundle) -> FrostUtilsResult<KeysetVerificationReport> {
     verify_group_config(&bundle.group)?;
     if bundle.shares.len() != bundle.group.members.len() {

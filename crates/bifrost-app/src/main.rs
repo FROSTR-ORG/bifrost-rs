@@ -3,24 +3,30 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_app::runtime::{
-    DeviceLock, EncryptedFileStore, begin_run, complete_clean_run, load_config,
-    load_or_init_signer, load_share,
+    DeviceLock, EncryptedFileStore, begin_run, complete_clean_run, inspect_state_health,
+    load_config, load_or_init_signer, load_share,
 };
 use bifrost_bridge_tokio::{Bridge, BridgeConfig, NostrSdkAdapter};
 use bifrost_core::types::PeerPolicy;
 use bifrost_signer::{DeviceStore, PersistenceHint};
 use clap::{Parser, Subcommand};
+use frostr_utils::encode_invite_token;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(name = "bifrost")]
 struct Cli {
+    #[arg(long, global = true, conflicts_with = "debug")]
+    verbose: bool,
+    #[arg(long, global = true)]
+    debug: bool,
     #[arg(long)]
     config: PathBuf,
     #[command(subcommand)]
@@ -29,10 +35,24 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Sign { message_hex32: String },
-    Ecdh { pubkey_hex32: String },
-    Ping { peer: String },
-    Onboard { peer: String },
+    Sign {
+        message_hex32: String,
+    },
+    Ecdh {
+        pubkey_hex32: String,
+    },
+    Ping {
+        peer: String,
+    },
+    Onboard {
+        peer: String,
+        #[arg(long)]
+        challenge_hex32: Option<String>,
+    },
+    Invite {
+        #[command(subcommand)]
+        command: InviteCommands,
+    },
     Listen {
         #[arg(long)]
         control_socket: Option<PathBuf>,
@@ -41,7 +61,27 @@ enum Commands {
     },
     Status,
     Policies,
-    SetPolicy { peer: String, policy_json: String },
+    StateHealth,
+    SetPolicy {
+        peer: String,
+        policy_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum InviteCommands {
+    Create {
+        #[arg(long = "relay")]
+        relay_overrides: Vec<String>,
+        #[arg(long, default_value_t = 3600)]
+        expires_in_secs: u64,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    ShowPending,
+    Revoke {
+        challenge_hex32: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +109,7 @@ enum ControlCommand {
     Onboard {
         peer: String,
         timeout_secs: Option<u64>,
+        challenge_hex32: Option<String>,
     },
     Sign {
         message_hex32: String,
@@ -90,15 +131,22 @@ struct ControlResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
     let cli = Cli::parse();
+    init_tracing(&cli);
     let config = load_config(&cli.config)?;
+    info!(
+        config_path = %cli.config.display(),
+        command = ?cli.command,
+        verbose = cli.verbose,
+        debug = cli.debug,
+        "bifrost command starting"
+    );
 
     let share = load_share(&config.share_path)?;
     let state_path = PathBuf::from(bifrost_app::runtime::expand_tilde(&config.state_path));
     let store = EncryptedFileStore::new(state_path.clone(), share);
 
-    match cli.command {
+    match &cli.command {
         Commands::Status => {
             let _lock = DeviceLock::acquire_shared(&state_path)?;
             let signer = load_or_init_signer(&config, &store)?;
@@ -114,8 +162,8 @@ async fn main() -> Result<()> {
         }
         Commands::SetPolicy { peer, policy_json } => {
             let _lock = DeviceLock::acquire_exclusive(&state_path)?;
-            let run_id = begin_run(&state_path)?;
             let mut signer = load_or_init_signer(&config, &store)?;
+            let run_id = begin_run(&state_path)?;
             let policy: PeerPolicy =
                 serde_json::from_str(&policy_json).context("invalid policy json")?;
             signer.set_peer_policy(&peer, policy)?;
@@ -124,12 +172,64 @@ async fn main() -> Result<()> {
             println!("updated policy for {peer}");
             return Ok(());
         }
+        Commands::Invite {
+            command:
+                InviteCommands::Create {
+                    relay_overrides,
+                    expires_in_secs,
+                    label,
+                },
+        } => {
+            let _lock = DeviceLock::acquire_exclusive(&state_path)?;
+            let mut signer = load_or_init_signer(&config, &store)?;
+            let run_id = begin_run(&state_path)?;
+            let relays = if relay_overrides.is_empty() {
+                config.relays.clone()
+            } else {
+                relay_overrides.clone()
+            };
+            let token = signer.create_invite(relays, *expires_in_secs, label.clone())?;
+            store.save(signer.state())?;
+            complete_clean_run(&state_path, &run_id, signer.state())?;
+            println!("{}", encode_invite_token(&token)?);
+            return Ok(());
+        }
+        Commands::Invite {
+            command: InviteCommands::ShowPending,
+        } => {
+            let _lock = DeviceLock::acquire_shared(&state_path)?;
+            let signer = load_or_init_signer(&config, &store)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&signer.pending_invites())?
+            );
+            return Ok(());
+        }
+        Commands::Invite {
+            command: InviteCommands::Revoke { challenge_hex32 },
+        } => {
+            let _lock = DeviceLock::acquire_exclusive(&state_path)?;
+            let mut signer = load_or_init_signer(&config, &store)?;
+            let run_id = begin_run(&state_path)?;
+            if !signer.revoke_pending_invite(challenge_hex32) {
+                return Err(anyhow!("unknown invite challenge"));
+            }
+            store.save(signer.state())?;
+            complete_clean_run(&state_path, &run_id, signer.state())?;
+            println!("revoked invite {challenge_hex32}");
+            return Ok(());
+        }
+        Commands::StateHealth => {
+            let report = inspect_state_health(&state_path);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
         _ => {}
     }
 
     let _lock = DeviceLock::acquire_exclusive(&state_path)?;
-    let run_id = begin_run(&state_path)?;
     let signer = load_or_init_signer(&config, &store)?;
+    let run_id = begin_run(&state_path)?;
 
     let adapter = NostrSdkAdapter::new(config.relays.clone());
     let bridge = Bridge::start_with_config(
@@ -183,10 +283,18 @@ async fn main() -> Result<()> {
                 .map_err(|e| anyhow!(e.to_string()))?;
             println!("{result:?}");
         }
-        Commands::Onboard { peer } => {
+        Commands::Onboard {
+            peer,
+            challenge_hex32,
+        } => {
+            let challenge = challenge_hex32
+                .as_deref()
+                .map(decode_hex32)
+                .transpose()?;
             let result = bridge
                 .onboard(
                     peer,
+                    challenge,
                     Duration::from_secs(config.options.onboard_timeout_secs),
                 )
                 .await
@@ -200,7 +308,9 @@ async fn main() -> Result<()> {
             #[cfg(not(unix))]
             {
                 if control_socket.is_some() || control_token.is_some() {
-                    return Err(anyhow!("--control-socket is supported only on unix targets"));
+                    return Err(anyhow!(
+                        "--control-socket is supported only on unix targets"
+                    ));
                 }
             }
 
@@ -235,9 +345,6 @@ async fn main() -> Result<()> {
                         }
                     }
                     _ = tokio::signal::ctrl_c() => {
-                        let state = bridge.snapshot_state().await.map_err(|e| anyhow!(e.to_string()))?;
-                        store.save(&state)?;
-                        complete_clean_run(&state_path, &run_id, &state)?;
                         break;
                     }
                     accept = async {
@@ -281,9 +388,6 @@ async fn main() -> Result<()> {
                         }
                     }
                     _ = tokio::signal::ctrl_c() => {
-                        let state = bridge.snapshot_state().await.map_err(|e| anyhow!(e.to_string()))?;
-                        store.save(&state)?;
-                        complete_clean_run(&state_path, &run_id, &state)?;
                         break;
                     }
                 }
@@ -294,7 +398,11 @@ async fn main() -> Result<()> {
                 let _ = std::fs::remove_file(path);
             }
         }
-        Commands::Status | Commands::Policies | Commands::SetPolicy { .. } => unreachable!(),
+        Commands::Status
+        | Commands::Policies
+        | Commands::StateHealth
+        | Commands::SetPolicy { .. }
+        | Commands::Invite { .. } => unreachable!(),
     }
 
     let state = bridge
@@ -302,15 +410,31 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
     store.save(&state)?;
-    complete_clean_run(&state_path, &run_id, &state)?;
     bridge.shutdown().await;
+    complete_clean_run(&state_path, &run_id, &state)?;
     Ok(())
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,bifrost_bridge_tokio=info,bifrost_app=info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+fn init_tracing(cli: &Cli) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(default_log_filter(cli))
+    });
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_env_filter(filter)
+        .try_init();
+}
+
+fn default_log_filter(cli: &Cli) -> &'static str {
+    if cli.debug {
+        "warn,bifrost_app=debug,bifrost_bridge_tokio=debug,bifrost_signer=debug"
+    } else if cli.verbose {
+        "warn,bifrost_app=info,bifrost_bridge_tokio=info,bifrost_signer=info"
+    } else {
+        "warn"
+    }
 }
 
 fn decode_hex32(value: &str) -> Result<[u8; 32]> {
@@ -393,7 +517,10 @@ async fn execute_control_command(
                 Ok(json!(status))
             }
             ControlCommand::Policies => {
-                let policies = bridge.policies().await.map_err(|e| anyhow!(e.to_string()))?;
+                let policies = bridge
+                    .policies()
+                    .await
+                    .map_err(|e| anyhow!(e.to_string()))?;
                 Ok(json!(policies))
             }
             ControlCommand::SetPolicy {
@@ -432,7 +559,9 @@ async fn execute_control_command(
                 let result = bridge
                     .ping(
                         peer,
-                        Duration::from_secs(timeout_secs.unwrap_or(config.options.ping_timeout_secs)),
+                        Duration::from_secs(
+                            timeout_secs.unwrap_or(config.options.ping_timeout_secs),
+                        ),
                     )
                     .await
                     .map_err(|e| anyhow!(e.to_string()))?;
@@ -441,11 +570,22 @@ async fn execute_control_command(
                     "peer": result.peer,
                 }))
             }
-            ControlCommand::Onboard { peer, timeout_secs } => {
+            ControlCommand::Onboard {
+                peer,
+                timeout_secs,
+                challenge_hex32,
+            } => {
+                let challenge = challenge_hex32
+                    .as_deref()
+                    .map(decode_hex32)
+                    .transpose()?;
                 let result = bridge
                     .onboard(
                         peer,
-                        Duration::from_secs(timeout_secs.unwrap_or(config.options.onboard_timeout_secs)),
+                        challenge,
+                        Duration::from_secs(
+                            timeout_secs.unwrap_or(config.options.onboard_timeout_secs),
+                        ),
                     )
                     .await
                     .map_err(|e| anyhow!(e.to_string()))?;
@@ -462,7 +602,9 @@ async fn execute_control_command(
                 let result = bridge
                     .sign(
                         message,
-                        Duration::from_secs(timeout_secs.unwrap_or(config.options.sign_timeout_secs)),
+                        Duration::from_secs(
+                            timeout_secs.unwrap_or(config.options.sign_timeout_secs),
+                        ),
                     )
                     .await
                     .map_err(|e| anyhow!(e.to_string()))?;
@@ -479,7 +621,9 @@ async fn execute_control_command(
                 let result = bridge
                     .ecdh(
                         pubkey,
-                        Duration::from_secs(timeout_secs.unwrap_or(config.options.ecdh_timeout_secs)),
+                        Duration::from_secs(
+                            timeout_secs.unwrap_or(config.options.ecdh_timeout_secs),
+                        ),
                     )
                     .await
                     .map_err(|e| anyhow!(e.to_string()))?;

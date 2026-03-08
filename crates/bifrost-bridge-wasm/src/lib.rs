@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
+use bifrost_codec::wire::{DerivedPublicNonceWire, GroupPackageWire, SharePackageWire};
+use bifrost_core::types::{GroupPackage, MethodPolicy, PeerPolicy};
 use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
-use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
-use bifrost_core::types::{MethodPolicy, PeerPolicy};
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceState, OperationFailure, SigningDevice,
 };
@@ -10,6 +10,7 @@ use k256::SecretKey;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use nostr::Event;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
@@ -65,12 +66,58 @@ struct RuntimeBootstrapInput {
     group: GroupPackageWire,
     share: SharePackageWire,
     peers: Vec<String>,
+    #[serde(default)]
+    initial_peer_nonces: Vec<BootstrapPeerNoncesInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct BootstrapPeerNoncesInput {
+    peer: String,
+    nonces: Vec<DerivedPublicNonceWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeSnapshot {
     bootstrap: RuntimeBootstrapInput,
-    state: DeviceState,
+    state_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeSnapshotExport {
+    bootstrap: RuntimeBootstrapInput,
+    state_hex: String,
+    status: bifrost_signer::DeviceStatus,
+    state: DeviceStateSnapshotJson,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeviceStateSnapshotJson {
+    version: u32,
+    last_active: u64,
+    request_seq: u64,
+    replay_cache_size: usize,
+    ecdh_cache_size: usize,
+    sig_cache_size: usize,
+    policies: HashMap<String, PeerPolicy>,
+    remote_scoped_policies: HashMap<String, bifrost_core::types::PeerScopedPolicyProfile>,
+    pending_operations: HashMap<String, bifrost_signer::PendingOperation>,
+    nonce_pool: NoncePoolSnapshotJson,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NoncePoolSnapshotJson {
+    peers: Vec<NoncePeerSnapshotJson>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NoncePeerSnapshotJson {
+    idx: u16,
+    pubkey: String,
+    incoming_available: usize,
+    outgoing_available: usize,
+    outgoing_spent: usize,
+    can_sign: bool,
+    should_send_nonces: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +126,9 @@ struct DecodedOnboarding {
     share_pubkey32: String,
     peer_pk_xonly: String,
     relays: Vec<String>,
+    challenge_hex32: Option<String>,
+    created_at: Option<u64>,
+    expires_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,7 +137,10 @@ enum CommandInput {
     Sign { message_hex_32: String },
     Ecdh { pubkey32_hex: String },
     Ping { peer_pubkey32_hex: String },
-    Onboard { peer_pubkey32_hex: String },
+    Onboard {
+        peer_pubkey32_hex: String,
+        challenge_hex32: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -182,7 +235,9 @@ impl WasmBridgeRuntime {
             serde_json::from_str(&config_json).map_err(|e| to_host_error(e.to_string()))?;
         let snapshot: RuntimeSnapshot =
             serde_json::from_str(&snapshot_json).map_err(|e| to_host_error(e.to_string()))?;
-        let core = build_core(&config, &snapshot.bootstrap, Some(snapshot.state))
+        let state = decode_device_state_hex(&snapshot.state_hex)
+            .map_err(|e| to_host_error(e.to_string()))?;
+        let core = build_core(&config, &snapshot.bootstrap, Some(state))
             .map_err(|e| to_host_error(e.to_string()))?;
         self.state = Some(RuntimeState {
             core,
@@ -271,9 +326,14 @@ impl WasmBridgeRuntime {
             .state
             .as_ref()
             .ok_or_else(|| to_host_error("runtime not initialized"))?;
-        let snapshot = RuntimeSnapshot {
+        let device_state = state.core.snapshot_state();
+        let snapshot = RuntimeSnapshotExport {
             bootstrap: state.bootstrap.clone(),
-            state: state.core.snapshot_state(),
+            state_hex: encode_device_state_hex(&device_state)
+                .map_err(|e| to_host_error(e.to_string()))?,
+            status: state.core.status(),
+            state: device_state_snapshot_json(&device_state, &state.bootstrap)
+                .map_err(|e| to_host_error(e.to_string()))?,
         };
         serde_json::to_string(&snapshot).map_err(|e| to_host_error(e.to_string()))
     }
@@ -330,9 +390,17 @@ impl WasmBridgeRuntime {
             .map_err(|e| to_host_error(e.to_string()))
     }
 
-    pub fn decode_onboarding_package_json(&self, value: String) -> HostResult<String> {
-        let decoded =
-            decode_onboarding_package(&value).map_err(|e| to_host_error(e.to_string()))?;
+    pub fn decode_onboarding_package_json_with_password(
+        &self,
+        value: String,
+        password: String,
+    ) -> HostResult<String> {
+        let decoded = decode_onboarding_package(&value, Some(password.as_str()))
+            .map_err(|e| to_host_error(e.to_string()))?;
+        self.encode_decoded_onboarding(decoded)
+    }
+
+    fn encode_decoded_onboarding(&self, decoded: frostr_utils::OnboardingPackage) -> HostResult<String> {
         let secret = SecretKey::from_slice(&decoded.share.seckey)
             .map_err(|e| to_host_error(format!("invalid share seckey: {e}")))?;
         let point = secret.public_key().to_encoded_point(true);
@@ -341,6 +409,9 @@ impl WasmBridgeRuntime {
             share_pubkey32: hex::encode(&point.as_bytes()[1..]),
             peer_pk_xonly: hex::encode(decoded.peer_pk),
             relays: decoded.relays,
+            challenge_hex32: decoded.challenge.map(hex::encode),
+            created_at: decoded.created_at,
+            expires_at: decoded.expires_at,
         };
         serde_json::to_string(&payload).map_err(|e| to_host_error(e.to_string()))
     }
@@ -364,11 +435,117 @@ fn build_core(
     let device_cfg = config.device.clone().unwrap_or_default();
     let signer = match state {
         Some(existing) => SigningDevice::new(group, share, peers, existing, device_cfg)?,
-        None => SigningDevice::init(group, share, peers, device_cfg)?,
+        None => {
+            let mut initial_state = DeviceState::new(share.idx, share.seckey);
+            seed_initial_peer_nonces(
+                &mut initial_state,
+                &group,
+                &bootstrap.initial_peer_nonces,
+            )?;
+            SigningDevice::new(group, share, peers, initial_state, device_cfg)?
+        }
     };
 
     let bridge_cfg = bridge_config_from_input(config.bridge.clone());
     BridgeCore::new(signer, bridge_cfg)
+}
+
+fn seed_initial_peer_nonces(
+    state: &mut DeviceState,
+    group: &GroupPackage,
+    initial_peer_nonces: &[BootstrapPeerNoncesInput],
+) -> Result<()> {
+    for entry in initial_peer_nonces {
+        if entry.nonces.is_empty() {
+            continue;
+        }
+
+        let peer_idx = decode_member_index(group, &entry.peer)?;
+        let nonces = entry
+            .nonces
+            .iter()
+            .cloned()
+            .map(TryInto::try_into)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e: bifrost_codec::CodecError| anyhow!(e.to_string()))?;
+        state.nonce_pool.store_incoming(peer_idx, nonces);
+    }
+
+    Ok(())
+}
+
+fn decode_member_index(group: &GroupPackage, peer: &str) -> Result<u16> {
+    if peer != peer.to_ascii_lowercase() {
+        return Err(anyhow!("peer pubkey must be lowercase hex"));
+    }
+
+    let expected = hex::decode(peer).map_err(|_| anyhow!("invalid peer pubkey encoding"))?;
+    if expected.len() != 32 {
+        return Err(anyhow!("peer pubkey must be 32-byte x-only"));
+    }
+
+    for member in &group.members {
+        if member.pubkey[1..] == expected[..] {
+            return Ok(member.idx);
+        }
+    }
+
+    Err(anyhow!("unknown peer {}", peer))
+}
+
+fn device_state_snapshot_json(
+    state: &DeviceState,
+    bootstrap: &RuntimeBootstrapInput,
+) -> Result<DeviceStateSnapshotJson> {
+    Ok(DeviceStateSnapshotJson {
+        version: state.version,
+        last_active: state.last_active,
+        request_seq: state.request_seq,
+        replay_cache_size: state.replay_cache.len(),
+        ecdh_cache_size: state.ecdh_cache.len(),
+        sig_cache_size: state.sig_cache.len(),
+        policies: state.policies.clone(),
+        remote_scoped_policies: state.remote_scoped_policies.clone(),
+        pending_operations: state.pending_operations.clone(),
+        nonce_pool: nonce_pool_snapshot_json(state, bootstrap)?,
+    })
+}
+
+fn encode_device_state_hex(state: &DeviceState) -> Result<String> {
+    let encoded =
+        bincode::serialize(state).map_err(|e| anyhow!("failed to encode device state: {e}"))?;
+    Ok(hex::encode(encoded))
+}
+
+fn decode_device_state_hex(state_hex: &str) -> Result<DeviceState> {
+    let bytes = hex::decode(state_hex)
+        .map_err(|e| anyhow!("failed to decode device state snapshot hex: {e}"))?;
+    bincode::deserialize(&bytes).map_err(|e| anyhow!("failed to decode device state snapshot: {e}"))
+}
+
+fn nonce_pool_snapshot_json(
+    state: &DeviceState,
+    bootstrap: &RuntimeBootstrapInput,
+) -> Result<NoncePoolSnapshotJson> {
+    let group: GroupPackage = bootstrap.group.clone().try_into()?;
+    let mut peers = Vec::with_capacity(bootstrap.peers.len());
+
+    for peer in &bootstrap.peers {
+        let idx = decode_member_index(&group, peer)?;
+        let stats = state.nonce_pool.peer_stats(idx);
+        peers.push(NoncePeerSnapshotJson {
+            idx,
+            pubkey: peer.clone(),
+            incoming_available: stats.incoming_available,
+            outgoing_available: stats.outgoing_available,
+            outgoing_spent: stats.outgoing_spent,
+            can_sign: stats.can_sign,
+            should_send_nonces: stats.should_send_nonces,
+        });
+    }
+
+    peers.sort_by_key(|entry| entry.idx);
+    Ok(NoncePoolSnapshotJson { peers })
 }
 
 fn bridge_config_from_input(input: Option<BridgeConfigInput>) -> BridgeConfig {
@@ -413,8 +590,15 @@ fn parse_command(input: CommandInput) -> Result<BridgeCommand> {
         CommandInput::Ping { peer_pubkey32_hex } => Ok(BridgeCommand::Ping {
             peer: peer_pubkey32_hex,
         }),
-        CommandInput::Onboard { peer_pubkey32_hex } => Ok(BridgeCommand::Onboard {
+        CommandInput::Onboard {
+            peer_pubkey32_hex,
+            challenge_hex32,
+        } => Ok(BridgeCommand::Onboard {
             peer: peer_pubkey32_hex,
+            challenge: challenge_hex32
+                .as_deref()
+                .map(|value| decode_fixed_hex::<32>(value, "challenge_hex32"))
+                .transpose()?,
         }),
     }
 }
@@ -428,6 +612,98 @@ fn decode_fixed_hex<const N: usize>(value: &str, field: &str) -> Result<[u8; N]>
     let mut out = [0u8; N];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frostr_utils::{CreateKeysetConfig, create_keyset};
+
+    #[test]
+    fn build_core_seeds_initial_peer_nonces_into_runtime_state() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let group = bundle.group;
+        let local_share = bundle.shares[0].clone();
+        let peer_share = bundle.shares[1].clone();
+        let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
+
+        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(local_share.idx, 3)
+            .expect("generate peer nonces");
+
+        let bootstrap = RuntimeBootstrapInput {
+            group: GroupPackageWire::from(group.clone()),
+            share: SharePackageWire::from(local_share.clone()),
+            peers: vec![peer_pubkey.clone()],
+            initial_peer_nonces: vec![BootstrapPeerNoncesInput {
+                peer: peer_pubkey,
+                nonces: generated.into_iter().map(Into::into).collect(),
+            }],
+        };
+
+        let core = build_core(
+            &RuntimeConfigInput {
+                device: None,
+                bridge: None,
+            },
+            &bootstrap,
+            None,
+        )
+        .expect("build core");
+
+        let mut state = core.snapshot_state();
+        let peer_stats = state.nonce_pool.peer_stats(peer_share.idx);
+        assert_eq!(peer_stats.incoming_available, 3);
+        assert!(state.nonce_pool.consume_incoming(peer_share.idx).is_some());
+    }
+
+    #[test]
+    fn snapshot_json_serializes_nonce_pool_stats() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let group = bundle.group.clone();
+        let local_share = bundle.shares[0].clone();
+        let peer_share = bundle.shares[1].clone();
+        let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
+
+        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(local_share.idx, 2)
+            .expect("generate peer nonces");
+
+        let bootstrap = RuntimeBootstrapInput {
+            group: GroupPackageWire::from(group),
+            share: SharePackageWire::from(local_share),
+            peers: vec![peer_pubkey.clone()],
+            initial_peer_nonces: vec![BootstrapPeerNoncesInput {
+                peer: peer_pubkey.clone(),
+                nonces: generated.into_iter().map(Into::into).collect(),
+            }],
+        };
+
+        let mut runtime = WasmBridgeRuntime::new();
+        runtime
+            .init_runtime("{}".to_string(), serde_json::to_string(&bootstrap).expect("bootstrap"))
+            .expect("init runtime");
+
+        let snapshot_json = runtime.snapshot_state_json().expect("snapshot json");
+        let snapshot: RuntimeSnapshotExport =
+            serde_json::from_str(&snapshot_json).expect("deserialize snapshot");
+        let peer = &snapshot.state.nonce_pool.peers[0];
+        assert_eq!(peer.pubkey, peer_pubkey);
+        assert_eq!(peer.incoming_available, 2);
+        assert!(!peer.can_sign);
+    }
 }
 
 impl From<bifrost_signer::PendingOpType> for PendingOpTypeJson {

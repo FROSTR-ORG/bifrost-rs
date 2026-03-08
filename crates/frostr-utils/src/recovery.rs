@@ -11,10 +11,9 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
         ));
     }
 
-    let group_key = frost::VerifyingKey::deserialize(&pubkey32_to_even_compressed(
-        input.group.group_pk,
-    ))
-        .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
+    let group_key =
+        frost::VerifyingKey::deserialize(&pubkey32_to_even_compressed(input.group.group_pk))
+            .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
     let mut key_packages = Vec::new();
     for share in input.shares.iter().take(input.group.threshold as usize) {
@@ -66,7 +65,6 @@ fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
     out[1..].copy_from_slice(&pubkey);
     out
 }
-
 
 #[cfg(test)]
 mod tests {

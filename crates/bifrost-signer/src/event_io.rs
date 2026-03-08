@@ -18,7 +18,12 @@ pub(crate) fn event_pubkey_xonly(event: &Event) -> Result<String> {
     Ok(event.pubkey.to_hex())
 }
 
-pub(crate) fn build_signed_event(seckey: [u8; 32], kind: u64, content: String) -> Result<Event> {
+pub(crate) fn build_signed_event(
+    seckey: [u8; 32],
+    kind: u64,
+    tags: Vec<Vec<String>>,
+    content: String,
+) -> Result<Event> {
     let created_at = now_unix_secs();
 
     let fb = FieldBytes::from(seckey);
@@ -26,15 +31,7 @@ pub(crate) fn build_signed_event(seckey: [u8; 32], kind: u64, content: String) -
         .map_err(|e| crate::SignerError::InvalidRequest(format!("invalid signing key: {e}")))?;
     let pubkey = hex::encode(signing_key.verifying_key().to_bytes());
 
-    let preimage = serde_json::json!([
-        0,
-        pubkey,
-        created_at,
-        kind,
-        Vec::<Vec<String>>::new(),
-        content
-    ])
-    .to_string();
+    let preimage = serde_json::json!([0, pubkey, created_at, kind, tags, content]).to_string();
     let digest = Sha256::digest(preimage.as_bytes());
     let id = hex::encode(digest);
 
@@ -48,7 +45,7 @@ pub(crate) fn build_signed_event(seckey: [u8; 32], kind: u64, content: String) -
         "pubkey": pubkey,
         "created_at": created_at,
         "kind": kind,
-        "tags": [],
+        "tags": tags,
         "content": content,
         "sig": hex::encode(sig.to_bytes()),
     }))

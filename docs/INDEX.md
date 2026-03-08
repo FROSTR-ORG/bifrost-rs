@@ -20,7 +20,7 @@
 - Runtime config schema and practical defaults.
 
 4. `TROUBLESHOOTING.md`
-- Failure modes, diagnostics, and recovery commands.
+- Failure modes, structured diagnostics, and recovery commands.
 
 5. `API.md`
 - Rust crate-level API map and runtime command inventory.

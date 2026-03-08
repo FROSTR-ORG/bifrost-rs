@@ -15,6 +15,7 @@ hmac.workspace = true
 k256.workspace = true
 nostr.workspace = true
 rand_core.workspace = true
+tracing.workspace = true
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 frostr-utils = { path = "../frostr-utils" }

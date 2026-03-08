@@ -24,6 +24,7 @@ Bridge envelope (`crates/bifrost-codec/src/bridge.rs`):
 
 Wire payloads (`crates/bifrost-codec/src/wire.rs`):
 - Group/share/session/partial-signature/ECDH/ping/onboard payload structs.
+- `OnboardRequestWire` now carries an optional invite `challenge`.
 - `TryFrom` conversions with strict bounds and shape checks.
 
 ## `bifrost-signer`
@@ -38,19 +39,23 @@ Primary operations:
 - Failure drain: `take_failures`
 - State and policy: `status`, `policies`, `set_peer_policy`, `expire_stale`
 - Subscription export: `subscription_filters`
+- Recipient helpers: local recipient identity + strict single-`p` routing checks
 
 State/config:
 - `DeviceState`
 - `DeviceConfig`
 - `PendingOperation`, `CompletedOperation`
+- `PendingInviteRecord` for inviter-side challenge tracking
 - `PersistenceHint` (batch/immediate/none persistence signal)
 
 ## `bifrost-router`
 
 Runtime-agnostic router core (`crates/bifrost-router/src/lib.rs`):
 - `BridgeCore`: queueing, dedupe, and signer-effect dispatch.
+- strict recipient routing gate for inbound events (`exactly one p`, local recipient only).
 - `BridgeConfig`: bounded queue/dedupe limits and overflow policy control.
 - `BridgeCommand`: `sign`, `ecdh`, `ping`, `onboard` command surface.
+- `onboard` commands may include an optional invite challenge.
 - `OutboundEvent`: encrypted relay event plus optional request-id correlation.
 
 ## `bifrost-bridge-tokio`
@@ -66,6 +71,8 @@ Bridge command surface:
 
 ## Runtime binaries
 
-- `bifrost`: CLI (`sign`, `ecdh`, `ping`, `onboard`, `listen`, `status`, `policies`, `set-policy`)
+- `bifrost`: CLI (`sign`, `ecdh`, `ping`, `onboard`, `invite`, `listen`, `status`, `policies`, `set-policy`)
+- `bifrost` global flags: `--verbose`, `--debug`, plus `RUST_LOG` override support
 - `bifrost-tui`: terminal dashboard.
-- `bifrost-devtools`: `keygen`, `relay`, `e2e-node`, and `e2e-full` runtime e2e commands.
+- `bifrost-devtools`: `keygen`, `invite`, `relay`, `e2e-node`, and `e2e-full` runtime e2e commands.
+- `bifrost-devtools` global flags: `--verbose`, `--debug`, plus `RUST_LOG` override support

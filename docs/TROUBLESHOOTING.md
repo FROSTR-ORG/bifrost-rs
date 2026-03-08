@@ -20,7 +20,7 @@ Fix:
 - Re-generate artifacts if missing:
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
 ```
 
 ## Relay Connection Failures
@@ -28,8 +28,8 @@ cargo run -p bifrost-dev --bin bifrost-devtools -- keygen --out-dir ./data --thr
 Checks:
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- relay 8194
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json status
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose relay 8194
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json status
 ```
 
 Typical causes:
@@ -47,9 +47,9 @@ Checks:
 Run baseline:
 
 ```bash
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-bob.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-bob.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-carol.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
 ```
 
 ## State Corruption Errors
@@ -67,5 +67,6 @@ Fix:
 If blocked, collect:
 - command run
 - exact stderr output
+- structured runtime/devtools logs (`--verbose` or `--debug`)
 - relay logs
 - active config JSON (redact sensitive fields)

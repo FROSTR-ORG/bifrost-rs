@@ -22,8 +22,8 @@ use tracing::{info, warn};
 pub use bifrost_router::{
     DEFAULT_COMMAND_OVERFLOW_POLICY, DEFAULT_COMMAND_QUEUE_CAPACITY, DEFAULT_EXPIRE_TICK_MS,
     DEFAULT_INBOUND_DEDUPE_CACHE_LIMIT, DEFAULT_INBOUND_OVERFLOW_POLICY,
-    DEFAULT_INBOUND_QUEUE_CAPACITY, DEFAULT_OUTBOUND_OVERFLOW_POLICY, DEFAULT_OUTBOUND_QUEUE_CAPACITY,
-    QueueOverflowPolicy,
+    DEFAULT_INBOUND_QUEUE_CAPACITY, DEFAULT_OUTBOUND_OVERFLOW_POLICY,
+    DEFAULT_OUTBOUND_QUEUE_CAPACITY, QueueOverflowPolicy,
 };
 
 #[async_trait]
@@ -102,6 +102,7 @@ enum BridgeCommand {
     Onboard {
         op_id: String,
         peer: String,
+        challenge: Option<[u8; 32]>,
         completion: oneshot::Sender<std::result::Result<CompletedOperation, BridgeError>>,
     },
     SnapshotState {
@@ -245,13 +246,13 @@ impl Bridge {
                                     RouterCommand::Ping { peer },
                                 );
                             }
-                            BridgeCommand::Onboard { op_id, peer, completion } => {
+                            BridgeCommand::Onboard { op_id, peer, challenge, completion } => {
                                 handle_operation_command(
                                     &mut core,
                                     &mut waiters,
                                     op_id,
                                     completion,
-                                    RouterCommand::Onboard { peer },
+                                    RouterCommand::Onboard { peer, challenge },
                                 );
                             }
                             BridgeCommand::SnapshotState { reply } => {
@@ -303,7 +304,9 @@ impl Bridge {
 
                 if shutdown {
                     for (_, waiter) in waiters.drain() {
-                        let _ = waiter.completion.send(Err(BridgeError::CommandChannelClosed));
+                        let _ = waiter
+                            .completion
+                            .send(Err(BridgeError::CommandChannelClosed));
                     }
                     let _ = adapter.disconnect().await;
                     break;
@@ -396,6 +399,7 @@ impl Bridge {
     pub async fn onboard(
         &self,
         peer: String,
+        challenge: Option<[u8; 32]>,
         timeout: Duration,
     ) -> std::result::Result<OnboardResult, BridgeError> {
         let (tx, rx) = oneshot::channel();
@@ -403,6 +407,7 @@ impl Bridge {
             .send(BridgeCommand::Onboard {
                 op_id: self.next_op_id(),
                 peer,
+                challenge,
                 completion: tx,
             })
             .await

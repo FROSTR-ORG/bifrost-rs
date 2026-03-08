@@ -16,7 +16,7 @@ cargo test --workspace
 ## 2. Generate Local Artifacts
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
 ```
 
 Generated files include:
@@ -27,7 +27,7 @@ Generated files include:
 ## 3. Start Relay
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- relay 8194
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose relay 8194
 ```
 
 ## 4. Start Listener Nodes
@@ -35,9 +35,9 @@ cargo run -p bifrost-dev --bin bifrost-devtools -- relay 8194
 Run each in its own terminal:
 
 ```bash
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-bob.json listen
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-bob.json listen
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-carol.json listen
 ```
 
 ## 5. Run Operations
@@ -45,13 +45,20 @@ cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-carol.json lis
 From an operator terminal:
 
 ```bash
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json status
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json policies
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json onboard <peer_pubkey_hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --config ./data/bifrost-alice.json ecdh <32-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json status
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json policies
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json invite create
+cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose invite assemble --token '<invite-token-json>' --share ./data/share-bob.json --generate-password
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json onboard <peer_pubkey_hex> --challenge-hex32 <challenge_hex32>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json sign <32-byte-hex>
+cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ecdh <32-byte-hex>
 ```
+
+Notes:
+- `invite create` returns a share-free invite token. Provisioning must combine that token with a recipient share to produce the encrypted `bfonboard1...` package.
+- The onboarding package is consume-only. The recipient uses it to complete `onboard`, then persists signer/runtime state rather than the package itself.
+- Add `--debug` instead of `--verbose` when you want debug-level JSON logs.
 
 ## 6. Optional TUI
 
@@ -62,8 +69,8 @@ cargo run -p bifrost-dev --bin bifrost-tui -- --config ./data/bifrost-alice.json
 ## 7. Cross-Platform Runtime E2E
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- e2e-full --threshold 11 --count 15
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
+cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-full --threshold 11 --count 15
 ```
 
 ## Next Reading

@@ -237,8 +237,9 @@ mod tests {
 
     #[test]
     fn decrypts_js_generated_nip44_payload() {
-        let local_seckey = hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
-            .expect("hex seckey");
+        let local_seckey =
+            hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
+                .expect("hex seckey");
         let mut sk = [0u8; 32];
         sk.copy_from_slice(&local_seckey);
 

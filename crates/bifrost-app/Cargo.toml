@@ -29,4 +29,5 @@ bifrost-bridge-tokio = { path = "../bifrost-bridge-tokio" }
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 bifrost-signer = { path = "../bifrost-signer" }
+frostr-utils = { path = "../frostr-utils" }
 clap = { version = "4", features = ["derive"] }

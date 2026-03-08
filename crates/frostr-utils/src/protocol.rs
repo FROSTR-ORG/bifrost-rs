@@ -1,6 +1,6 @@
 use bifrost_core::types::{
-    Bytes32, EcdhPackage, GroupPackage, PartialSigPackage, SharePackage,
-    SignSessionPackage, SignatureEntry,
+    Bytes32, EcdhPackage, GroupPackage, PartialSigPackage, SharePackage, SignSessionPackage,
+    SignatureEntry,
 };
 use bifrost_core::{
     combine_ecdh_packages, combine_signatures, create_ecdh_package, create_partial_sig_package,
