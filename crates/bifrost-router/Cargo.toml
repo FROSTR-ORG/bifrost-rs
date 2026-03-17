@@ -12,6 +12,7 @@ serde.workspace = true
 thiserror.workspace = true
 bifrost-core = { path = "../bifrost-core" }
 bifrost-signer = { path = "../bifrost-signer" }
+frostr-utils = { path = "../frostr-utils" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }

@@ -140,10 +140,8 @@ pub struct PeerErrorWire {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnboardRequestWire {
-    pub share_pk: String,
-    pub idx: u16,
-    #[serde(default)]
-    pub challenge: Option<String>,
+    pub version: u16,
+    pub nonces: Vec<DerivedPublicNonceWire>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -682,13 +680,23 @@ impl TryFrom<OnboardRequestWire> for OnboardRequest {
     type Error = crate::error::CodecError;
 
     fn try_from(value: OnboardRequestWire) -> Result<Self, Self::Error> {
+        if value.nonces.is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "onboard nonces must not be empty",
+            ));
+        }
+        if value.nonces.len() > MAX_NONCE_PACKAGE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "onboard nonces exceed max size",
+            ));
+        }
         Ok(Self {
-            share_pk: hexbytes::decode(&value.share_pk)?,
-            idx: value.idx,
-            challenge: value
-                .challenge
-                .map(|raw| hexbytes::decode(&raw))
-                .transpose()?,
+            version: value.version,
+            nonces: value
+                .nonces
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<CodecResult<Vec<_>>>()?,
         })
     }
 }
@@ -696,9 +704,8 @@ impl TryFrom<OnboardRequestWire> for OnboardRequest {
 impl From<OnboardRequest> for OnboardRequestWire {
     fn from(value: OnboardRequest) -> Self {
         Self {
-            share_pk: hexbytes::encode(&value.share_pk),
-            idx: value.idx,
-            challenge: value.challenge.map(|challenge| hexbytes::encode(&challenge)),
+            version: value.version,
+            nonces: value.nonces.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -853,30 +860,105 @@ mod tests {
     }
 
     #[test]
-    fn onboard_wire_rejects_share_pk33_identity_key() {
+    fn onboard_wire_rejects_empty_nonce_package() {
         let wire = OnboardRequestWire {
-            share_pk: hex::encode([3u8; 33]),
-            idx: 1,
-            challenge: None,
+            version: 1,
+            nonces: Vec::new(),
         };
         let err: crate::error::CodecError =
-            TryInto::<OnboardRequest>::try_into(wire).expect_err("must reject share_pk33");
+            TryInto::<OnboardRequest>::try_into(wire).expect_err("must reject empty nonces");
         assert!(matches!(
             err,
-            crate::error::CodecError::InvalidLength { .. }
+            crate::error::CodecError::InvalidPayload(_)
         ));
     }
 
     #[test]
-    fn onboard_wire_roundtrips_optional_challenge() {
+    fn onboard_wire_roundtrips_version_and_nonces() {
         let request = OnboardRequest {
-            share_pk: [5u8; 32],
-            idx: 2,
-            challenge: Some([7u8; 32]),
+            version: 1,
+            nonces: vec![DerivedPublicNonce {
+                binder_pn: [1u8; 33],
+                hidden_pn: [2u8; 33],
+                code: [3u8; 32],
+            }],
         };
         let wire = OnboardRequestWire::from(request.clone());
-        assert_eq!(wire.challenge, Some(hex::encode([7u8; 32])));
         let decoded = OnboardRequest::try_from(wire).expect("decode");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn group_wire_rejects_duplicate_member_idx() {
+        let pubkey_a = hex::encode([2u8; 33]);
+        let pubkey_b = hex::encode([3u8; 33]);
+        let wire = GroupPackageWire {
+            group_pk: hex::encode([1u8; 32]),
+            threshold: 1,
+            members: vec![
+                MemberPackageWire {
+                    idx: 1,
+                    pubkey: pubkey_a,
+                },
+                MemberPackageWire {
+                    idx: 1,
+                    pubkey: pubkey_b,
+                },
+            ],
+        };
+        let err: crate::error::CodecError =
+            TryInto::<GroupPackage>::try_into(wire).expect_err("must reject duplicate idx");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("group members contain duplicate idx")
+        ));
+    }
+
+    #[test]
+    fn group_wire_rejects_duplicate_member_pubkey() {
+        let pubkey = hex::encode([2u8; 33]);
+        let wire = GroupPackageWire {
+            group_pk: hex::encode([1u8; 32]),
+            threshold: 1,
+            members: vec![
+                MemberPackageWire {
+                    idx: 1,
+                    pubkey: pubkey.clone(),
+                },
+                MemberPackageWire { idx: 2, pubkey },
+            ],
+        };
+        let err: crate::error::CodecError =
+            TryInto::<GroupPackage>::try_into(wire).expect_err("must reject duplicate pubkey");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("group members contain duplicate pubkey")
+        ));
+    }
+
+    #[test]
+    fn onboard_response_wire_rejects_oversized_nonce_bundle() {
+        let nonce = DerivedPublicNonceWire {
+            binder_pn: hex::encode([1u8; 33]),
+            hidden_pn: hex::encode([2u8; 33]),
+            code: hex::encode([3u8; 32]),
+        };
+        let wire = OnboardResponseWire {
+            group: GroupPackageWire {
+                group_pk: hex::encode([1u8; 32]),
+                threshold: 1,
+                members: vec![MemberPackageWire {
+                    idx: 1,
+                    pubkey: hex::encode([2u8; 33]),
+                }],
+            },
+            nonces: vec![nonce; 1001],
+        };
+        let err: crate::error::CodecError =
+            TryInto::<OnboardResponse>::try_into(wire).expect_err("must reject oversized nonces");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("onboard nonces exceed max size")
+        ));
     }
 }

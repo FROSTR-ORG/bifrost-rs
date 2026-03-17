@@ -12,14 +12,13 @@ Rust implementation of the FROSTR threshold-signing stack.
   - `bifrost-signer` for cryptographic/stateful signing-device logic.
   - `bifrost-router` for runtime-agnostic routing/queueing between signer and transport.
   - `bifrost-bridge-tokio` / `bifrost-bridge-wasm` for platform-specific bridge runtimes.
-- `bifrost` CLI for command execution.
-- `bifrost-tui` for operator status views.
-- `bifrost-devtools` for local relay + key/config generation.
+- `bifrost_app::host` for reusable host/listen/control behavior consumed by shell clients such as `igloo-shell`.
+- `bifrost_app::host::execute_command(...)` is the typed host executor; `run_command(...)` is the thin stdout wrapper used by shell binaries.
 
 ## Project Status
 
 - Alpha.
-- Hard-cut migration in progress.
+- Hard-cut architecture; no legacy compatibility layer is maintained.
 - Runtime documentation reflects the current signer/router/bridge architecture only.
 
 ## Workspace Layout
@@ -31,52 +30,20 @@ Rust implementation of the FROSTR threshold-signing stack.
 - `crates/bifrost-router`: runtime-agnostic routing core (queueing, dedupe, command processing).
 - `crates/bifrost-bridge-tokio`: async tokio bridge runtime and Nostr adapter boundary.
 - `crates/bifrost-bridge-wasm`: wasm bridge runtime boundary.
-- `crates/bifrost-app`: production CLI package (`bifrost`) plus shared runtime glue.
-- `crates/bifrost-dev`: developer tooling package (`bifrost-tui`, `bifrost-devtools`).
+- `crates/bifrost-app`: shared host/runtime glue exported for external shell clients.
 - `docs/`: product and operations documentation.
 
-## Quickstart
+## Shell Ownership
 
-1. Generate local key/config artifacts:
+Shell/operator workflows are no longer owned by `bifrost-rs`.
 
-```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
-```
-
-2. Start a local relay:
-
-```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose relay 8194
-```
-
-3. Start signer listeners (separate terminals):
-
-```bash
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json listen
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-bob.json listen
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-carol.json listen
-```
-
-4. Run commands from one node:
-
-```bash
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json status
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ecdh <32-byte-hex>
-```
-
-5. Run runtime e2e:
-
-```bash
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
-```
+- Use `repos/igloo-shell` for operator CLI, TUI, `bfshare` / `bfonboard` / `bfprofile` workflows, and managed-profile UX.
+- Use `bifrost-devtools` in this repo for developer relay, keygen, and shell runtime e2e flows.
+- Use `bifrost-rs` directly for library, signer, router, bridge, and WASM work.
 
 ## Observability
 
-- `bifrost --verbose` enables JSON info-level runtime logs.
-- `bifrost --debug` enables JSON debug-level runtime logs.
-- `bifrost-devtools --verbose` and `--debug` follow the same model.
+- Hosted shell clients should initialize JSON logging around `bifrost_app::host`.
 - `RUST_LOG=...` remains available when you need explicit crate-level filter overrides.
 
 ## Verification Matrix
@@ -93,6 +60,8 @@ cargo test --workspace --offline
 Start here:
 - [docs/INDEX.md](./docs/INDEX.md)
 - [docs/GUIDE.md](./docs/GUIDE.md)
+- [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)
+- [../../docs/PROTOCOL.md](../../docs/PROTOCOL.md)
 
 Core manuals:
 - [docs/API.md](./docs/API.md)
@@ -111,6 +80,19 @@ Governance/process:
 - [RELEASE.md](./RELEASE.md)
 - [SECURITY.md](./SECURITY.md)
 - [CHANGELOG.md](./CHANGELOG.md)
+- [../../docs/adrs/INDEX.md](../../docs/adrs/INDEX.md)
+- [../../docs/policies/documentation-guidance.md](../../docs/policies/documentation-guidance.md)
+
+## Hosted Runtime Model
+
+Hosted clients such as `igloo-chrome` should treat `bifrost-rs` as the signer authority.
+
+- `runtime_status()` is the canonical aggregated read model.
+- `drain_runtime_events()` is the incremental runtime-status notification path.
+- `prepare_sign()` and `prepare_ecdh()` are the normal operation-prep APIs.
+- `wipe_state()` is the canonical signer-side reset path.
+
+Clients should not reconstruct signer readiness from snapshots, nonce pools, or transport heuristics.
 
 ## License
 

@@ -306,6 +306,71 @@ pub struct PeerPolicy {
     pub respond: MethodPolicy,
 }
 
+impl PeerPolicy {
+    pub fn from_send_receive(send: bool, receive: bool) -> Self {
+        let request = MethodPolicy {
+            echo: send,
+            ping: send,
+            onboard: send,
+            sign: send,
+            ecdh: send,
+        };
+        let respond = MethodPolicy {
+            echo: receive,
+            ping: receive,
+            onboard: receive,
+            sign: receive,
+            ecdh: receive,
+        };
+
+        Self {
+            block_all: !send && !receive,
+            request,
+            respond,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyOverrideValue {
+    #[default]
+    Unset,
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MethodPolicyOverride {
+    #[serde(default)]
+    pub echo: PolicyOverrideValue,
+    #[serde(default)]
+    pub ping: PolicyOverrideValue,
+    #[serde(default)]
+    pub onboard: PolicyOverrideValue,
+    #[serde(default)]
+    pub sign: PolicyOverrideValue,
+    #[serde(default)]
+    pub ecdh: PolicyOverrideValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PeerPolicyOverride {
+    #[serde(default)]
+    pub request: MethodPolicyOverride,
+    #[serde(default)]
+    pub respond: MethodPolicyOverride,
+}
+
+impl PeerPolicyOverride {
+    pub fn from_peer_policy(policy: &PeerPolicy) -> Self {
+        Self {
+            request: MethodPolicyOverride::from_method_policy(&policy.request),
+            respond: MethodPolicyOverride::from_method_policy(&policy.respond),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodPolicy {
     pub echo: bool,
@@ -323,6 +388,38 @@ impl Default for MethodPolicy {
             onboard: true,
             sign: true,
             ecdh: true,
+        }
+    }
+}
+
+impl MethodPolicyOverride {
+    pub fn from_method_policy(policy: &MethodPolicy) -> Self {
+        Self {
+            echo: if policy.echo {
+                PolicyOverrideValue::Allow
+            } else {
+                PolicyOverrideValue::Deny
+            },
+            ping: if policy.ping {
+                PolicyOverrideValue::Allow
+            } else {
+                PolicyOverrideValue::Deny
+            },
+            onboard: if policy.onboard {
+                PolicyOverrideValue::Allow
+            } else {
+                PolicyOverrideValue::Deny
+            },
+            sign: if policy.sign {
+                PolicyOverrideValue::Allow
+            } else {
+                PolicyOverrideValue::Deny
+            },
+            ecdh: if policy.ecdh {
+                PolicyOverrideValue::Allow
+            } else {
+                PolicyOverrideValue::Deny
+            },
         }
     }
 }
@@ -353,15 +450,137 @@ pub struct PingPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnboardRequest {
-    #[serde(with = "serde_fixed_array::bytes32")]
-    pub share_pk: IdentityPubkey32,
-    pub idx: u16,
-    #[serde(default)]
-    pub challenge: Option<Bytes32>,
+    pub version: u16,
+    pub nonces: Vec<DerivedPublicNonce>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnboardResponse {
     pub group: GroupPackage,
     pub nonces: Vec<DerivedPublicNonce>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn peer_policy_from_send_receive_maps_request_and_response_flags() {
+        let policy = PeerPolicy::from_send_receive(false, true);
+        assert!(!policy.request.echo);
+        assert!(!policy.request.ping);
+        assert!(policy.respond.echo);
+        assert!(policy.respond.sign);
+        assert!(!policy.block_all);
+
+        let blocked = PeerPolicy::from_send_receive(false, false);
+        assert!(blocked.block_all);
+    }
+
+    #[test]
+    fn method_policy_default_enables_all_methods() {
+        let policy = MethodPolicy::default();
+        assert!(policy.echo);
+        assert!(policy.ping);
+        assert!(policy.onboard);
+        assert!(policy.sign);
+        assert!(policy.ecdh);
+    }
+
+    #[test]
+    fn core_runtime_types_preserve_expected_fields() {
+        let ping = PingPayload {
+            version: 1,
+            nonces: Some(vec![DerivedPublicNonce {
+                binder_pn: [5u8; 33],
+                hidden_pn: [6u8; 33],
+                code: [7u8; 32],
+            }]),
+            policy_profile: Some(PeerScopedPolicyProfile {
+                for_peer: [8u8; 32],
+                revision: 9,
+                updated: 10,
+                block_all: false,
+                request: MethodPolicy::default(),
+                respond: MethodPolicy::default(),
+            }),
+        };
+        let onboard = OnboardResponse {
+            group: GroupPackage {
+                group_pk: [1u8; 32],
+                threshold: 2,
+                members: vec![
+                    MemberPackage {
+                        idx: 1,
+                        pubkey: [2u8; 33],
+                    },
+                    MemberPackage {
+                        idx: 2,
+                        pubkey: [3u8; 33],
+                    },
+                ],
+            },
+            nonces: ping.nonces.clone().expect("nonces"),
+        };
+        let share = SharePackage {
+            idx: 2,
+            seckey: [4u8; 32],
+        };
+
+        assert_eq!(share.idx, 2);
+        assert_eq!(onboard.group.threshold, 2);
+        assert_eq!(onboard.group.members.len(), 2);
+        assert_eq!(ping.version, 1);
+        assert_eq!(
+            ping.policy_profile
+                .as_ref()
+                .expect("policy profile")
+                .for_peer,
+            [8u8; 32]
+        );
+        assert_eq!(onboard.nonces.len(), 1);
+    }
+
+    #[test]
+    fn serde_round_trip_uses_fixed_array_helpers() {
+        let share = SharePackage {
+            idx: 7,
+            seckey: [11u8; 32],
+        };
+        let encoded = serde_json::to_string(&share).expect("encode share");
+        let decoded: SharePackage = serde_json::from_str(&encoded).expect("decode share");
+        assert_eq!(decoded, share);
+
+        let session = SignSessionTemplate {
+            members: vec![1, 2],
+            hashes: vec![[3u8; 32], [4u8; 32]],
+            content: Some(vec![9, 8, 7]),
+            kind: "nostr-event".to_string(),
+            stamp: 42,
+        };
+        let encoded = serde_json::to_string(&session).expect("encode session");
+        let decoded: SignSessionTemplate = serde_json::from_str(&encoded).expect("decode session");
+        assert_eq!(decoded, session);
+    }
+
+    #[test]
+    fn serde_rejects_invalid_fixed_array_lengths() {
+        let err = serde_json::from_value::<SharePackage>(json!({
+            "idx": 1,
+            "seckey": vec![1u8; 31],
+        }))
+        .expect_err("share package must reject short key");
+        assert!(err.to_string().contains("invalid fixed array length"));
+
+        let err = serde_json::from_value::<SignSessionTemplate>(json!({
+            "members": [1, 2],
+            "hashes": [vec![0u8; 32], vec![1u8; 31]],
+            "content": null,
+            "kind": "kind",
+            "stamp": 7,
+        }))
+        .expect_err("sign session must reject short hash");
+        assert!(err.to_string().contains("invalid fixed array length"));
+    }
 }

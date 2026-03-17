@@ -46,4 +46,32 @@ mod tests {
         assert_eq!(decoded.threshold, 2);
         assert_eq!(decoded.members.len(), 2);
     }
+
+    #[test]
+    fn share_package_roundtrip_json() {
+        let share = SharePackage {
+            idx: 7,
+            seckey: [4u8; 32],
+        };
+        let raw = encode_share_package_json(&share).expect("encode share");
+        let decoded = decode_share_package_json(&raw).expect("decode share");
+        assert_eq!(decoded, share);
+    }
+
+    #[test]
+    fn decode_group_package_json_rejects_invalid_member_shape() {
+        let raw = serde_json::json!({
+            "group_pk": vec![9u8; 32],
+            "threshold": 2,
+            "members": [
+                {
+                    "idx": 1,
+                    "pubkey": vec![2u8; 32]
+                }
+            ]
+        })
+        .to_string();
+
+        assert!(decode_group_package_json(&raw).is_err());
+    }
 }

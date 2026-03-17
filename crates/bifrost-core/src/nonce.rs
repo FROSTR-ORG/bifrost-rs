@@ -72,6 +72,61 @@ impl NoncePool {
         self.incoming_order.entry(peer_idx).or_default();
     }
 
+    pub fn remap_peer_indexes(&mut self, new_our_idx: u16, index_map: &HashMap<u16, u16>) {
+        fn remap_key(index_map: &HashMap<u16, u16>, key: u16) -> u16 {
+            index_map.get(&key).copied().unwrap_or(key)
+        }
+
+        fn remap_map<T>(
+            source: HashMap<u16, HashMap<Bytes32, T>>,
+            index_map: &HashMap<u16, u16>,
+        ) -> HashMap<u16, HashMap<Bytes32, T>> {
+            let mut remapped = HashMap::new();
+            for (old_idx, values) in source {
+                remapped
+                    .entry(remap_key(index_map, old_idx))
+                    .or_insert_with(HashMap::new)
+                    .extend(values);
+            }
+            remapped
+        }
+
+        fn remap_set_map(
+            source: HashMap<u16, HashSet<Bytes32>>,
+            index_map: &HashMap<u16, u16>,
+        ) -> HashMap<u16, HashSet<Bytes32>> {
+            let mut remapped = HashMap::new();
+            for (old_idx, values) in source {
+                remapped
+                    .entry(remap_key(index_map, old_idx))
+                    .or_insert_with(HashSet::new)
+                    .extend(values);
+            }
+            remapped
+        }
+
+        fn remap_order_map(
+            source: HashMap<u16, VecDeque<Bytes32>>,
+            index_map: &HashMap<u16, u16>,
+        ) -> HashMap<u16, VecDeque<Bytes32>> {
+            let mut remapped = HashMap::new();
+            for (old_idx, values) in source {
+                remapped
+                    .entry(remap_key(index_map, old_idx))
+                    .or_insert_with(VecDeque::new)
+                    .extend(values);
+            }
+            remapped
+        }
+
+        self.our_idx = new_our_idx;
+        self.outgoing_public = remap_map(std::mem::take(&mut self.outgoing_public), index_map);
+        self.outgoing_secret = remap_map(std::mem::take(&mut self.outgoing_secret), index_map);
+        self.spent_outgoing = remap_set_map(std::mem::take(&mut self.spent_outgoing), index_map);
+        self.incoming = remap_map(std::mem::take(&mut self.incoming), index_map);
+        self.incoming_order = remap_order_map(std::mem::take(&mut self.incoming_order), index_map);
+    }
+
     pub fn generate_for_peer(
         &mut self,
         peer_idx: u16,
@@ -254,6 +309,15 @@ impl NoncePool {
             can_sign: self.can_sign(peer_idx),
             should_send_nonces: self.should_send_nonces_to(peer_idx),
         }
+    }
+
+    pub fn outgoing_public_nonces(&self, peer_idx: u16) -> Vec<DerivedPublicNonce> {
+        let Some(map) = self.outgoing_public.get(&peer_idx) else {
+            return Vec::new();
+        };
+        let mut nonces = map.values().cloned().collect::<Vec<_>>();
+        nonces.sort_by(|a, b| a.code.cmp(&b.code));
+        nonces
     }
 }
 

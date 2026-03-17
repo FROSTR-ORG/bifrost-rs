@@ -8,18 +8,16 @@ All notable changes to `bifrost-rs` should be documented in this file.
 
 ### Added
 
-- Invite-token onboarding flow across `bifrost` and `bifrost-devtools`, including `invite create`, `invite show-pending`, `invite revoke`, and `invite assemble`.
 - Password-protected encrypted `bfonboard1...` packages built on the hard-cut onboarding model.
-- Challenge-bound onboarding validation and pending-invite tracking in the signer runtime.
 - Structured JSON observability controls for `bifrost` and `bifrost-devtools` via `--verbose` and `--debug`.
-- Regression coverage for mixed nonce-readiness signing and invite/onboarding runtime behavior.
+- Regression coverage for mixed nonce-readiness signing and package/onboarding runtime behavior.
 
 ### Changed
 
 - Hard-cut onboarding now treats `bfonboard` as a consume-only import artifact instead of a persisted recovery package.
-- Invite creation is split from share-bearing package assembly so the inviting node no longer needs recipient share material to mint a token.
+- Onboarding request identity is now bound by sender/share pubkey only; member index is inferred from the group roster.
 - Signing peer selection now prefers nonce-ready peers instead of deterministic raw ordering.
-- Runtime and operator docs now reflect the current invite, onboarding, and observability model.
+- Runtime and operator docs now reflect the current package, onboarding, backup, and observability model.
 
 ### Fixed
 

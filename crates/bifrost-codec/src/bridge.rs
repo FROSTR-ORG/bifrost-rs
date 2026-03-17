@@ -84,4 +84,22 @@ mod tests {
             CodecError::InvalidPayload("request_id must not be empty")
         ));
     }
+
+    #[test]
+    fn bridge_envelope_rejects_oversized_request_id() {
+        let envelope = BridgeEnvelope {
+            request_id: "r".repeat(257),
+            sent_at: 1700000000,
+            payload: BridgePayload::Error(PeerErrorWire {
+                code: "ERR".to_string(),
+                message: "boom".to_string(),
+            }),
+        };
+        let err = decode_bridge_envelope(&encode_bridge_envelope(&envelope).expect("encode"))
+            .expect_err("must reject oversized request_id");
+        assert!(matches!(
+            err,
+            CodecError::InvalidPayload("request_id exceeds max length")
+        ));
+    }
 }

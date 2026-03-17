@@ -171,4 +171,42 @@ mod tests {
         tampered.seckey[0] ^= 0x01;
         assert!(verify_share(&tampered, &bundle.group).is_err());
     }
+
+    #[test]
+    fn verify_group_config_rejects_invalid_threshold_and_duplicates() {
+        let mut bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        bundle.group.threshold = 4;
+        assert!(verify_group_config(&bundle.group).is_err());
+
+        let mut bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+        bundle.group.members[1].idx = bundle.group.members[0].idx;
+        assert!(verify_group_config(&bundle.group).is_err());
+    }
+
+    #[test]
+    fn verify_keyset_rejects_share_count_mismatch_and_missing_share_member() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+        let short_bundle = crate::types::KeysetBundle {
+            group: bundle.group.clone(),
+            shares: bundle.shares[..2].to_vec(),
+        };
+        assert!(verify_keyset(&short_bundle).is_err());
+
+        let mut tampered_share = bundle.shares[0].clone();
+        tampered_share.idx = 99;
+        assert!(verify_share(&tampered_share, &bundle.group).is_err());
+    }
 }

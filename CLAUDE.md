@@ -1,128 +1,91 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives working guidance for agent-driven changes inside `repos/bifrost-rs`.
 
-## Project Overview
+## Project Role
 
-bifrost-rs is a Rust workspace implementing a FROST threshold signing protocol coordinator for Nostr, using `frost-secp256k1-tr-unofficial` for the underlying cryptography. It was migrated from `bifrost-ts` (TypeScript) with full behavior parity (53/53 items complete). The FROST library is aliased as `frost_secp256k1_tr_unofficial as frost` throughout.
+`bifrost-rs` is the signer/runtime core for FROSTR. It owns:
 
-## Build & Test Commands
+- signer state and operation logic
+- routing and bridge runtimes
+- host orchestration in `bifrost_app::host`
+- onboarding/invite encoding utilities
+- WASM and Tokio bridge surfaces
+
+It does not own the operator shell surface. `igloo-shell` owns the operator CLI/TUI; `bifrost-devtools` in this repo owns developer relay, keygen, and shell-side devnet/e2e flows.
+
+## Build And Test Commands
 
 ```bash
-# Check all crates
+# Workspace checks
 cargo check --workspace --offline
-
-# Lint
 cargo clippy --workspace --all-targets --offline --no-deps
-
-# Format check
 cargo fmt --all -- --check
 
-# Run all unit/integration tests (offline, no network)
-cargo test -p bifrost-core -p bifrost-codec -p bifrost-node -p bifrost-transport-ws --offline
-cargo test -p bifrost-devtools -p bifrost-rpc -p bifrostd -p frostr-utils --offline
+# Focused tests
+cargo test -p bifrost-signer --offline
+cargo test -p bifrost-router --offline
+cargo test -p bifrost-bridge-wasm --offline
+cargo test -p bifrost-bridge-tokio --offline
+cargo test -p bifrost-app --offline
 
-# Run a single crate's tests
-cargo test -p bifrost-core --offline
-
-# Run a specific test file (integration tests)
-cargo test -p bifrost-node --test happy_paths --offline
-cargo test -p bifrost-node --test adversarial --offline
-cargo test -p bifrost-node --test fault_injection --offline
-cargo test -p bifrost-codec --test fixture_matrix --offline
-cargo test -p bifrost-cli --test e2e_cli --offline
-
-# Run a single test by name
-cargo test -p bifrost-core -- test_name_here
+# Full targeted verification used most often after interface changes
+cargo test -p bifrost-signer -p bifrost-router -p bifrost-bridge-wasm -p bifrost-bridge-tokio -p bifrost-app --offline
 
 # Format
 cargo fmt
+```
 
-# Focused check (quick iteration)
-cargo check -p bifrost-core -p bifrost-node --offline
+For shell/operator workflows, use `repos/igloo-shell` instead:
 
-# Local devnet (relay + 3 daemons)
-scripts/devnet.sh gen      # generate test keys/configs
-scripts/devnet.sh start    # start relay + alice/bob/carol daemons
-scripts/devnet.sh smoke    # health/status/events smoke test
-scripts/devnet.sh stop     # stop everything
-
-# Runtime E2E tests (require running devnet)
+```bash
+cd ../igloo-shell
+cargo check --workspace
+scripts/devnet.sh smoke
 scripts/test-node-e2e.sh
 scripts/test-tui-e2e.sh
 ```
 
-## Workspace Architecture
+## Current Architecture
 
-Eleven crates in a strict dependency hierarchy (lower crates never depend on higher ones):
+### Core crates
 
-### Protocol Layer
+- `bifrost-core`: cryptographic types and policy primitives.
+- `bifrost-codec`: wire encoding/decoding and parser helpers.
+- `bifrost-signer`: signer runtime, readiness, peer status, pending operations, config patching.
+- `bifrost-router`: high-level runtime command router over the signer.
+- `frostr-utils`: onboarding, invite, and stateless helper utilities.
 
-```
-bifrost-node          (orchestration: lifecycle, sign/ecdh flows, batching, event stream)
-  ├── bifrost-codec   (RPC envelope encode/decode, wire type conversion, parser helpers)
-  ├── bifrost-core    (FROST signing, nonce pool, ECDH, session/group primitives)
-  ├── bifrost-transport (Transport/Clock/Sleeper traits, message types)
-  └── frostr-utils    (keyset lifecycle, onboarding packages, stateless sign/ECDH helpers)
+### Host and bridge crates
 
-bifrost-transport-ws  (WebSocket Transport impl: reconnect, backoff, relay failover)
-  └── bifrost-transport
-```
+- `bifrost-app`: reusable host layer. `bifrost_app::host` owns config bootstrap, bridge startup, control socket serving, and typed command execution.
+- `bifrost-bridge-wasm`: browser-facing bridge used by `igloo-chrome`.
+- `bifrost-bridge-tokio`: Tokio runtime bridge and Unix control socket support.
 
-**bifrost-core** — Pure cryptographic operations. Key types: `GroupPackage`, `SharePackage`, `SignSessionPackage`, `NoncePool`. Nonce safety is critical: `NoncePool::take_outgoing_signing_nonces` enforces single-use with spent tracking.
+## Ownership Rules
 
-**bifrost-codec** — Serialization layer. `rpc` module handles JSON-RPC envelope encode/decode. `wire` module converts between core types and transport-friendly wire types. `parse` module provides typed parser entrypoints (`parse_session`, `parse_ecdh`, `parse_psig`, etc.).
+- Keep `bifrost-rs` library-first.
+- Do not add new shell/operator workflows here; put them in `repos/igloo-shell`.
+- Keep host logic typed. Presentation and stdout formatting belong in `igloo-shell`, not in reusable host code.
+- `runtime_status()` is the canonical hosted read model.
+- `drain_runtime_events()` is incremental and lossy-safe; clients must recover truth from `runtime_status()`.
+- `prepare_sign()` and `prepare_ecdh()` are the operation-prep APIs. Hosted clients should not infer readiness from snapshots.
+- `wipe_state()` is the canonical signer reset path.
 
-**bifrost-transport** — Trait definitions only. `Transport` trait defines `connect`, `close`, `request`, `cast` (multi-peer threshold gather), `send_response`, `next_incoming`. `Clock` trait abstracts time for testability.
+## Editing Priorities
 
-**bifrost-transport-ws** — WebSocket implementation with multi-relay support, health-ranked failover, exponential backoff reconnection, and pending-request cleanup.
+When making architectural changes here, keep these cleanup constraints in mind:
 
-**bifrost-node** — `BifrostNode<T: Transport, C: Clock>` is the main orchestrator. It owns the nonce pool, replay cache, ECDH cache, and event emitter. Operations: `echo`, `ping`, `onboard`, `sign`, `sign_batch`, `sign_queue`, `ecdh`, `ecdh_batch`. Node integration tests use mock transport/clock implementations.
+- signer-owned readiness must stay truthful
+- peer/readiness computation should exist in one place
+- control socket and bridge surfaces should not drift apart without an explicit decision
+- transport-specific policy translation should stay centralized
 
-**frostr-utils** — Shared utility crate for keyset lifecycle (create/verify/rotate/recover), onboarding package helpers (bech32m encode/decode, binary serialization), and stateless protocol helpers consumed by `bifrost-node` (`sign_create_partial`/`sign_verify_partial`/`sign_finalize`, `ecdh_create_from_share`/`ecdh_finalize`).
+## Related Docs
 
-### Runtime Layer
-
-```
-bifrostd              (headless daemon: unix-socket JSON-RPC, wraps node + transport-ws)
-  ├── bifrost-rpc     (shared RPC schema/envelope types, DaemonClient helper)
-  ├── bifrost-node
-  └── bifrost-transport-ws
-
-bifrost-cli           (scriptable CLI client over bifrostd RPC)
-  └── bifrost-rpc
-
-bifrost-tui           (ratatui interactive operator dashboard over bifrostd RPC)
-  └── bifrost-rpc
-
-bifrost-devtools      (keygen + local Nostr relay for dev/test)
-```
-
-**bifrostd** — Headless daemon exposing local JSON-RPC over a Unix socket. Fail-closed auth defaults, bounded RPC line framing (64 KiB), enforced socket permission mode (0600). Config: `--config ./dev/data/daemon-alice.json`.
-
-**bifrost-rpc** — Newline-delimited JSON over Unix sockets. Envelope types (`RpcRequestEnvelope`/`RpcResponseEnvelope`), method definitions, and `DaemonClient` helper shared by CLI and TUI.
-
-**bifrost-tui** — `ratatui`/`crossterm` dashboard with scripted execution mode (`--script`), peer selectors (index/alias/pubkey-prefix), and per-peer policy controls.
-
-**bifrost-devtools** — `keygen` (generate group/share/daemon configs) and `relay` (local Nostr relay with BIP-340 verify).
-
-## Key Technical Constraints
-
-- **Nonce safety is the top priority.** FROST signing nonces are single-use. The NoncePool tracks spent codes and rejects reuse. Never bypass this.
-- **Single-hash enforcement** in `create_partial_sig_package` is intentional — batch signing uses Option-A single-session multi-hash orchestration via `create_partial_sig_packages_batch`.
-- **Rust edition 2024** — the workspace uses `edition = "2024"`.
-- **Wire format stability** — codec wire types must remain externally compatible with bifrost-ts.
-- **Sender/member binding** — inbound handlers enforce that the sender is a valid group member for the session.
-- **Replay protection** — node enforces request-ID replay/idempotency with stale-envelope rejection.
-
-## Planner
-
-This project uses a `.planner/` system for tracking agent-driven work.
-
-- Read `.planner/context.md` for project identity and constraints.
-- Read `.planner/handoff.md` for current state and session context.
-- Check `.planner/backlog.md` for pending work items.
-- Plans in `.planner/plans/` are active work proposals; completed plans live in `.planner/done/`.
-- Use `.planner/templates/` for standard artifact structures.
-- Append to `.planner/work.log` when starting or completing work.
-- To execute the plans queue, follow `.planner/runbook.md`.
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/API.md`
+- `docs/PROTOCOL.md`
+- `../igloo-shell/docs/INDEX.md`
+- `../../docs/INDEX.md`

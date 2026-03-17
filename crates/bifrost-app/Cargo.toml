@@ -5,16 +5,16 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "bifrost"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
 bincode = "1"
+base64.workspace = true
+chacha20.workspace = true
+hmac.workspace = true
 hex.workspace = true
 fs2.workspace = true
+k256.workspace = true
 nostr.workspace = true
 nostr-sdk.workspace = true
 rand_core.workspace = true
@@ -30,4 +30,3 @@ bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 bifrost-signer = { path = "../bifrost-signer" }
 frostr-utils = { path = "../frostr-utils" }
-clap = { version = "4", features = ["derive"] }

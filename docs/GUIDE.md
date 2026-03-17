@@ -1,10 +1,12 @@
 # Guide
 
-This guide gets you from a clean checkout to a working local `bifrost-rs` setup.
+This guide covers the `bifrost-rs` runtime/library layer.
+
+Runnable shell workflows now live in `repos/igloo-shell/docs/`.
 
 ## Prerequisites
 
-- Rust toolchain installed (`cargo`, `rustfmt`, `clippy`).
+- Rust toolchain installed (`cargo`, `rustfmt`, `clippy`)
 
 ## 1. Build Baseline
 
@@ -13,68 +15,42 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-## 2. Generate Local Artifacts
+## 2. Read the Runtime Surface
+
+Start with:
+- `API.md` for the exported runtime and bridge APIs
+- `ARCHITECTURE.md` for crate boundaries
+- `PROTOCOL.md` for wire and validation boundaries
+
+## 3. Current Host Model
+
+`bifrost-rs` no longer owns runnable shell binaries.
+
+- `bifrost_app::host` is the reusable host/listen/control layer consumed by `igloo-shell`
+- hosted clients such as `igloo-chrome` use signer-owned APIs like `runtime_status()`, `prepare_sign()`, `prepare_ecdh()`, `drain_runtime_events()`, and `wipe_state()`
+- Operator CLI/TUI flows belong to `repos/igloo-shell`
+- Developer relay, keygen, and runtime shell e2e belong to `bifrost-devtools`
+
+## 4. Local Verification
 
 ```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline --no-deps -- -D warnings
+cargo check --workspace --offline
+cargo test --workspace --offline
 ```
 
-Generated files include:
-- `./data/group.json`
-- `./data/share-<name>.json`
-- `./data/bifrost-<name>.json`
+## 5. When You Need Shell Workflows
 
-## 3. Start Relay
-
-```bash
-cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose relay 8194
-```
-
-## 4. Start Listener Nodes
-
-Run each in its own terminal:
-
-```bash
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json listen
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-bob.json listen
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-carol.json listen
-```
-
-## 5. Run Operations
-
-From an operator terminal:
-
-```bash
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json status
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json policies
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ping <peer_pubkey_hex>
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json invite create
-cargo run -p bifrost-dev --bin bifrost-devtools -- --verbose invite assemble --token '<invite-token-json>' --share ./data/share-bob.json --generate-password
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json onboard <peer_pubkey_hex> --challenge-hex32 <challenge_hex32>
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json sign <32-byte-hex>
-cargo run -p bifrost-app --bin bifrost -- --verbose --config ./data/bifrost-alice.json ecdh <32-byte-hex>
-```
-
-Notes:
-- `invite create` returns a share-free invite token. Provisioning must combine that token with a recipient share to produce the encrypted `bfonboard1...` package.
-- The onboarding package is consume-only. The recipient uses it to complete `onboard`, then persists signer/runtime state rather than the package itself.
-- Add `--debug` instead of `--verbose` when you want debug-level JSON logs.
-
-## 6. Optional TUI
-
-```bash
-cargo run -p bifrost-dev --bin bifrost-tui -- --config ./data/bifrost-alice.json
-```
-
-## 7. Cross-Platform Runtime E2E
-
-```bash
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node --out-dir ./data --relay ws://127.0.0.1:8194
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-full --threshold 11 --count 15
-```
+Use the `igloo-shell` manuals:
+- `../../igloo-shell/docs/INDEX.md`
+- `../../igloo-shell/docs/GUIDE.md`
+- `../../igloo-shell/docs/CONFIGURATION.md`
+- `../../igloo-shell/docs/OPERATIONS.md`
 
 ## Next Reading
 
-- `docs/OPERATIONS.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
 - `docs/CONFIGURATION.md`
 - `docs/TROUBLESHOOTING.md`

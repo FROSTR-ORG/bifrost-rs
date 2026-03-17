@@ -2,13 +2,15 @@
 
 `bifrost-rs` uses encrypted peer envelopes over Nostr relay events.
 
+Cross-repo protocol context is documented in [../../../docs/PROTOCOL.md](../../../docs/PROTOCOL.md). This manual stays focused on the signer-to-signer wire layer implemented in `bifrost-rs`.
+
 ## Peer Envelope (`bifrost-codec`)
 
 Envelope shape (`BridgeEnvelope`):
 
 ```json
 {
-  "request_id": "1700000000-2-8847265512043916403-1",
+  "request_id": "6d12e4af53c84965a91b1130b0a940cf",
   "sent_at": 1700000000,
   "payload": { "type": "...", "data": {} }
 }
@@ -22,7 +24,7 @@ Payload variants:
 - `Error`
 
 Validation boundaries:
-- request id must be non-empty and canonical (`<unix_ts>-<member_idx>-<boot_nonce>-<seq>`)
+- request id must be non-empty and bounded; it is opaque to the peer protocol
 - payload-specific bounds and shape checks are enforced in wire conversions
 
 ## Relay Event Layer
@@ -51,3 +53,4 @@ Validation boundaries:
 
 - This is a hard-cut runtime design.
 - Core operation semantics (`ping`, `onboard`, `sign`, `ecdh`) are preserved.
+- `bfonboard` is the import artifact for onboarding, but the over-the-wire runtime protocol here begins at signer commands and encrypted peer envelopes.

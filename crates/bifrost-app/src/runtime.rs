@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,7 +13,7 @@ use bifrost_bridge_tokio::{
     DEFAULT_OUTBOUND_QUEUE_CAPACITY, DEFAULT_RELAY_BACKOFF_MS, QueueOverflowPolicy,
 };
 use bifrost_codec::{parse_group_package, parse_share_package};
-use bifrost_core::types::{PeerPolicy, SharePackage};
+use bifrost_core::types::{GroupPackage, PeerPolicyOverride, PeerScopedPolicyProfile, SharePackage};
 use bifrost_signer::{
     DeviceConfig, DeviceState, DeviceStore, PeerSelectionStrategy, SigningDevice,
 };
@@ -31,16 +32,25 @@ pub struct AppConfig {
     pub share_path: String,
     pub state_path: String,
     pub relays: Vec<String>,
-    pub peers: Vec<PeerConfig>,
+    pub peers: Vec<String>,
+    #[serde(default)]
+    pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
+    #[serde(default)]
+    pub remote_policy_observations: HashMap<String, PeerScopedPolicyProfile>,
     #[serde(default)]
     pub options: AppOptions,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PeerConfig {
-    pub pubkey: String,
-    #[serde(default)]
-    pub policy: PeerPolicy,
+#[derive(Debug, Clone)]
+pub struct ResolvedAppConfig {
+    pub group: GroupPackage,
+    pub share: SharePackage,
+    pub state_path: PathBuf,
+    pub relays: Vec<String>,
+    pub peers: Vec<String>,
+    pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
+    pub remote_policy_observations: HashMap<String, PeerScopedPolicyProfile>,
+    pub options: AppOptions,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -237,13 +247,7 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
     Ok(cfg)
 }
 
-pub fn load_share(path: &str) -> Result<SharePackage> {
-    let path = expand_tilde(path);
-    let raw = fs::read_to_string(&path).with_context(|| format!("read share file {path}"))?;
-    parse_share_package(&raw).context("parse share package")
-}
-
-pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Result<SigningDevice> {
+pub fn resolve_config(config: &AppConfig) -> Result<ResolvedAppConfig> {
     let group_path = expand_tilde(&config.group_path);
     let share_path = expand_tilde(&config.share_path);
 
@@ -255,7 +259,36 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
     let group = parse_group_package(&group_raw).context("parse group package")?;
     let share = parse_share_package(&share_raw).context("parse share package")?;
 
-    let state_path = PathBuf::from(expand_tilde(&config.state_path));
+    Ok(ResolvedAppConfig {
+        group,
+        share,
+        state_path: PathBuf::from(expand_tilde(&config.state_path)),
+        relays: config.relays.clone(),
+        peers: config.peers.clone(),
+        manual_policy_overrides: config.manual_policy_overrides.clone(),
+        remote_policy_observations: config.remote_policy_observations.clone(),
+        options: config.options.clone(),
+    })
+}
+
+pub fn load_share(path: &str) -> Result<SharePackage> {
+    let path = expand_tilde(path);
+    let raw = fs::read_to_string(&path).with_context(|| format!("read share file {path}"))?;
+    parse_share_package(&raw).context("parse share package")
+}
+
+pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Result<SigningDevice> {
+    let resolved = resolve_config(config)?;
+    load_or_init_signer_resolved(&resolved, store)
+}
+
+pub fn load_or_init_signer_resolved<S: DeviceStore>(
+    config: &ResolvedAppConfig,
+    store: &S,
+) -> Result<SigningDevice> {
+    let group = config.group.clone();
+    let share = config.share.clone();
+    let state_path = config.state_path.clone();
     let state = if store.exists() {
         let mut state = store.load().context("load state")?;
         if let Some(reason) = dirty_restart_reason(&state_path) {
@@ -282,8 +315,8 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
 
     let mut signer = SigningDevice::new(
         group,
-        share,
-        config.peers.iter().map(|p| p.pubkey.clone()).collect(),
+        share.clone(),
+        config.peers.clone(),
         state,
         DeviceConfig {
             sign_timeout_secs: config.options.sign_timeout_secs,
@@ -303,8 +336,11 @@ pub fn load_or_init_signer<S: DeviceStore>(config: &AppConfig, store: &S) -> Res
         },
     )?;
 
-    for peer in &config.peers {
-        signer.set_peer_policy(&peer.pubkey, peer.policy.clone())?;
+    for (peer, policy_override) in &config.manual_policy_overrides {
+        signer.set_peer_policy_override(peer, policy_override.clone())?;
+    }
+    for (peer, observation) in &config.remote_policy_observations {
+        signer.set_remote_policy_observation(peer, observation.clone())?;
     }
 
     Ok(signer)

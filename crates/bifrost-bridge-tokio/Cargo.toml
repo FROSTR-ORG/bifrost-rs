@@ -16,6 +16,7 @@ tracing.workspace = true
 bifrost-core = { path = "../bifrost-core" }
 bifrost-router = { path = "../bifrost-router" }
 bifrost-signer = { path = "../bifrost-signer" }
+frostr-utils = { path = "../frostr-utils" }
 
 [dev-dependencies]
 bifrost-codec = { path = "../bifrost-codec" }

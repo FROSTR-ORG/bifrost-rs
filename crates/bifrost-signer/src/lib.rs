@@ -11,17 +11,17 @@ use bifrost_codec::{
 use bifrost_core::create_session_package;
 use bifrost_core::nonce::{NoncePool, NoncePoolConfig};
 use bifrost_core::types::{
-    Bytes32, EcdhPackage, GroupPackage, OnboardResponse, PartialSigPackage, PeerPolicy,
-    PeerScopedPolicyProfile, PingPayload, SharePackage, SignSessionPackage, SignSessionTemplate,
+    Bytes32, DerivedPublicNonce, EcdhPackage, GroupPackage, OnboardResponse, PartialSigPackage,
+    PeerPolicy, PeerPolicyOverride, PeerScopedPolicyProfile, PingPayload,
+    PolicyOverrideValue, SharePackage, SignSessionPackage, SignSessionTemplate,
 };
 use frostr_utils::{
-    InviteToken, build_invite_token, ecdh_create_from_share, ecdh_finalize, sign_create_partial,
-    sign_finalize, sign_verify_partial, validate_sign_session,
+    ecdh_create_from_share, ecdh_finalize, sign_create_partial, sign_finalize,
+    sign_verify_partial, validate_sign_session,
 };
 use nostr::{Alphabet, Event, Filter, SingleLetterTag, TagKind};
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::debug;
 
 mod crypto;
 mod error;
@@ -32,7 +32,7 @@ pub use error::{Result, SignerError};
 use event_io::{build_signed_event, event_content, event_kind, event_pubkey_xonly};
 use util::{
     decode_32, decode_member_index, decode_member_pubkey, decode_pubkey32, is_valid_pubkey32_hex,
-    now_unix_secs, parse_request_id_components, shuffle_strings,
+    now_unix_secs, random_request_id, shuffle_strings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,18 +98,19 @@ pub struct DeviceState {
     pub ecdh_cache_order: VecDeque<String>,
     pub sig_cache: HashMap<String, SigCacheEntry>,
     pub sig_cache_order: VecDeque<String>,
-    pub policies: HashMap<String, PeerPolicy>,
+    #[serde(default)]
+    pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
     pub pending_operations: HashMap<String, PendingOperation>,
     #[serde(default)]
-    pub pending_invites: HashMap<String, PendingInviteRecord>,
+    pub peer_last_seen: HashMap<String, u64>,
     pub request_seq: u64,
     pub last_active: u64,
     pub version: u32,
 }
 
 impl DeviceState {
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 4;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
         let mut nonce_pool =
@@ -122,10 +123,10 @@ impl DeviceState {
             ecdh_cache_order: VecDeque::new(),
             sig_cache: HashMap::new(),
             sig_cache_order: VecDeque::new(),
-            policies: HashMap::new(),
+            manual_policy_overrides: HashMap::new(),
             remote_scoped_policies: HashMap::new(),
             pending_operations: HashMap::new(),
-            pending_invites: HashMap::new(),
+            peer_last_seen: HashMap::new(),
             request_seq: 1,
             last_active: now_unix_secs(),
             version: Self::VERSION,
@@ -145,6 +146,48 @@ impl DeviceState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnboardingBootstrapSeed {
+    pub request_nonces: Vec<DerivedPublicNonce>,
+    pub state: DeviceState,
+}
+
+const ONBOARD_BOOTSTRAP_LOCAL_IDX: u16 = 0;
+const ONBOARD_BOOTSTRAP_PEER_IDX: u16 = 1;
+
+pub fn generate_onboarding_bootstrap_seed(
+    share_seckey: [u8; 32],
+    count: usize,
+) -> Result<OnboardingBootstrapSeed> {
+    let mut state = DeviceState::new(ONBOARD_BOOTSTRAP_LOCAL_IDX, share_seckey);
+    let request_nonces = state
+        .nonce_pool
+        .generate_for_peer(ONBOARD_BOOTSTRAP_PEER_IDX, count)
+        .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+    Ok(OnboardingBootstrapSeed {
+        request_nonces,
+        state,
+    })
+}
+
+pub fn finalize_onboarding_bootstrap_seed(
+    mut state: DeviceState,
+    local_member_idx: u16,
+    inviter_member_idx: u16,
+    inviter_nonces: Vec<DerivedPublicNonce>,
+) -> Result<DeviceState> {
+    let mut index_map = HashMap::new();
+    index_map.insert(ONBOARD_BOOTSTRAP_LOCAL_IDX, local_member_idx);
+    index_map.insert(ONBOARD_BOOTSTRAP_PEER_IDX, inviter_member_idx);
+    state
+        .nonce_pool
+        .remap_peer_indexes(local_member_idx, &index_map);
+    state.nonce_pool.store_incoming(inviter_member_idx, inviter_nonces);
+    state.pending_operations.clear();
+    state.last_active = now_unix_secs();
+    Ok(state)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceConfig {
     pub sign_timeout_secs: u64,
     pub ecdh_timeout_secs: u64,
@@ -160,6 +203,20 @@ pub struct DeviceConfig {
     pub ecdh_cache_ttl_secs: u64,
     pub sig_cache_capacity: usize,
     pub sig_cache_ttl_secs: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceConfigPatch {
+    #[serde(default)]
+    pub sign_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub ping_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub request_ttl_secs: Option<u64>,
+    #[serde(default)]
+    pub state_save_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub peer_selection_strategy: Option<PeerSelectionStrategy>,
 }
 
 impl Default for DeviceConfig {
@@ -193,6 +250,68 @@ pub struct DeviceStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMetadata {
+    pub device_id: String,
+    pub member_idx: u16,
+    pub share_public_key: String,
+    pub group_public_key: String,
+    pub peers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerStatus {
+    pub idx: u16,
+    pub pubkey: String,
+    pub known: bool,
+    pub last_seen: Option<u64>,
+    pub online: bool,
+    pub incoming_available: usize,
+    pub outgoing_available: usize,
+    pub outgoing_spent: usize,
+    pub can_sign: bool,
+    pub should_send_nonces: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeReadiness {
+    pub runtime_ready: bool,
+    pub restore_complete: bool,
+    pub sign_ready: bool,
+    pub ecdh_ready: bool,
+    pub threshold: usize,
+    pub signing_peer_count: usize,
+    pub ecdh_peer_count: usize,
+    pub last_refresh_at: Option<u64>,
+    pub degraded_reasons: Vec<RuntimeDegradedReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDegradedReason {
+    PendingOperationsRecovered,
+    InsufficientSigningPeers,
+    InsufficientEcdhPeers,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeStatusSummary {
+    pub status: DeviceStatus,
+    pub metadata: RuntimeMetadata,
+    pub readiness: RuntimeReadiness,
+    pub peers: Vec<PeerStatus>,
+    pub peer_permission_states: Vec<PeerPermissionState>,
+    pub pending_operations: Vec<PendingOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerPermissionState {
+    pub pubkey: String,
+    pub manual_override: PeerPolicyOverride,
+    pub remote_observation: Option<PeerScopedPolicyProfile>,
+    pub effective_policy: PeerPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingOperation {
     pub op_type: PendingOpType,
     pub request_id: String,
@@ -202,17 +321,6 @@ pub struct PendingOperation {
     pub threshold: usize,
     pub collected_responses: Vec<CollectedResponse>,
     pub context: PendingOpContext,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingInviteRecord {
-    pub challenge_hex: String,
-    pub callback_peer_pubkey_hex: String,
-    pub relays: Vec<String>,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub consumed_at: Option<u64>,
-    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,9 +350,7 @@ pub enum PendingOpContext {
         responses: Vec<EcdhPackage>,
     },
     PingRequest,
-    OnboardRequest {
-        challenge: Option<[u8; 32]>,
-    },
+    OnboardRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +378,8 @@ pub enum CompletedOperation {
     Onboard {
         request_id: String,
         group_member_count: usize,
+        group: GroupPackage,
+        nonces: Vec<DerivedPublicNonce>,
     },
 }
 
@@ -299,7 +407,6 @@ pub enum SignerInput {
     },
     BeginOnboard {
         peer: String,
-        challenge: Option<[u8; 32]>,
     },
     ProcessEvent {
         event: Event,
@@ -386,11 +493,12 @@ pub struct SigningDevice {
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
     latest_request_id: Option<String>,
-    boot_nonce: u64,
     runtime_persistence_hint: PersistenceHint,
 }
 
 impl SigningDevice {
+    const PEER_ONLINE_GRACE_SECS: u64 = 120;
+
     pub fn new(
         group: GroupPackage,
         share: SharePackage,
@@ -432,9 +540,6 @@ impl SigningDevice {
         state
             .sig_cache_order
             .retain(|k| state.sig_cache.contains_key(k));
-        let mut boot_bytes = [0u8; 8];
-        OsRng.fill_bytes(&mut boot_bytes);
-        let boot_nonce = u64::from_le_bytes(boot_bytes);
 
         Ok(Self {
             group,
@@ -448,7 +553,6 @@ impl SigningDevice {
             completions: VecDeque::new(),
             failures: VecDeque::new(),
             latest_request_id: None,
-            boot_nonce,
             runtime_persistence_hint: PersistenceHint::None,
         })
     }
@@ -467,6 +571,82 @@ impl SigningDevice {
         &self.state
     }
 
+    pub fn set_remote_policy_observation(
+        &mut self,
+        peer: &str,
+        observation: PeerScopedPolicyProfile,
+    ) -> Result<()> {
+        if !self.member_idx_by_pubkey.contains_key(peer) {
+            return Err(SignerError::UnknownPeer(peer.to_string()));
+        }
+        self.state
+            .remote_scoped_policies
+            .insert(peer.to_string(), observation);
+        self.state.last_active = now_unix_secs();
+        self.mark_persistence_hint(PersistenceHint::Immediate);
+        Ok(())
+    }
+
+    pub fn read_config(&self) -> DeviceConfig {
+        self.config.clone()
+    }
+
+    pub fn wipe_state(&mut self) {
+        self.state = DeviceState::new(self.share.idx, self.share.seckey);
+        for peer in &self.peers {
+            if let Some(idx) = self.member_idx_by_pubkey.get(peer).copied() {
+                self.state.nonce_pool.init_peer(idx);
+            }
+        }
+        self.state.nonce_pool.init_peer(self.share.idx);
+        self.completions.clear();
+        self.failures.clear();
+        self.latest_request_id = None;
+        self.runtime_persistence_hint = PersistenceHint::Immediate;
+    }
+
+    pub fn update_config(&mut self, patch: DeviceConfigPatch) -> Result<()> {
+        if let Some(value) = patch.sign_timeout_secs {
+            if value == 0 {
+                return Err(SignerError::InvalidConfig(
+                    "sign_timeout_secs must be greater than zero".to_string(),
+                ));
+            }
+            self.config.sign_timeout_secs = value;
+        }
+        if let Some(value) = patch.ping_timeout_secs {
+            if value == 0 {
+                return Err(SignerError::InvalidConfig(
+                    "ping_timeout_secs must be greater than zero".to_string(),
+                ));
+            }
+            self.config.ping_timeout_secs = value;
+        }
+        if let Some(value) = patch.request_ttl_secs {
+            if value == 0 {
+                return Err(SignerError::InvalidConfig(
+                    "request_ttl_secs must be greater than zero".to_string(),
+                ));
+            }
+            self.config.request_ttl_secs = value;
+        }
+        if let Some(value) = patch.state_save_interval_secs {
+            if value == 0 {
+                return Err(SignerError::InvalidConfig(
+                    "state_save_interval_secs must be greater than zero".to_string(),
+                ));
+            }
+            self.config.state_save_interval_secs = value;
+        }
+        if let Some(value) = patch.peer_selection_strategy {
+            self.config.peer_selection_strategy = value;
+        }
+
+        self.state.last_active = now_unix_secs();
+        self.mark_persistence_hint(PersistenceHint::Immediate);
+        Ok(())
+    }
+
     pub fn device_id(&self) -> &DeviceId {
         &self.device_id
     }
@@ -479,80 +659,225 @@ impl SigningDevice {
         &self.share_public_key_hex
     }
 
-    pub fn pending_invites(&self) -> Vec<PendingInviteRecord> {
-        let mut invites = self.state.pending_invites.values().cloned().collect::<Vec<_>>();
-        invites.sort_by_key(|record| (record.created_at, record.challenge_hex.clone()));
-        invites
-    }
-
-    pub fn create_invite(
-        &mut self,
-        relays: Vec<String>,
-        expires_in_secs: u64,
-        label: Option<String>,
-    ) -> Result<InviteToken> {
-        if expires_in_secs == 0 {
-            return Err(SignerError::InvalidRequest(
-                "invite expiration must be greater than zero".to_string(),
-            ));
-        }
-
-        let created_at = now_unix_secs();
-        let expires_at = created_at.saturating_add(expires_in_secs);
-        let callback_peer_pk = decode_32(self.local_pubkey32())?;
-
-        loop {
-            let mut challenge = [0u8; 32];
-            OsRng.fill_bytes(&mut challenge);
-            let challenge_hex = hex::encode(challenge);
-            if self.state.pending_invites.contains_key(&challenge_hex) {
-                continue;
-            }
-
-            let token = build_invite_token(
-                callback_peer_pk,
-                relays.clone(),
-                challenge,
-                created_at,
-                expires_at,
-                label.clone(),
-            )
-            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
-            debug!(
-                device_id = %self.device_id,
-                callback_peer_pubkey = %self.local_pubkey32(),
-                challenge_hex = %challenge_hex,
-                relay_count = token.relays.len(),
-                created_at,
-                expires_at,
-                label = ?label,
-                "created pending invite"
-            );
-            self.state.pending_invites.insert(
-                challenge_hex.clone(),
-                PendingInviteRecord {
-                    challenge_hex,
-                    callback_peer_pubkey_hex: self.local_pubkey32().to_string(),
-                    relays: token.relays.clone(),
-                    created_at,
-                    expires_at,
-                    consumed_at: None,
-                    label: label.clone(),
-                },
-            );
-            self.state.last_active = created_at;
-            self.mark_persistence_hint(PersistenceHint::Immediate);
-            return Ok(token);
+    pub fn runtime_metadata(&self) -> RuntimeMetadata {
+        let mut peers = self.peers.clone();
+        peers.sort_unstable();
+        RuntimeMetadata {
+            device_id: self.device_id.to_string(),
+            member_idx: self.share.idx,
+            share_public_key: self.share_public_key_hex.clone(),
+            group_public_key: hex::encode(self.group.group_pk),
+            peers,
         }
     }
 
-    pub fn revoke_pending_invite(&mut self, challenge_hex: &str) -> bool {
-        let removed = self.state.pending_invites.remove(challenge_hex).is_some();
-        if removed {
-            self.state.last_active = now_unix_secs();
-            self.mark_persistence_hint(PersistenceHint::Immediate);
+    fn manual_policy_override_for(&self, peer: &str) -> PeerPolicyOverride {
+        self.state
+            .manual_policy_overrides
+            .get(peer)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn apply_override_value(default: bool, value: PolicyOverrideValue) -> bool {
+        match value {
+            PolicyOverrideValue::Unset => default,
+            PolicyOverrideValue::Allow => true,
+            PolicyOverrideValue::Deny => false,
         }
-        removed
+    }
+
+    fn local_policy_for_peer(&self, peer: &str) -> PeerPolicy {
+        let override_policy = self.manual_policy_override_for(peer);
+        let default_request = bifrost_core::types::MethodPolicy::default();
+        let default_respond = bifrost_core::types::MethodPolicy::default();
+        let request = bifrost_core::types::MethodPolicy {
+            echo: Self::apply_override_value(default_request.echo, override_policy.request.echo),
+            ping: Self::apply_override_value(default_request.ping, override_policy.request.ping),
+            onboard: Self::apply_override_value(
+                default_request.onboard,
+                override_policy.request.onboard,
+            ),
+            sign: Self::apply_override_value(default_request.sign, override_policy.request.sign),
+            ecdh: Self::apply_override_value(default_request.ecdh, override_policy.request.ecdh),
+        };
+        let respond = bifrost_core::types::MethodPolicy {
+            echo: Self::apply_override_value(default_respond.echo, override_policy.respond.echo),
+            ping: Self::apply_override_value(default_respond.ping, override_policy.respond.ping),
+            onboard: Self::apply_override_value(
+                default_respond.onboard,
+                override_policy.respond.onboard,
+            ),
+            sign: Self::apply_override_value(default_respond.sign, override_policy.respond.sign),
+            ecdh: Self::apply_override_value(default_respond.ecdh, override_policy.respond.ecdh),
+        };
+        PeerPolicy {
+            block_all: !(request.echo
+                || request.ping
+                || request.onboard
+                || request.sign
+                || request.ecdh
+                || respond.echo
+                || respond.ping
+                || respond.onboard
+                || respond.sign
+                || respond.ecdh),
+            request,
+            respond,
+        }
+    }
+
+    fn effective_policy_for_peer(&self, peer: &str) -> PeerPolicy {
+        let local = self.local_policy_for_peer(peer);
+        let remote = self.state.remote_scoped_policies.get(peer);
+        let request = bifrost_core::types::MethodPolicy {
+            echo: local.request.echo,
+            ping: local.request.ping,
+            onboard: local.request.onboard,
+            sign: local.request.sign
+                && remote
+                    .map(|profile| profile.respond.sign)
+                    .unwrap_or(true),
+            ecdh: local.request.ecdh
+                && remote
+                    .map(|profile| profile.respond.ecdh)
+                    .unwrap_or(true),
+        };
+        PeerPolicy {
+            block_all: !(request.echo
+                || request.ping
+                || request.onboard
+                || request.sign
+                || request.ecdh
+                || local.respond.echo
+                || local.respond.ping
+                || local.respond.onboard
+                || local.respond.sign
+                || local.respond.ecdh),
+            request,
+            respond: local.respond,
+        }
+    }
+
+    fn inbound_allowed(&self, peer: &str, method: &str) -> bool {
+        let respond = &self.local_policy_for_peer(peer).respond;
+        match method {
+            "ping" => respond.ping,
+            "onboard" => respond.onboard,
+            "sign" => respond.sign,
+            "ecdh" => respond.ecdh,
+            "echo" => respond.echo,
+            _ => true,
+        }
+    }
+
+    pub fn peer_status(&self) -> Vec<PeerStatus> {
+        let now = now_unix_secs();
+        let mut peers = self
+            .peers
+            .iter()
+            .filter_map(|peer| {
+                let idx = self.member_idx_by_pubkey.get(peer).copied()?;
+                let stats = self.state.nonce_pool.peer_stats(idx);
+                let last_seen = self.state.peer_last_seen.get(peer).copied();
+                let online = last_seen
+                    .map(|seen| now.saturating_sub(seen) <= Self::PEER_ONLINE_GRACE_SECS)
+                    .unwrap_or(false);
+                Some(PeerStatus {
+                    idx,
+                    pubkey: peer.clone(),
+                    known: true,
+                    last_seen,
+                    online,
+                    incoming_available: stats.incoming_available,
+                    outgoing_available: stats.outgoing_available,
+                    outgoing_spent: stats.outgoing_spent,
+                    can_sign: stats.can_sign,
+                    should_send_nonces: stats.should_send_nonces,
+                })
+            })
+            .collect::<Vec<_>>();
+        peers.sort_by_key(|entry| entry.idx);
+        peers
+    }
+
+    pub fn readiness(&self) -> RuntimeReadiness {
+        let peers = self.peer_status();
+        self.readiness_from_peers(&peers)
+    }
+
+    pub fn pending_operations(&self) -> Vec<PendingOperation> {
+        let mut operations = self
+            .state
+            .pending_operations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        operations.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+        operations
+    }
+
+    pub fn runtime_status(&self) -> RuntimeStatusSummary {
+        let peers = self.peer_status();
+        RuntimeStatusSummary {
+            status: self.status(),
+            metadata: self.runtime_metadata(),
+            readiness: self.readiness_from_peers(&peers),
+            peers,
+            peer_permission_states: self.peer_permission_states(),
+            pending_operations: self.pending_operations(),
+        }
+    }
+
+    pub fn peer_permission_states(&self) -> Vec<PeerPermissionState> {
+        let mut peers = self.peers.clone();
+        peers.sort_unstable();
+        peers.into_iter()
+            .map(|peer| PeerPermissionState {
+                pubkey: peer.clone(),
+                manual_override: self.manual_policy_override_for(&peer),
+                remote_observation: self.state.remote_scoped_policies.get(&peer).cloned(),
+                effective_policy: self.effective_policy_for_peer(&peer),
+            })
+            .collect()
+    }
+
+    fn readiness_from_peers(&self, peers: &[PeerStatus]) -> RuntimeReadiness {
+        let threshold = self.group.threshold.saturating_sub(1) as usize;
+        let signing_peer_count = peers
+            .iter()
+            .filter(|peer| peer.can_sign && self.effective_policy_for_peer(&peer.pubkey).request.sign)
+            .count();
+        let ecdh_peer_count = peers
+            .iter()
+            .filter(|peer| peer.online && self.effective_policy_for_peer(&peer.pubkey).request.ecdh)
+            .count();
+        let last_refresh_at = peers.iter().filter_map(|peer| peer.last_seen).max();
+        let sign_ready = signing_peer_count >= threshold;
+        let ecdh_ready = ecdh_peer_count >= threshold;
+        let restore_complete = self.state.pending_operations.is_empty();
+        let mut degraded_reasons = Vec::new();
+        if !restore_complete {
+            degraded_reasons.push(RuntimeDegradedReason::PendingOperationsRecovered);
+        }
+        if !sign_ready {
+            degraded_reasons.push(RuntimeDegradedReason::InsufficientSigningPeers);
+        }
+        if !ecdh_ready {
+            degraded_reasons.push(RuntimeDegradedReason::InsufficientEcdhPeers);
+        }
+
+        RuntimeReadiness {
+            runtime_ready: degraded_reasons.is_empty(),
+            restore_complete,
+            sign_ready,
+            ecdh_ready,
+            threshold,
+            signing_peer_count,
+            ecdh_peer_count,
+            last_refresh_at,
+            degraded_reasons,
+        }
     }
 
     pub fn has_exact_local_recipient_tag(&self, event: &Event) -> bool {
@@ -697,7 +1022,8 @@ impl SigningDevice {
 
         let envelope = self.decrypt_event(event, &sender)?;
         let now = now_unix_secs();
-        self.record_request(&sender, &envelope.request_id, now)?;
+        self.state.peer_last_seen.insert(sender.clone(), now);
+        self.record_request(&sender, &envelope.request_id, envelope.sent_at, now)?;
 
         let mut outbound = if self
             .state
@@ -870,7 +1196,7 @@ impl SigningDevice {
         }
 
         let needed = self.group.threshold.saturating_sub(1) as usize;
-        let selected = self.select_locked_peers(needed)?;
+        let selected = self.select_ecdh_peers(needed)?;
 
         let mut members = Vec::with_capacity(selected.len() + 1);
         members.push(self.share.idx);
@@ -929,6 +1255,11 @@ impl SigningDevice {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
+        if !self.effective_policy_for_peer(peer).request.ping {
+            return Err(SignerError::InvalidRequest(format!(
+                "peer policy denies outbound ping for {peer}"
+            )));
+        }
         let peer_idx = *self
             .member_idx_by_pubkey
             .get(peer)
@@ -976,17 +1307,27 @@ impl SigningDevice {
         self.encrypt_for_peers(&[peer.to_string()], &envelope)
     }
 
-    pub fn initiate_onboard(
-        &mut self,
-        peer: &str,
-        challenge: Option<[u8; 32]>,
-    ) -> Result<Vec<Event>> {
+    pub fn initiate_onboard(&mut self, peer: &str) -> Result<Vec<Event>> {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
+        if !self.effective_policy_for_peer(peer).request.onboard {
+            return Err(SignerError::InvalidRequest(format!(
+                "peer policy denies outbound onboard for {peer}"
+            )));
+        }
+        let peer_idx = *self
+            .member_idx_by_pubkey
+            .get(peer)
+            .ok_or_else(|| SignerError::UnknownPeer(peer.to_string()))?;
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
         let now = now_unix_secs();
+        let request_nonces = self
+            .state
+            .nonce_pool
+            .generate_for_peer(peer_idx, NoncePoolConfig::default().pool_size)
+            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
         self.state.pending_operations.insert(
             request_id.clone(),
@@ -998,7 +1339,7 @@ impl SigningDevice {
                 target_peers: vec![peer.to_string()],
                 threshold: 1,
                 collected_responses: Vec::new(),
-                context: PendingOpContext::OnboardRequest { challenge },
+                context: PendingOpContext::OnboardRequest,
             },
         );
 
@@ -1006,9 +1347,8 @@ impl SigningDevice {
             request_id,
             sent_at: now,
             payload: BridgePayload::OnboardRequest(OnboardRequestWire {
-                share_pk: self.share_public_key_hex.clone(),
-                idx: self.share.idx,
-                challenge: challenge.map(hex::encode),
+                version: 1,
+                nonces: request_nonces.into_iter().map(Into::into).collect(),
             }),
         };
         self.encrypt_for_peers(&[peer.to_string()], &envelope)
@@ -1032,14 +1372,15 @@ impl SigningDevice {
                 effects.latest_request_id = self.latest_request_id();
                 effects.persistence_hint = PersistenceHint::Batch;
             }
-            SignerInput::BeginOnboard { peer, challenge } => {
-                effects.outbound = self.initiate_onboard(&peer, challenge)?;
+            SignerInput::BeginOnboard { peer } => {
+                effects.outbound = self.initiate_onboard(&peer)?;
                 effects.latest_request_id = self.latest_request_id();
                 effects.persistence_hint = PersistenceHint::Batch;
             }
             SignerInput::ProcessEvent { event } => {
                 effects.outbound = self.process_event(&event)?;
-                effects.persistence_hint = PersistenceHint::Batch.merge(self.take_runtime_persistence_hint());
+                effects.persistence_hint =
+                    PersistenceHint::Batch.merge(self.take_runtime_persistence_hint());
             }
             SignerInput::Expire { now } => {
                 effects.failures.extend(self.expire_stale(now));
@@ -1095,13 +1436,6 @@ impl SigningDevice {
                 true
             }
         });
-        let invite_count_before = self.state.pending_invites.len();
-        self.state.pending_invites.retain(|_, invite| {
-            invite.consumed_at.is_none() && invite.expires_at > now
-        });
-        if self.state.pending_invites.len() != invite_count_before {
-            self.mark_persistence_hint(PersistenceHint::Immediate);
-        }
         stale
     }
 
@@ -1115,29 +1449,79 @@ impl SigningDevice {
         }
     }
 
-    pub fn policies(&self) -> &HashMap<String, PeerPolicy> {
-        &self.state.policies
-    }
-
     pub fn set_peer_policy(&mut self, peer: &str, policy: PeerPolicy) -> Result<()> {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
-        self.state.policies.insert(peer.to_string(), policy);
+        self.state
+            .manual_policy_overrides
+            .insert(peer.to_string(), PeerPolicyOverride::from_peer_policy(&policy));
         self.state.last_active = now_unix_secs();
+        self.mark_persistence_hint(PersistenceHint::Immediate);
         Ok(())
     }
 
-    fn select_locked_peers(&self, needed: usize) -> Result<Vec<String>> {
-        let mut selected = self.peers.clone();
-        if selected.len() < needed {
+    pub fn set_peer_policy_override(&mut self, peer: &str, policy: PeerPolicyOverride) -> Result<()> {
+        if !self.member_idx_by_pubkey.contains_key(peer) {
+            return Err(SignerError::UnknownPeer(peer.to_string()));
+        }
+        self.state
+            .manual_policy_overrides
+            .insert(peer.to_string(), policy);
+        self.state.last_active = now_unix_secs();
+        self.mark_persistence_hint(PersistenceHint::Immediate);
+        Ok(())
+    }
+
+    pub fn clear_peer_policy_overrides(&mut self) {
+        self.state.manual_policy_overrides.clear();
+        self.state.last_active = now_unix_secs();
+        self.mark_persistence_hint(PersistenceHint::Immediate);
+    }
+
+    fn select_ecdh_peers(&self, needed: usize) -> Result<Vec<String>> {
+        if self.peers.len() < needed {
             return Err(SignerError::InvalidConfig(
                 "insufficient peers for threshold round".to_string(),
             ));
         }
+
+        let now = now_unix_secs();
+        let mut online = self
+            .peers
+            .iter()
+            .filter(|peer| {
+                self.state
+                    .peer_last_seen
+                    .get(*peer)
+                    .copied()
+                    .map(|seen| now.saturating_sub(seen) <= Self::PEER_ONLINE_GRACE_SECS)
+                    .unwrap_or(false)
+                    && self.effective_policy_for_peer(peer).request.ecdh
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut fallback = self
+            .peers
+            .iter()
+            .filter(|peer| !online.contains(*peer) && self.effective_policy_for_peer(peer).request.ecdh)
+            .cloned()
+            .collect::<Vec<_>>();
+
         match self.config.peer_selection_strategy {
-            PeerSelectionStrategy::DeterministicSorted => selected.sort_unstable(),
-            PeerSelectionStrategy::Random => shuffle_strings(&mut selected),
+            PeerSelectionStrategy::DeterministicSorted => {
+                online.sort_unstable();
+                fallback.sort_unstable();
+            }
+            PeerSelectionStrategy::Random => {
+                shuffle_strings(&mut online);
+                shuffle_strings(&mut fallback);
+            }
+        }
+
+        let mut selected = online;
+        if selected.len() < needed {
+            selected.extend(fallback);
         }
         selected.truncate(needed);
         Ok(selected)
@@ -1151,7 +1535,10 @@ impl SigningDevice {
                 self.member_idx_by_pubkey
                     .get(*peer)
                     .copied()
-                    .map(|idx| self.state.nonce_pool.can_sign(idx))
+                    .map(|idx| {
+                        self.state.nonce_pool.can_sign(idx)
+                            && self.effective_policy_for_peer(peer).request.sign
+                    })
                     .unwrap_or(false)
             })
             .cloned()
@@ -1208,96 +1595,6 @@ impl SigningDevice {
         build_signed_event(self.share.seckey, self.config.event_kind, tags, content)
     }
 
-    fn validate_inbound_onboard_challenge(
-        &mut self,
-        challenge: Option<[u8; 32]>,
-        sender: &str,
-        now: u64,
-    ) -> Result<()> {
-        let Some(challenge) = challenge else {
-            debug!(
-                device_id = %self.device_id,
-                sender,
-                "accepted onboarding request without invite challenge"
-            );
-            return Ok(());
-        };
-
-        let challenge_hex = hex::encode(challenge);
-        debug!(
-            device_id = %self.device_id,
-            sender,
-            challenge_hex = %challenge_hex,
-            pending_invite_count = self.state.pending_invites.len(),
-            "validating inbound onboarding challenge"
-        );
-        let pending_invite_count = self.state.pending_invites.len();
-        let invite = self
-            .state
-            .pending_invites
-            .get_mut(&challenge_hex)
-            .ok_or_else(|| {
-                warn!(
-                    device_id = %self.device_id,
-                    sender,
-                    challenge_hex = %challenge_hex,
-                    pending_invite_count,
-                    "rejecting onboarding request with unknown invite challenge"
-                );
-                SignerError::InvalidRequest("unknown invite challenge".to_string())
-            })?;
-
-        if invite.callback_peer_pubkey_hex != self.share_public_key_hex {
-            warn!(
-                device_id = %self.device_id,
-                sender,
-                challenge_hex = %challenge_hex,
-                expected_callback_peer = %self.share_public_key_hex,
-                actual_callback_peer = %invite.callback_peer_pubkey_hex,
-                "rejecting onboarding request due to callback peer mismatch"
-            );
-            return Err(SignerError::InvalidRequest(
-                "invite callback peer mismatch".to_string(),
-            ));
-        }
-        if invite.expires_at <= now {
-            warn!(
-                device_id = %self.device_id,
-                sender,
-                challenge_hex = %challenge_hex,
-                expires_at = invite.expires_at,
-                now,
-                "rejecting onboarding request with expired invite challenge"
-            );
-            return Err(SignerError::InvalidRequest(
-                "invite challenge expired".to_string(),
-            ));
-        }
-        if invite.consumed_at.is_some() {
-            warn!(
-                device_id = %self.device_id,
-                sender,
-                challenge_hex = %challenge_hex,
-                consumed_at = ?invite.consumed_at,
-                "rejecting onboarding request with consumed invite challenge"
-            );
-            return Err(SignerError::InvalidRequest(
-                "invite challenge already consumed".to_string(),
-            ));
-        }
-
-        invite.consumed_at = Some(now);
-        self.mark_persistence_hint(PersistenceHint::Immediate);
-        debug!(
-            device_id = %self.device_id,
-            sender,
-            challenge_hex = %challenge_hex,
-            consumed_at = now,
-            "accepted onboarding request with invite challenge"
-        );
-        Ok(())
-    }
-
     fn handle_inbound_request(
         &mut self,
         envelope: BridgeEnvelope,
@@ -1312,6 +1609,14 @@ impl SigningDevice {
 
         match envelope.payload {
             BridgePayload::PingRequest(wire) => {
+                if !self.inbound_allowed(&sender, "ping") {
+                    return self.reject_request(
+                        &sender,
+                        envelope.request_id,
+                        "peer_denied",
+                        "inbound ping denied by local policy",
+                    );
+                }
                 let ping: PingPayload =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1349,6 +1654,14 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::OnboardRequest(wire) => {
+                if !self.inbound_allowed(&sender, "onboard") {
+                    return self.reject_request(
+                        &sender,
+                        envelope.request_id,
+                        "peer_denied",
+                        "inbound onboard denied by local policy",
+                    );
+                }
                 let request: bifrost_core::types::OnboardRequest =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1357,28 +1670,33 @@ impl SigningDevice {
                     device_id = %self.device_id,
                     sender = %sender,
                     sender_idx,
-                    request_idx = request.idx,
-                    request_share_pk = %hex::encode(request.share_pk),
-                    request_challenge = ?request.challenge.map(hex::encode),
+                    request_version = request.version,
+                    request_nonce_count = request.nonces.len(),
                     "received onboard request"
                 );
-                if request.idx != sender_idx {
-                    return Err(SignerError::InvalidSenderBinding(
-                        "onboard idx mismatch".to_string(),
+                if request.version != 1 {
+                    return Err(SignerError::InvalidRequest(format!(
+                        "unsupported onboard request version {}",
+                        request.version
+                    )));
+                }
+                if request.nonces.is_empty() {
+                    return Err(SignerError::InvalidRequest(
+                        "onboard bootstrap nonces missing".to_string(),
                     ));
                 }
-                if hex::encode(request.share_pk) != sender {
-                    return Err(SignerError::InvalidSenderBinding(
-                        "onboard share_pk mismatch".to_string(),
-                    ));
-                }
-                self.validate_inbound_onboard_challenge(request.challenge, &sender, now)?;
+                self.state.nonce_pool.store_incoming(sender_idx, request.nonces);
 
-                let nonces = self
-                    .state
+                self.state
                     .nonce_pool
                     .generate_for_peer(sender_idx, NoncePoolConfig::default().pool_size)
                     .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+                let nonces = self.state.nonce_pool.outgoing_public_nonces(sender_idx);
+                if nonces.is_empty() {
+                    return Err(SignerError::InvalidRequest(
+                        "onboard bootstrap nonces unavailable".to_string(),
+                    ));
+                }
                 let onboard = OnboardResponse {
                     group: self.group.clone(),
                     nonces,
@@ -1399,6 +1717,14 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::SignRequest(wire) => {
+                if !self.inbound_allowed(&sender, "sign") {
+                    return self.reject_request(
+                        &sender,
+                        envelope.request_id,
+                        "peer_denied",
+                        "inbound sign denied by local policy",
+                    );
+                }
                 let session: SignSessionPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1469,6 +1795,14 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::EcdhRequest(wire) => {
+                if !self.inbound_allowed(&sender, "ecdh") {
+                    return self.reject_request(
+                        &sender,
+                        envelope.request_id,
+                        "peer_denied",
+                        "inbound ecdh denied by local policy",
+                    );
+                }
                 let req: EcdhPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -1572,6 +1906,8 @@ impl SigningDevice {
                 completion = Some(CompletedOperation::Onboard {
                     request_id: request_id.clone(),
                     group_member_count: onboard.group.members.len(),
+                    group: onboard.group.clone(),
+                    nonces: onboard.nonces.clone(),
                 });
                 should_complete = true;
             }
@@ -1781,7 +2117,7 @@ impl SigningDevice {
 
     fn local_policy_profile_for(&self, peer: &str) -> Result<PeerScopedPolicyProfile> {
         let now = now_unix_secs();
-        let policy = self.state.policies.get(peer).cloned().unwrap_or_default();
+        let policy = self.local_policy_for_peer(peer);
         Ok(PeerScopedPolicyProfile {
             for_peer: decode_32(peer)?,
             revision: now,
@@ -1792,21 +2128,31 @@ impl SigningDevice {
         })
     }
 
-    fn record_request(&mut self, sender: &str, request_id: &str, now: u64) -> Result<()> {
+    fn reject_request(&self, peer: &str, request_id: String, code: &str, message: &str) -> Result<Vec<Event>> {
+        let response = BridgeEnvelope {
+            request_id,
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::Error(bifrost_codec::wire::PeerErrorWire {
+                code: code.to_string(),
+                message: message.to_string(),
+            }),
+        };
+        self.encrypt_for_peers(&[peer.to_string()], &response)
+    }
+
+    fn record_request(&mut self, sender: &str, request_id: &str, sent_at: u64, now: u64) -> Result<()> {
         if request_id.is_empty() {
             return Err(SignerError::InvalidRequest(
                 "request id must not be empty".to_string(),
             ));
         }
-        let (issued_at, _, _, _) = parse_request_id_components(request_id)
-            .ok_or_else(|| SignerError::InvalidRequest("invalid request id format".to_string()))?;
-        if issued_at > now.saturating_add(self.config.max_future_skew_secs) {
+        if sent_at > now.saturating_add(self.config.max_future_skew_secs) {
             return Err(SignerError::InvalidRequest(
-                "request id is too far in the future".to_string(),
+                "request sent_at is too far in the future".to_string(),
             ));
         }
-        if now > issued_at.saturating_add(self.config.request_ttl_secs) {
-            return Err(SignerError::InvalidRequest("stale request id".to_string()));
+        if now > sent_at.saturating_add(self.config.request_ttl_secs) {
+            return Err(SignerError::InvalidRequest("stale request".to_string()));
         }
 
         let key = format!("{sender}:{request_id}");
@@ -1838,13 +2184,7 @@ impl SigningDevice {
     }
 
     fn next_request_id(&mut self) -> String {
-        let id = format!(
-            "{}-{}-{}-{}",
-            now_unix_secs(),
-            self.share.idx,
-            self.boot_nonce,
-            self.state.request_seq
-        );
+        let id = random_request_id();
         self.state.request_seq = self.state.request_seq.saturating_add(1);
         id
     }
@@ -1865,7 +2205,8 @@ fn extract_recipient_p_tags(event: &Event) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bifrost_codec::wire::OnboardRequestWire;
+    use bifrost_codec::wire::{DerivedPublicNonceWire, OnboardRequestWire};
+    use bifrost_core::MethodPolicy;
     use frostr_utils::{CreateKeysetConfig, create_keyset};
 
     struct Fixture {
@@ -1921,10 +2262,39 @@ mod tests {
             .expect("peer share")
     }
 
+    fn build_peer_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
+        let peers = group
+            .members
+            .iter()
+            .filter(|member| member.idx != share.idx)
+            .map(|member| hex::encode(&member.pubkey[1..]))
+            .collect::<Vec<_>>();
+
+        SigningDevice::new(
+            group.clone(),
+            share.clone(),
+            peers,
+            DeviceState::new(share.idx, share.seckey),
+            DeviceConfig::default(),
+        )
+        .expect("peer signer")
+    }
+
+    fn decode_envelope_for_local(
+        local_share: &SharePackage,
+        sender_pubkey32: &str,
+        event: &Event,
+    ) -> BridgeEnvelope {
+        let ciphertext = event_content(event).expect("event content");
+        let plaintext = decrypt_content_from_peer(local_share.seckey, sender_pubkey32, &ciphertext)
+            .expect("decrypt envelope");
+        decode_bridge_envelope(&plaintext).expect("decode envelope")
+    }
+
     #[test]
-    fn deterministic_strategy_selects_sorted_locked_peers() {
+    fn deterministic_strategy_selects_sorted_ecdh_peers() {
         let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
-        let selected = fixture.signer.select_locked_peers(2).expect("select");
+        let selected = fixture.signer.select_ecdh_peers(2).expect("select");
 
         let mut expected = fixture.signer.peers.clone();
         expected.sort_unstable();
@@ -1933,9 +2303,9 @@ mod tests {
     }
 
     #[test]
-    fn random_strategy_selects_unique_subset_of_peers() {
+    fn random_strategy_selects_unique_subset_of_ecdh_peers() {
         let fixture = fixture(PeerSelectionStrategy::Random);
-        let selected = fixture.signer.select_locked_peers(2).expect("select");
+        let selected = fixture.signer.select_ecdh_peers(2).expect("select");
 
         assert_eq!(selected.len(), 2);
         let unique = selected.iter().cloned().collect::<HashSet<_>>();
@@ -1963,9 +2333,31 @@ mod tests {
             .signer
             .state
             .nonce_pool
-            .store_incoming(peer_share.idx, generated);
+            .store_incoming(peer_share.idx, generated.clone());
 
-        let selected = fixture.signer.select_signing_peers(1).expect("select signing peer");
+        let selected = fixture
+            .signer
+            .select_signing_peers(1)
+            .expect("select signing peer");
+        assert_eq!(selected, vec![chosen_peer]);
+    }
+
+    #[test]
+    fn ecdh_selection_prefers_recently_seen_peers() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let mut sorted_peers = fixture.signer.peers.clone();
+        sorted_peers.sort_unstable();
+        let chosen_peer = sorted_peers[1].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(chosen_peer.clone(), now_unix_secs());
+
+        let selected = fixture
+            .signer
+            .select_ecdh_peers(1)
+            .expect("select ecdh peer");
         assert_eq!(selected, vec![chosen_peer]);
     }
 
@@ -2012,8 +2404,210 @@ mod tests {
             panic!("expected sign-session context");
         };
 
-        let ready_idx = decode_member_index(&fixture.group.members, &ready_peer).expect("ready idx");
+        let ready_idx =
+            decode_member_index(&fixture.group.members, &ready_peer).expect("ready idx");
         assert_eq!(session.members, vec![fixture.local_share.idx, ready_idx]);
+    }
+
+    #[test]
+    fn update_config_applies_safe_subset() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+
+        fixture
+            .signer
+            .update_config(DeviceConfigPatch {
+                sign_timeout_secs: Some(41),
+                ping_timeout_secs: Some(19),
+                request_ttl_secs: Some(480),
+                state_save_interval_secs: Some(9),
+                peer_selection_strategy: Some(PeerSelectionStrategy::Random),
+            })
+            .expect("update config");
+
+        let config = fixture.signer.read_config();
+        assert_eq!(config.sign_timeout_secs, 41);
+        assert_eq!(config.ping_timeout_secs, 19);
+        assert_eq!(config.request_ttl_secs, 480);
+        assert_eq!(config.state_save_interval_secs, 9);
+        assert_eq!(
+            config.peer_selection_strategy,
+            PeerSelectionStrategy::Random
+        );
+    }
+
+    #[test]
+    fn peer_status_reports_last_seen_and_online() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), now_unix_secs());
+
+        let statuses = fixture.signer.peer_status();
+        let status = statuses
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer status");
+
+        assert!(status.known);
+        assert!(status.online);
+        assert!(status.last_seen.is_some());
+    }
+
+    #[test]
+    fn readiness_reports_sign_and_ecdh_capability() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), now_unix_secs());
+
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(fixture.local_share.idx, 10)
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, generated);
+
+        let readiness = fixture.signer.readiness();
+        assert!(readiness.runtime_ready);
+        assert!(readiness.restore_complete);
+        assert!(readiness.sign_ready);
+        assert!(readiness.ecdh_ready);
+        assert_eq!(readiness.threshold, 1);
+        assert_eq!(readiness.signing_peer_count, 1);
+        assert_eq!(readiness.ecdh_peer_count, 1);
+        assert!(readiness.last_refresh_at.is_some());
+        assert!(readiness.degraded_reasons.is_empty());
+    }
+
+    #[test]
+    fn scoped_policy_storage_and_local_policy_profile_respect_target_peer() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let local_bytes = decode_32(fixture.signer.local_pubkey32()).expect("local pubkey bytes");
+        let wrong_target = decode_32(&fixture.signer.peers[1]).expect("wrong target bytes");
+
+        let local_profile = fixture
+            .signer
+            .local_policy_profile_for(&peer)
+            .expect("local policy profile");
+        assert_eq!(
+            local_profile.for_peer,
+            decode_32(&peer).expect("peer bytes")
+        );
+        assert!(!local_profile.block_all);
+
+        fixture
+            .signer
+            .store_remote_scoped_policy(
+                &peer,
+                PeerScopedPolicyProfile {
+                    for_peer: wrong_target,
+                    revision: 1,
+                    updated: 1,
+                    block_all: true,
+                    request: MethodPolicy::default(),
+                    respond: MethodPolicy::default(),
+                },
+            )
+            .expect("ignore wrong target");
+        assert!(fixture.signer.state.remote_scoped_policies.is_empty());
+
+        fixture
+            .signer
+            .store_remote_scoped_policy(
+                &peer,
+                PeerScopedPolicyProfile {
+                    for_peer: local_bytes,
+                    revision: 2,
+                    updated: 2,
+                    block_all: true,
+                    request: MethodPolicy::default(),
+                    respond: MethodPolicy::default(),
+                },
+            )
+            .expect("store matching target");
+        assert_eq!(
+            fixture
+                .signer
+                .state
+                .remote_scoped_policies
+                .get(&peer)
+                .expect("stored profile")
+                .revision,
+            2
+        );
+    }
+
+    #[test]
+    fn onboard_response_includes_bootstrap_nonces_even_after_prior_ping() {
+        let mut inviter = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let inviter_pubkey =
+            decode_member_pubkey(&inviter.group, inviter.local_share.idx).expect("inviter pubkey");
+        let requester_share = inviter.shares[1].clone();
+        let requester_peers = inviter
+            .group
+            .members
+            .iter()
+            .filter(|member| member.idx != requester_share.idx)
+            .map(|member| hex::encode(&member.pubkey[1..]))
+            .collect::<Vec<_>>();
+        let mut requester = SigningDevice::new(
+            inviter.group.clone(),
+            requester_share.clone(),
+            requester_peers,
+            DeviceState::new(requester_share.idx, requester_share.seckey),
+            DeviceConfig::default(),
+        )
+        .expect("requester signer");
+
+        let ping = requester
+            .apply(SignerInput::BeginPing {
+                peer: inviter_pubkey.clone(),
+            })
+            .expect("begin ping")
+            .outbound;
+        assert_eq!(ping.len(), 1);
+        let ping_response = inviter
+            .signer
+            .process_event(&ping[0])
+            .expect("process ping");
+        assert_eq!(ping_response.len(), 1);
+
+        let onboard = requester
+            .apply(SignerInput::BeginOnboard { peer: inviter_pubkey })
+            .expect("begin onboard")
+            .outbound;
+        assert_eq!(onboard.len(), 1);
+        let onboard_response = inviter
+            .signer
+            .process_event(&onboard[0])
+            .expect("process onboard");
+        assert_eq!(onboard_response.len(), 1);
+
+        let effects = requester
+            .apply(SignerInput::ProcessEvent {
+                event: onboard_response[0].clone(),
+            })
+            .expect("apply onboard response");
+        let Some(CompletedOperation::Onboard { nonces, .. }) = effects
+            .completions
+            .into_iter()
+            .find(|completion| matches!(completion, CompletedOperation::Onboard { .. }))
+        else {
+            panic!("expected onboard completion");
+        };
+        assert!(!nonces.is_empty());
     }
 
     #[test]
@@ -2024,10 +2618,7 @@ mod tests {
         let local_pubkey =
             decode_member_pubkey(&fixture.group, fixture.local_share.idx).expect("local pubkey");
         let now = now_unix_secs();
-        let request_id = format!(
-            "{now}-{}-{}-1",
-            fixture.local_share.idx, fixture.signer.boot_nonce
-        );
+        let request_id = "opaque-request-id".to_string();
 
         fixture.signer.state.pending_operations.insert(
             request_id.clone(),
@@ -2047,9 +2638,12 @@ mod tests {
             request_id: request_id.clone(),
             sent_at: now,
             payload: BridgePayload::OnboardRequest(OnboardRequestWire {
-                share_pk: locked_peer.clone(),
-                idx: 7,
-                challenge: None,
+                version: 1,
+                nonces: vec![DerivedPublicNonceWire {
+                    binder_pn: hex::encode([1u8; 33]),
+                    hidden_pn: hex::encode([2u8; 33]),
+                    code: hex::encode([3u8; 32]),
+                }],
             }),
         };
         let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
@@ -2088,6 +2682,300 @@ mod tests {
             OperationFailureCode::InvalidLockedPeerResponse
         );
         assert_eq!(failure.failed_peer, Some(locked_peer));
+    }
+
+    #[test]
+    fn inbound_onboard_request_rejects_unsupported_version() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+
+        let unsupported_version = BridgeEnvelope {
+            request_id: "req-onboard-unsupported-version".to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
+                version: 2,
+                nonces: vec![DerivedPublicNonceWire {
+                    binder_pn: hex::encode([4u8; 33]),
+                    hidden_pn: hex::encode([5u8; 33]),
+                    code: hex::encode([6u8; 32]),
+                }],
+            }),
+        };
+        let err = fixture
+            .signer
+            .handle_inbound_request(unsupported_version, sender)
+            .expect_err("unsupported version must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn handle_inbound_response_without_pending_request_rejects_non_ping_payloads() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+        let response = BridgeEnvelope {
+            request_id: "req-orphan-response".to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::OnboardResponse(OnboardResponseWire::from(OnboardResponse {
+                group: fixture.group.clone(),
+                nonces: vec![],
+            })),
+        };
+        let err = fixture
+            .signer
+            .handle_inbound_request(response, sender)
+            .expect_err("orphan response must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn validate_ecdh_request_rejects_unsorted_duplicate_missing_local_and_empty_targets() {
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+        let sender_idx = decode_member_index(&fixture.group.members, &sender).expect("sender idx");
+
+        let empty_targets = EcdhPackage {
+            idx: sender_idx,
+            members: vec![fixture.local_share.idx, sender_idx],
+            entries: vec![],
+        };
+        assert!(matches!(
+            fixture
+                .signer
+                .validate_ecdh_request(&empty_targets, sender_idx),
+            Err(SignerError::InvalidRequest(_))
+        ));
+
+        let unsorted = EcdhPackage {
+            idx: sender_idx,
+            members: vec![sender_idx, fixture.local_share.idx],
+            entries: vec![bifrost_core::types::EcdhEntry {
+                ecdh_pk: [3u8; 32],
+                keyshare: [4u8; 33],
+            }],
+        };
+        assert!(matches!(
+            fixture.signer.validate_ecdh_request(&unsorted, sender_idx),
+            Err(SignerError::InvalidRequest(_))
+        ));
+
+        let duplicate_members = EcdhPackage {
+            idx: sender_idx,
+            members: vec![fixture.local_share.idx, sender_idx, sender_idx],
+            entries: vec![bifrost_core::types::EcdhEntry {
+                ecdh_pk: [6u8; 32],
+                keyshare: [7u8; 33],
+            }],
+        };
+        assert!(matches!(
+            fixture
+                .signer
+                .validate_ecdh_request(&duplicate_members, sender_idx),
+            Err(SignerError::InvalidRequest(_))
+        ));
+
+        let missing_local = EcdhPackage {
+            idx: sender_idx,
+            members: vec![sender_idx, sender_idx + 1],
+            entries: vec![bifrost_core::types::EcdhEntry {
+                ecdh_pk: [9u8; 32],
+                keyshare: [10u8; 33],
+            }],
+        };
+        assert!(matches!(
+            fixture
+                .signer
+                .validate_ecdh_request(&missing_local, sender_idx),
+            Err(SignerError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn match_pending_response_rejects_unexpected_payload_and_non_target_sender() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let request_id = "req-pending".to_string();
+        let sender = fixture.signer.peers[0].clone();
+        let other = fixture.signer.peers[1].clone();
+        let now = now_unix_secs();
+
+        fixture.signer.state.pending_operations.insert(
+            request_id.clone(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: request_id.clone(),
+                started_at: now,
+                timeout_at: now + 30,
+                target_peers: vec![sender.clone()],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::PingRequest,
+            },
+        );
+
+        let wrong_sender = BridgeEnvelope {
+            request_id: request_id.clone(),
+            sent_at: now,
+            payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
+                version: 1,
+                nonces: None,
+                policy_profile: None,
+            })),
+        };
+        let err = fixture
+            .signer
+            .match_pending_response(&wrong_sender, &other)
+            .expect_err("non-target sender must fail");
+        assert!(matches!(err, SignerError::InvalidSenderBinding(_)));
+
+        let wrong_payload = BridgeEnvelope {
+            request_id,
+            sent_at: now,
+            payload: BridgePayload::OnboardResponse(OnboardResponseWire::from(OnboardResponse {
+                group: fixture.group,
+                nonces: vec![],
+            })),
+        };
+        let err = fixture
+            .signer
+            .match_pending_response(&wrong_payload, &sender)
+            .expect_err("unexpected payload must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn match_pending_response_rejects_peer_error_and_duplicate_sign_response() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+
+        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(fixture.local_share.idx, 10)
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, generated);
+
+        let outbound = fixture
+            .signer
+            .initiate_sign([0x44; 32])
+            .expect("initiate sign");
+        assert_eq!(outbound.len(), 1);
+
+        let request_id = fixture
+            .signer
+            .latest_request_id()
+            .expect("latest request id");
+        let pending = fixture
+            .signer
+            .state
+            .pending_operations
+            .get_mut(&request_id)
+            .expect("pending sign");
+        pending.threshold = 3;
+        let PendingOpContext::SignSession { session, .. } = &pending.context else {
+            panic!("expected sign session context");
+        };
+        let session = session.clone();
+
+        let our_nonce_set = session
+            .nonces
+            .as_ref()
+            .and_then(|sets| sets.iter().find(|entry| entry.idx == peer_share.idx))
+            .expect("peer nonce set");
+        let mut codes_by_hash: Vec<Bytes32> = vec![[0u8; 32]; session.hashes.len()];
+        for entry in &our_nonce_set.entries {
+            codes_by_hash[entry.hash_index as usize] = entry.code;
+        }
+        let signing_nonces = peer_state
+            .nonce_pool
+            .take_outgoing_signing_nonces_many(fixture.local_share.idx, &codes_by_hash)
+            .expect("peer signing nonces");
+        let partial =
+            sign_create_partial(&fixture.group, &session, &peer_share, &signing_nonces, None)
+                .expect("create peer partial");
+        let response = BridgeEnvelope {
+            request_id: request_id.clone(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::SignResponse(PartialSigPackageWire::from(partial)),
+        };
+
+        let matched = fixture
+            .signer
+            .match_pending_response(&response, &peer)
+            .expect("first sign response");
+        assert!(matched.is_empty());
+
+        let err = fixture
+            .signer
+            .match_pending_response(&response, &peer)
+            .expect_err("duplicate sign response must fail");
+        assert!(
+            matches!(err, SignerError::InvalidRequest(message) if message == "duplicate sign response")
+        );
+
+        let error_response = BridgeEnvelope {
+            request_id,
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::Error(bifrost_codec::wire::PeerErrorWire {
+                code: "peer_rejected".to_string(),
+                message: "denied".to_string(),
+            }),
+        };
+        let err = fixture
+            .signer
+            .match_pending_response(&error_response, &peer)
+            .expect_err("peer error must fail");
+        assert!(
+            matches!(err, SignerError::InvalidRequest(message) if message == "peer rejected request: peer_rejected:denied")
+        );
+    }
+
+    #[test]
+    fn match_pending_response_rejects_duplicate_ecdh_response() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let target = decode_32(&fixture.signer.peers[1]).expect("valid target pubkey");
+
+        let outbound = fixture.signer.initiate_ecdh(target).expect("initiate ecdh");
+        assert_eq!(outbound.len(), 1);
+
+        let request_id = fixture
+            .signer
+            .latest_request_id()
+            .expect("latest request id");
+        let pending = fixture
+            .signer
+            .state
+            .pending_operations
+            .get_mut(&request_id)
+            .expect("pending ecdh");
+        pending.threshold = 2;
+        let peer = pending.target_peers[0].clone();
+
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+        let responses = peer_signer
+            .process_event(&outbound[0])
+            .expect("peer processes ecdh");
+        assert_eq!(responses.len(), 1);
+        let response = decode_envelope_for_local(&fixture.local_share, &peer, &responses[0]);
+
+        let matched = fixture
+            .signer
+            .match_pending_response(&response, &peer)
+            .expect("first ecdh response");
+        assert!(matched.is_empty());
+
+        let err = fixture
+            .signer
+            .match_pending_response(&response, &peer)
+            .expect_err("duplicate ecdh response must fail");
+        assert!(
+            matches!(err, SignerError::InvalidRequest(message) if message == "duplicate ecdh response")
+        );
     }
 
     #[test]
@@ -2135,5 +3023,318 @@ mod tests {
         )
         .expect("event wrong");
         assert!(!fixture.signer.has_exact_local_recipient_tag(&event_wrong));
+    }
+
+    #[test]
+    fn wipe_state_clears_runtime_state_and_marks_persistence() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), 123);
+        fixture.signer.state.pending_operations.insert(
+            "req-1".to_string(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: "req-1".to_string(),
+                started_at: 1,
+                timeout_at: 2,
+                target_peers: vec![peer],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::PingRequest,
+            },
+        );
+
+        fixture.signer.wipe_state();
+
+        assert!(fixture.signer.state.pending_operations.is_empty());
+        assert!(fixture.signer.state.peer_last_seen.is_empty());
+        assert_eq!(fixture.signer.state.request_seq, 1);
+        assert!(matches!(
+            fixture.signer.take_runtime_persistence_hint(),
+            PersistenceHint::Immediate
+        ));
+    }
+
+    #[test]
+    fn subscription_filters_include_sorted_authors_and_local_recipient_tag() {
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+
+        let filters = fixture
+            .signer
+            .subscription_filters()
+            .expect("subscription filters");
+        assert_eq!(filters.len(), 1);
+
+        let filter_json = serde_json::to_value(&filters[0]).expect("serialize filter");
+        let authors = filter_json["authors"].as_array().expect("authors");
+        let author_values = authors
+            .iter()
+            .map(|value| value.as_str().expect("author string").to_string())
+            .collect::<Vec<_>>();
+        let mut sorted = author_values.clone();
+        sorted.sort_unstable();
+        assert_eq!(author_values, sorted);
+
+        let recipient_tag = filter_json["#p"].as_array().expect("recipient tags");
+        assert_eq!(recipient_tag.len(), 1);
+        assert_eq!(
+            recipient_tag[0].as_str().expect("recipient string"),
+            fixture.signer.local_pubkey32()
+        );
+    }
+
+    #[test]
+    fn apply_uses_cached_signatures_and_ecdh_and_reports_failures() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let now = now_unix_secs();
+        let sign_message = [0xAA; 32];
+        let sign_key = hex::encode(sign_message);
+        fixture.signer.state.sig_cache.insert(
+            sign_key.clone(),
+            SigCacheEntry {
+                key_hex: sign_key.clone(),
+                signatures_hex: vec![hex::encode([0xBB; 64])],
+                stored_at: now,
+                last_accessed_at: now,
+            },
+        );
+        fixture.signer.state.sig_cache_order.push_back(sign_key);
+
+        let sign_effects = fixture
+            .signer
+            .apply(SignerInput::BeginSign {
+                message: sign_message,
+            })
+            .expect("cached sign apply");
+        assert!(sign_effects.outbound.is_empty());
+        assert_eq!(sign_effects.completions.len(), 1);
+        assert!(matches!(
+            &sign_effects.completions[0],
+            CompletedOperation::Sign { signatures, .. } if signatures.len() == 1
+        ));
+
+        let ecdh_target = [0xCC; 32];
+        let ecdh_key = hex::encode(ecdh_target);
+        fixture.signer.state.ecdh_cache.insert(
+            ecdh_key.clone(),
+            EcdhCacheEntry {
+                key_hex: ecdh_key.clone(),
+                shared_secret: [0xDD; 32],
+                stored_at: now,
+                last_accessed_at: now,
+            },
+        );
+        fixture.signer.state.ecdh_cache_order.push_back(ecdh_key);
+
+        let ecdh_effects = fixture
+            .signer
+            .apply(SignerInput::BeginEcdh {
+                pubkey: ecdh_target,
+            })
+            .expect("cached ecdh apply");
+        assert!(ecdh_effects.outbound.is_empty());
+        assert_eq!(ecdh_effects.completions.len(), 1);
+        assert!(matches!(
+            &ecdh_effects.completions[0],
+            CompletedOperation::Ecdh { shared_secret, .. } if *shared_secret == [0xDD; 32]
+        ));
+
+        let fail_request_id = "req-fail".to_string();
+        fixture.signer.state.pending_operations.insert(
+            fail_request_id.clone(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: fail_request_id.clone(),
+                started_at: now,
+                timeout_at: now + 30,
+                target_peers: vec![fixture.signer.peers[0].clone()],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::PingRequest,
+            },
+        );
+        let fail_effects = fixture
+            .signer
+            .apply(SignerInput::FailRequest {
+                request_id: fail_request_id.clone(),
+                code: OperationFailureCode::PeerRejected,
+                message: "rejected".to_string(),
+            })
+            .expect("fail request apply");
+        assert!(fail_effects.outbound.is_empty());
+        assert_eq!(fail_effects.failures.len(), 1);
+        assert_eq!(fail_effects.failures[0].request_id, fail_request_id);
+        assert_eq!(fail_effects.persistence_hint, PersistenceHint::Batch);
+
+        let expire_request_id = "req-expire".to_string();
+        fixture.signer.state.pending_operations.insert(
+            expire_request_id.clone(),
+            PendingOperation {
+                op_type: PendingOpType::Onboard,
+                request_id: expire_request_id.clone(),
+                started_at: now - 10,
+                timeout_at: now - 1,
+                target_peers: vec![fixture.signer.peers[0].clone()],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::OnboardRequest,
+            },
+        );
+        let expire_effects = fixture
+            .signer
+            .apply(SignerInput::Expire { now })
+            .expect("expire apply");
+        assert_eq!(expire_effects.failures.len(), 1);
+        assert_eq!(expire_effects.failures[0].request_id, expire_request_id);
+        assert_eq!(expire_effects.persistence_hint, PersistenceHint::Batch);
+    }
+
+    #[test]
+    fn record_request_validates_sent_at_time_replay_and_cache_limit() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+        let now = now_unix_secs();
+        fixture.signer.config.request_cache_limit = 2;
+        fixture.signer.config.request_ttl_secs = 60;
+        fixture.signer.config.max_future_skew_secs = 5;
+
+        let err = fixture
+            .signer
+            .record_request(&sender, "", now, now)
+            .expect_err("empty request id must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+
+        let future = "future-request".to_string();
+        let err = fixture
+            .signer
+            .record_request(&sender, &future, now + 10, now)
+            .expect_err("future request must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+
+        let stale = "stale-request".to_string();
+        let err = fixture
+            .signer
+            .record_request(&sender, &stale, now - 100, now)
+            .expect_err("stale request must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
+
+        let req1 = "req-1".to_string();
+        let req2 = "req-2".to_string();
+        let req3 = "req-3".to_string();
+        fixture
+            .signer
+            .record_request(&sender, &req1, now, now)
+            .expect("record req1");
+        let err = fixture
+            .signer
+            .record_request(&sender, &req1, now, now)
+            .expect_err("duplicate request must fail");
+        assert!(matches!(err, SignerError::ReplayDetected(_)));
+
+        fixture
+            .signer
+            .record_request(&sender, &req2, now + 1, now + 1)
+            .expect("record req2");
+        fixture
+            .signer
+            .record_request(&sender, &req3, now + 2, now + 2)
+            .expect("record req3");
+        assert_eq!(fixture.signer.state.replay_cache.len(), 2);
+        assert!(
+            !fixture
+                .signer
+                .state
+                .replay_cache
+                .contains_key(&format!("{sender}:{req1}"))
+        );
+    }
+
+    #[test]
+    fn caches_evict_lru_entries_when_capacity_is_exceeded() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        fixture.signer.config.ecdh_cache_capacity = 1;
+        fixture.signer.config.sig_cache_capacity = 1;
+        let now = now_unix_secs();
+
+        fixture.signer.ecdh_cache_put([1u8; 32], [2u8; 32], now);
+        fixture.signer.ecdh_cache_put([3u8; 32], [4u8; 32], now + 1);
+        assert_eq!(fixture.signer.state.ecdh_cache.len(), 1);
+        assert!(
+            fixture
+                .signer
+                .state
+                .ecdh_cache
+                .contains_key(&hex::encode([3u8; 32]))
+        );
+
+        fixture
+            .signer
+            .sig_cache_put([5u8; 32], vec![[6u8; 64]], now);
+        fixture
+            .signer
+            .sig_cache_put([7u8; 32], vec![[8u8; 64]], now + 1);
+        assert_eq!(fixture.signer.state.sig_cache.len(), 1);
+        assert!(
+            fixture
+                .signer
+                .state
+                .sig_cache
+                .contains_key(&hex::encode([7u8; 32]))
+        );
+    }
+
+    #[test]
+    fn process_event_ignores_wrong_kind_wrong_recipient_and_self_authored_events() {
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let local = fixture.signer.local_pubkey32().to_string();
+
+        let wrong_kind = build_signed_event(
+            peer_share.seckey,
+            fixture.signer.config.event_kind + 1,
+            vec![vec!["p".to_string(), local.clone()]],
+            "payload".to_string(),
+        )
+        .expect("wrong kind event");
+        let mut signer = fixture.signer;
+        assert!(
+            signer
+                .process_event(&wrong_kind)
+                .expect("wrong kind")
+                .is_empty()
+        );
+
+        let wrong_recipient = build_signed_event(
+            peer_share.seckey,
+            signer.config.event_kind,
+            vec![vec!["p".to_string(), peer.clone()]],
+            "payload".to_string(),
+        )
+        .expect("wrong recipient event");
+        assert!(
+            signer
+                .process_event(&wrong_recipient)
+                .expect("wrong recipient")
+                .is_empty()
+        );
+
+        let self_authored = build_signed_event(
+            signer.share.seckey,
+            signer.config.event_kind,
+            vec![vec!["p".to_string(), local]],
+            "payload".to_string(),
+        )
+        .expect("self event");
+        assert!(
+            signer
+                .process_event(&self_authored)
+                .expect("self event")
+                .is_empty()
+        );
     }
 }

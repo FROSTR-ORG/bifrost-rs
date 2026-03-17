@@ -1,0 +1,26 @@
+[package]
+name = "bifrost-devtools"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+authors = ["Christopher Scott"]
+
+[[bin]]
+name = "bifrost-devtools"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+bifrost-codec = { path = "../bifrost-codec" }
+clap = { version = "4", features = ["derive"] }
+futures-util = { workspace = true }
+frostr-utils = { path = "../frostr-utils" }
+hex = { workspace = true }
+k256 = { workspace = true, features = ["schnorr"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

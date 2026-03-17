@@ -42,27 +42,3 @@ pub struct RecoverKeyInput {
 pub struct RecoveredKeyMaterial {
     pub signing_key32: Bytes32,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InviteToken {
-    pub version: u8,
-    pub callback_peer_pk: Bytes32,
-    pub relays: Vec<String>,
-    pub challenge: Bytes32,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub label: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OnboardingPackage {
-    pub share: SharePackage,
-    pub peer_pk: Bytes32,
-    pub relays: Vec<String>,
-    #[serde(default)]
-    pub challenge: Option<Bytes32>,
-    #[serde(default)]
-    pub created_at: Option<u64>,
-    #[serde(default)]
-    pub expires_at: Option<u64>,
-}

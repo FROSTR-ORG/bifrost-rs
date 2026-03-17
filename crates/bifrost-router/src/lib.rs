@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use bifrost_core::types::PeerPolicy;
+use bifrost_core::types::PeerPolicyOverride;
 use bifrost_signer::{
-    CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode,
-    PendingOpType, PersistenceHint, SignerEffects, SignerInput, SigningDevice,
+    CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, DeviceStatus,
+    OperationFailure, OperationFailureCode, PeerPermissionState, PeerStatus, PendingOpType,
+    PersistenceHint, RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary, SignerEffects,
+    SignerInput, SigningDevice,
 };
 use nostr::{Event, Filter};
 use serde::{Deserialize, Serialize};
@@ -72,12 +74,17 @@ impl Default for BridgeConfig {
 
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
-    Sign { message: [u8; 32] },
-    Ecdh { pubkey: [u8; 32] },
-    Ping { peer: String },
+    Sign {
+        message: [u8; 32],
+    },
+    Ecdh {
+        pubkey: [u8; 32],
+    },
+    Ping {
+        peer: String,
+    },
     Onboard {
         peer: String,
-        challenge: Option<[u8; 32]>,
     },
 }
 
@@ -123,13 +130,7 @@ pub trait RouterPort {
         message: String,
     ) -> std::result::Result<(), Self::Error>;
     fn status(&self) -> DeviceStatus;
-    fn policies(&self) -> HashMap<String, PeerPolicy>;
     fn snapshot_state(&self) -> DeviceState;
-    fn set_policy(
-        &mut self,
-        peer: String,
-        policy: PeerPolicy,
-    ) -> std::result::Result<(), Self::Error>;
     fn take_persistence_hint(&mut self) -> PersistenceHint;
     fn subscription_filters(&self) -> Result<Vec<Filter>>;
     fn request_phase(&self, request_id: &str) -> Option<RequestPhase>;
@@ -195,7 +196,7 @@ impl BridgeCore {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
-            BridgeCommand::Onboard { peer, challenge } => SignerInput::BeginOnboard { peer, challenge },
+            BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
         };
 
         match self.signer.apply(input) {
@@ -292,21 +293,71 @@ impl BridgeCore {
         self.signer.status()
     }
 
-    pub fn policies(&self) -> HashMap<String, PeerPolicy> {
-        self.signer.policies().clone()
+    pub fn read_config(&self) -> DeviceConfig {
+        self.signer.read_config()
+    }
+
+    pub fn runtime_metadata(&self) -> RuntimeMetadata {
+        self.signer.runtime_metadata()
+    }
+
+    pub fn peer_status(&self) -> Vec<PeerStatus> {
+        self.signer.peer_status()
+    }
+
+    pub fn readiness(&self) -> RuntimeReadiness {
+        self.signer.readiness()
+    }
+
+    pub fn runtime_status(&self) -> RuntimeStatusSummary {
+        self.signer.runtime_status()
+    }
+
+    pub fn wipe_state(&mut self) {
+        self.signer.wipe_state();
+        self.command_queue.clear();
+        self.inbound_queue.clear();
+        self.outbound_queue.clear();
+        self.seen_inbound_ids.clear();
+        self.seen_inbound_order.clear();
+        self.completions.clear();
+        self.failures.clear();
+        self.request_phases.clear();
+        self.last_expire_at_ms = 0;
+        self.persistence_hint = PersistenceHint::Immediate;
+    }
+
+    pub fn peer_permission_states(&self) -> Vec<PeerPermissionState> {
+        self.signer.peer_permission_states()
     }
 
     pub fn snapshot_state(&self) -> DeviceState {
         self.signer.state().clone()
     }
 
-    pub fn set_policy(
+    pub fn set_policy_override(
         &mut self,
         peer: String,
-        policy: PeerPolicy,
+        policy: PeerPolicyOverride,
     ) -> std::result::Result<(), BridgeCoreError> {
         self.signer
-            .set_peer_policy(&peer, policy)
+            .set_peer_policy_override(&peer, policy)
+            .map_err(|e| BridgeCoreError::Internal(e.to_string()))?;
+        self.persistence_hint = self.persistence_hint.merge(PersistenceHint::Immediate);
+        Ok(())
+    }
+
+    pub fn clear_policy_overrides(&mut self) {
+        self.signer.clear_peer_policy_overrides();
+        self.persistence_hint = self.persistence_hint.merge(PersistenceHint::Immediate);
+    }
+
+    pub fn update_config(
+        &mut self,
+        patch: DeviceConfigPatch,
+    ) -> std::result::Result<(), BridgeCoreError> {
+        self.signer
+            .update_config(patch)
             .map_err(|e| BridgeCoreError::Internal(e.to_string()))?;
         self.persistence_hint = self.persistence_hint.merge(PersistenceHint::Immediate);
         Ok(())
@@ -393,7 +444,7 @@ impl BridgeCore {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
-            BridgeCommand::Onboard { peer, challenge } => SignerInput::BeginOnboard { peer, challenge },
+            BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
         };
 
         match self.signer.apply(input) {
@@ -539,20 +590,8 @@ impl RouterPort for BridgeCore {
         BridgeCore::status(self)
     }
 
-    fn policies(&self) -> HashMap<String, PeerPolicy> {
-        BridgeCore::policies(self)
-    }
-
     fn snapshot_state(&self) -> DeviceState {
         BridgeCore::snapshot_state(self)
-    }
-
-    fn set_policy(
-        &mut self,
-        peer: String,
-        policy: PeerPolicy,
-    ) -> std::result::Result<(), Self::Error> {
-        BridgeCore::set_policy(self, peer, policy)
     }
 
     fn take_persistence_hint(&mut self) -> PersistenceHint {
@@ -611,6 +650,55 @@ fn pending_type_for_command(command: &BridgeCommand) -> PendingOpType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bifrost_core::types::{GroupPackage, SharePackage};
+    use bifrost_signer::{DeviceConfig, DeviceState, SigningDevice};
+    use frostr_utils::{CreateKeysetConfig, create_keyset};
+    use nostr::{Alphabet, Event, SingleLetterTag, TagKind};
+
+    fn encode_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
+        let peers = group
+            .members
+            .iter()
+            .filter(|member| member.idx != share.idx)
+            .map(|member| encode_hex(&member.pubkey[1..]))
+            .collect::<Vec<_>>();
+        SigningDevice::new(
+            group.clone(),
+            share.clone(),
+            peers,
+            DeviceState::new(share.idx, share.seckey),
+            DeviceConfig::default(),
+        )
+        .expect("build signer")
+    }
+
+    fn ping_event_peer(event: &Event) -> String {
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        event
+            .tags
+            .iter()
+            .find_map(|tag| match tag.kind() {
+                TagKind::SingleLetter(letter) if letter == p_tag => {
+                    tag.content().map(str::to_string)
+                }
+                _ => None,
+            })
+            .expect("peer p-tag")
+    }
+
+    fn ping_request_event(group: &GroupPackage, share: &SharePackage, local_pubkey: &str) -> Event {
+        let mut signer = build_signer(group, share);
+        signer
+            .initiate_ping(local_pubkey)
+            .expect("remote ping request")
+            .into_iter()
+            .next()
+            .expect("one ping event")
+    }
 
     #[test]
     fn validate_config_rejects_zero_capacities() {
@@ -658,9 +746,307 @@ mod tests {
         assert!(matches!(
             pending_type_for_command(&BridgeCommand::Onboard {
                 peer: "peer-b".to_string(),
-                challenge: None,
             }),
             PendingOpType::Onboard
         ));
+    }
+
+    #[test]
+    fn enqueue_command_returns_queue_full_when_capacity_is_exhausted() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let mut core = BridgeCore::new(
+            build_signer(&bundle.group, &share),
+            BridgeConfig {
+                command_queue_capacity: 1,
+                command_overflow_policy: QueueOverflowPolicy::Fail,
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        core.enqueue_command(BridgeCommand::Ping {
+            peer: encode_hex(&bundle.group.members[1].pubkey[1..]),
+        })
+        .expect("first enqueue");
+        let err = core
+            .enqueue_command(BridgeCommand::Ping {
+                peer: encode_hex(&bundle.group.members[2].pubkey[1..]),
+            })
+            .expect_err("second enqueue should fail");
+        assert!(matches!(err, BridgeCoreError::QueueFull { queue } if queue == "command"));
+    }
+
+    #[test]
+    fn enqueue_command_drop_oldest_keeps_newest_command() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let peer_a = encode_hex(&bundle.group.members[1].pubkey[1..]);
+        let peer_b = encode_hex(&bundle.group.members[2].pubkey[1..]);
+        let mut core = BridgeCore::new(
+            build_signer(&bundle.group, &share),
+            BridgeConfig {
+                command_queue_capacity: 1,
+                command_overflow_policy: QueueOverflowPolicy::DropOldest,
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        core.enqueue_command(BridgeCommand::Ping { peer: peer_a })
+            .expect("first enqueue");
+        core.enqueue_command(BridgeCommand::Ping {
+            peer: peer_b.clone(),
+        })
+        .expect("drop oldest enqueue");
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert_eq!(outbound.len(), 1);
+        assert_eq!(ping_event_peer(&outbound[0].event), peer_b);
+        assert_eq!(core.request_phases().len(), 1);
+    }
+
+    #[test]
+    fn wipe_state_resets_request_phases_and_persistence_hint() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
+        let mut core =
+            BridgeCore::new(build_signer(&bundle.group, &share), BridgeConfig::default())
+                .expect("bridge core");
+
+        core.submit_command(BridgeCommand::Ping { peer })
+            .expect("submit ping");
+        assert!(!core.request_phases().is_empty());
+
+        core.wipe_state();
+
+        assert!(core.request_phases().is_empty());
+        assert!(matches!(
+            core.take_persistence_hint(),
+            PersistenceHint::Immediate
+        ));
+        assert!(matches!(
+            core.take_persistence_hint(),
+            PersistenceHint::None
+        ));
+    }
+
+    #[test]
+    fn inbound_queue_fail_policy_rejects_newest_event() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let local_pubkey = encode_hex(
+            &bundle
+                .group
+                .members
+                .iter()
+                .find(|member| member.idx == share.idx)
+                .expect("local member")
+                .pubkey[1..],
+        );
+        let peer_a = bundle.shares[1].clone();
+        let peer_b = bundle.shares[2].clone();
+        let event_a = ping_request_event(&bundle.group, &peer_a, &local_pubkey);
+        let event_b = ping_request_event(&bundle.group, &peer_b, &local_pubkey);
+
+        let mut core = BridgeCore::new(
+            build_signer(&bundle.group, &share),
+            BridgeConfig {
+                inbound_queue_capacity: 1,
+                inbound_overflow_policy: QueueOverflowPolicy::Fail,
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        assert!(!core.enqueue_inbound_event(event_a));
+        assert!(core.enqueue_inbound_event(event_b));
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert_eq!(outbound.len(), 1);
+        assert_eq!(
+            ping_event_peer(&outbound[0].event),
+            encode_hex(&bundle.group.members[1].pubkey[1..])
+        );
+    }
+
+    #[test]
+    fn inbound_queue_drop_oldest_keeps_newest_event() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let local_pubkey = encode_hex(
+            &bundle
+                .group
+                .members
+                .iter()
+                .find(|member| member.idx == share.idx)
+                .expect("local member")
+                .pubkey[1..],
+        );
+        let peer_a = bundle.shares[1].clone();
+        let peer_b = bundle.shares[2].clone();
+        let event_a = ping_request_event(&bundle.group, &peer_a, &local_pubkey);
+        let event_b = ping_request_event(&bundle.group, &peer_b, &local_pubkey);
+
+        let mut core = BridgeCore::new(
+            build_signer(&bundle.group, &share),
+            BridgeConfig {
+                inbound_queue_capacity: 1,
+                inbound_overflow_policy: QueueOverflowPolicy::DropOldest,
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        assert!(!core.enqueue_inbound_event(event_a));
+        assert!(!core.enqueue_inbound_event(event_b));
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert_eq!(outbound.len(), 1);
+        assert_eq!(
+            ping_event_peer(&outbound[0].event),
+            encode_hex(&bundle.group.members[2].pubkey[1..])
+        );
+    }
+
+    #[test]
+    fn dedupe_cache_eviction_allows_reprocessing_oldest_event() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let local_pubkey = encode_hex(
+            &bundle
+                .group
+                .members
+                .iter()
+                .find(|member| member.idx == share.idx)
+                .expect("local member")
+                .pubkey[1..],
+        );
+        let peer_a = bundle.shares[1].clone();
+        let peer_b = bundle.shares[2].clone();
+        let event_a = ping_request_event(&bundle.group, &peer_a, &local_pubkey);
+        let event_b = ping_request_event(&bundle.group, &peer_b, &local_pubkey);
+
+        let mut core = BridgeCore::new(
+            build_signer(&bundle.group, &share),
+            BridgeConfig {
+                inbound_dedupe_cache_limit: 1,
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        assert!(!core.enqueue_inbound_event(event_a.clone()));
+        assert!(!core.enqueue_inbound_event(event_b));
+        assert!(!core.enqueue_inbound_event(event_a));
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert_eq!(outbound.len(), 2);
+    }
+
+    #[test]
+    fn fail_request_marks_phase_failed_and_emits_failure() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
+        let mut core =
+            BridgeCore::new(build_signer(&bundle.group, &share), BridgeConfig::default())
+                .expect("bridge core");
+
+        let request_id = core
+            .submit_command(BridgeCommand::Ping { peer })
+            .expect("submit ping");
+        assert_eq!(
+            core.request_phase(&request_id),
+            Some(RequestPhase::AwaitingResponses)
+        );
+
+        core.fail_request(request_id.clone(), "synthetic failure".to_string())
+            .expect("fail request");
+
+        assert_eq!(core.request_phase(&request_id), Some(RequestPhase::Failed));
+        let failures = core.drain_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].request_id, request_id);
+    }
+
+    #[test]
+    fn expire_marks_timed_out_request_failed() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
+        let mut core = BridgeCore::new(
+            SigningDevice::new(
+                bundle.group.clone(),
+                share.clone(),
+                vec![
+                    peer.clone(),
+                    encode_hex(&bundle.group.members[2].pubkey[1..]),
+                ],
+                DeviceState::new(share.idx, share.seckey),
+                DeviceConfig {
+                    ping_timeout_secs: 1,
+                    ..DeviceConfig::default()
+                },
+            )
+            .expect("signer"),
+            BridgeConfig {
+                expire_tick: std::time::Duration::from_millis(1),
+                ..BridgeConfig::default()
+            },
+        )
+        .expect("bridge core");
+
+        let request_id = core
+            .submit_command(BridgeCommand::Ping { peer })
+            .expect("submit ping");
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        core.tick(now_secs * 1_000);
+        core.tick((now_secs + 2) * 1_000);
+
+        assert_eq!(core.request_phase(&request_id), Some(RequestPhase::Failed));
+        let failures = core.drain_failures();
+        assert_eq!(failures.len(), 1);
+        assert!(matches!(failures[0].code, OperationFailureCode::Timeout));
     }
 }

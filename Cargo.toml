@@ -8,7 +8,7 @@ members = [
   "crates/bifrost-bridge-tokio",
   "crates/bifrost-bridge-wasm",
   "crates/bifrost-app",
-  "crates/bifrost-dev",
+  "crates/bifrost-devtools",
 ]
 resolver = "2"
 

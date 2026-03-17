@@ -87,3 +87,66 @@ fn legacy_marker_is_treated_as_dirty() {
     let _ = fs::remove_file(&state_path);
     let _ = fs::remove_file(&marker_path);
 }
+
+#[test]
+fn marker_with_unsupported_version_is_dirty() {
+    let state_path = temp_state_path("marker-unsupported-version");
+    let marker_path = state_path.with_extension("run.json");
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(&marker_path);
+
+    fs::write(
+        &marker_path,
+        r#"{"version":99,"run_id":"legacy","phase":"clean","state_hash":"abc","started_at":1,"updated_at":1,"completed_at":1}"#,
+    )
+    .expect("write marker");
+
+    assert_eq!(
+        dirty_restart_reason(&state_path),
+        Some(DirtyRestartReason::UnsupportedMarkerVersion)
+    );
+
+    let _ = fs::remove_file(&marker_path);
+}
+
+#[test]
+fn marker_missing_state_hash_is_dirty() {
+    let state_path = temp_state_path("marker-missing-hash");
+    let marker_path = state_path.with_extension("run.json");
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(&marker_path);
+
+    fs::write(
+        &marker_path,
+        r#"{"version":2,"run_id":"no-hash","phase":"clean","state_hash":null,"started_at":1,"updated_at":1,"completed_at":1}"#,
+    )
+    .expect("write marker");
+
+    assert_eq!(
+        dirty_restart_reason(&state_path),
+        Some(DirtyRestartReason::MissingStateHash)
+    );
+
+    let _ = fs::remove_file(&marker_path);
+}
+
+#[test]
+fn clean_marker_without_state_file_is_dirty() {
+    let state_path = temp_state_path("marker-missing-state");
+    let marker_path = state_path.with_extension("run.json");
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(&marker_path);
+
+    fs::write(
+        &marker_path,
+        r#"{"version":2,"run_id":"missing-state","phase":"clean","state_hash":"deadbeef","started_at":1,"updated_at":1,"completed_at":1}"#,
+    )
+    .expect("write marker");
+
+    assert_eq!(
+        dirty_restart_reason(&state_path),
+        Some(DirtyRestartReason::StateHashUnavailable)
+    );
+
+    let _ = fs::remove_file(&marker_path);
+}

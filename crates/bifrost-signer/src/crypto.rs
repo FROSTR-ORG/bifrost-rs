@@ -233,7 +233,9 @@ fn ct_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::decrypt_content_from_peer;
+    use super::{decrypt_content_from_peer, encrypt_content_for_peer_with_nonce};
+    use base64::Engine;
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
 
     #[test]
     fn decrypts_js_generated_nip44_payload() {
@@ -249,5 +251,106 @@ mod tests {
         assert!(plaintext.contains("\"request_id\":\"vec-1\""));
         assert!(plaintext.contains("\"type\":\"OnboardRequest\""));
         assert!(plaintext.contains("\"idx\":2"));
+    }
+
+    #[test]
+    fn encrypt_round_trip_with_fixed_nonce_is_stable_and_decryptable() {
+        let alice_seckey =
+            hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
+                .expect("alice seckey");
+        let bob_seckey =
+            hex::decode("9f4f7b8b4f3d5d8f553a0c4ff5f3f379c2f4ab78ac96f8f1db2098ea8b0f0d72")
+                .expect("bob seckey");
+        let mut alice = [0u8; 32];
+        let mut bob = [0u8; 32];
+        alice.copy_from_slice(&alice_seckey);
+        bob.copy_from_slice(&bob_seckey);
+        let bob_xonly = hex::encode(
+            k256::SecretKey::from_slice(&bob)
+                .expect("bob secret key")
+                .public_key()
+                .to_encoded_point(true)
+                .as_bytes()[1..]
+                .to_vec(),
+        );
+        let alice_xonly = hex::encode(
+            k256::SecretKey::from_slice(&alice)
+                .expect("alice secret key")
+                .public_key()
+                .to_encoded_point(true)
+                .as_bytes()[1..]
+                .to_vec(),
+        );
+
+        let payload = encrypt_content_for_peer_with_nonce(
+            alice,
+            &bob_xonly,
+            r#"{"hello":"world"}"#,
+            [7u8; 32],
+        )
+        .expect("encrypt");
+        let plaintext =
+            decrypt_content_from_peer(bob, &alice_xonly, &payload).expect("decrypt roundtrip");
+        assert_eq!(plaintext, r#"{"hello":"world"}"#);
+    }
+
+    #[test]
+    fn decrypt_rejects_tampered_mac_and_invalid_peer_key_material() {
+        let alice_seckey =
+            hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
+                .expect("alice seckey");
+        let bob_seckey =
+            hex::decode("9f4f7b8b4f3d5d8f553a0c4ff5f3f379c2f4ab78ac96f8f1db2098ea8b0f0d72")
+                .expect("bob seckey");
+        let mut alice = [0u8; 32];
+        let mut bob = [0u8; 32];
+        alice.copy_from_slice(&alice_seckey);
+        bob.copy_from_slice(&bob_seckey);
+        let bob_xonly = hex::encode(
+            k256::SecretKey::from_slice(&bob)
+                .expect("bob secret key")
+                .public_key()
+                .to_encoded_point(true)
+                .as_bytes()[1..]
+                .to_vec(),
+        );
+        let alice_xonly = hex::encode(
+            k256::SecretKey::from_slice(&alice)
+                .expect("alice secret key")
+                .public_key()
+                .to_encoded_point(true)
+                .as_bytes()[1..]
+                .to_vec(),
+        );
+
+        let payload =
+            encrypt_content_for_peer_with_nonce(alice, &bob_xonly, "tamper-check", [3u8; 32])
+                .expect("encrypt");
+        let mut bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(payload.as_bytes())
+            .expect("decode payload");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        let tampered = base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes);
+
+        let err = decrypt_content_from_peer(bob, &alice_xonly, &tampered)
+            .expect_err("tampered payload must fail");
+        assert!(matches!(err, crate::SignerError::DecryptFailed(_)));
+
+        let err =
+            decrypt_content_from_peer(bob, "zz", &payload).expect_err("invalid peer hex must fail");
+        assert!(matches!(err, crate::SignerError::DecryptFailed(_)));
+    }
+
+    #[test]
+    fn decrypt_rejects_invalid_version_and_short_payload() {
+        let err = decrypt_content_from_peer([1u8; 32], "11", "#legacy")
+            .expect_err("legacy marker must fail");
+        assert!(matches!(err, crate::SignerError::DecryptFailed(_)));
+
+        let short = base64::engine::general_purpose::STANDARD_NO_PAD.encode([2u8; 10]);
+        let err = decrypt_content_from_peer([1u8; 32], &"11".repeat(32), &short)
+            .expect_err("short payload must fail");
+        assert!(matches!(err, crate::SignerError::DecryptFailed(_)));
     }
 }

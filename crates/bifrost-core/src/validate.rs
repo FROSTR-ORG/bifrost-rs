@@ -52,4 +52,19 @@ mod tests {
         assert!(decode_hex32(&hex32).is_ok());
         assert!(decode_sig64(&hex32).is_err());
     }
+
+    #[test]
+    fn decode_hex32_pubkey_and_signature_validators_cover_reject_paths() {
+        let hex32 = hex::encode([2u8; 32]);
+        let hex64 = hex::encode([3u8; 64]);
+
+        assert!(decode_hex32_pubkey(&hex32).is_ok());
+        assert!(decode_hex32_pubkey("abcd").is_err());
+        assert!(validate_pubkey32(&[1u8; 31]).is_err());
+        assert!(validate_signature64(&[1u8; 63]).is_err());
+        assert_eq!(
+            encode_hex(&decode_sig64(&hex64).expect("decode sig")),
+            hex64
+        );
+    }
 }

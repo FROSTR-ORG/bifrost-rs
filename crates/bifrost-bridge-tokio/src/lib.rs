@@ -4,14 +4,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use bifrost_core::types::PeerPolicy;
+use bifrost_core::types::{DerivedPublicNonce, GroupPackage, PeerPolicyOverride};
 use bifrost_router::{
     BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore, RequestPhase,
     RouterPort,
 };
 use bifrost_signer::{
-    CompletedOperation, DeviceState, DeviceStatus, OperationFailure, OperationFailureCode,
-    PersistenceHint, SigningDevice,
+    CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, DeviceStatus,
+    OperationFailure, OperationFailureCode, PeerStatus, PersistenceHint, RuntimeMetadata,
+    RuntimeReadiness, RuntimeStatusSummary, SigningDevice, PeerPermissionState,
 };
 use nostr::{Event, Filter};
 use nostr_sdk::{Client, RelayPoolNotification};
@@ -81,6 +82,8 @@ pub struct PingResult {
 pub struct OnboardResult {
     pub request_id: String,
     pub group_member_count: usize,
+    pub group: GroupPackage,
+    pub nonces: Vec<DerivedPublicNonce>,
 }
 
 enum BridgeCommand {
@@ -102,7 +105,6 @@ enum BridgeCommand {
     Onboard {
         op_id: String,
         peer: String,
-        challenge: Option<[u8; 32]>,
         completion: oneshot::Sender<std::result::Result<CompletedOperation, BridgeError>>,
     },
     SnapshotState {
@@ -111,12 +113,37 @@ enum BridgeCommand {
     Status {
         reply: oneshot::Sender<std::result::Result<DeviceStatus, BridgeError>>,
     },
-    Policies {
-        reply: oneshot::Sender<std::result::Result<HashMap<String, PeerPolicy>, BridgeError>>,
+    PeerPermissionStates {
+        reply: oneshot::Sender<std::result::Result<Vec<PeerPermissionState>, BridgeError>>,
     },
-    SetPolicy {
+    ReadConfig {
+        reply: oneshot::Sender<std::result::Result<DeviceConfig, BridgeError>>,
+    },
+    UpdateConfig {
+        patch: DeviceConfigPatch,
+        reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
+    },
+    PeerStatus {
+        reply: oneshot::Sender<std::result::Result<Vec<PeerStatus>, BridgeError>>,
+    },
+    Readiness {
+        reply: oneshot::Sender<std::result::Result<RuntimeReadiness, BridgeError>>,
+    },
+    RuntimeStatus {
+        reply: oneshot::Sender<std::result::Result<RuntimeStatusSummary, BridgeError>>,
+    },
+    RuntimeMetadata {
+        reply: oneshot::Sender<std::result::Result<RuntimeMetadata, BridgeError>>,
+    },
+    SetPolicyOverride {
         peer: String,
-        policy: PeerPolicy,
+        policy: PeerPolicyOverride,
+        reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
+    },
+    ClearPolicyOverrides {
+        reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
+    },
+    WipeState {
         reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
     },
     TakePersistenceHint {
@@ -246,13 +273,13 @@ impl Bridge {
                                     RouterCommand::Ping { peer },
                                 );
                             }
-                            BridgeCommand::Onboard { op_id, peer, challenge, completion } => {
+                            BridgeCommand::Onboard { op_id, peer, completion } => {
                                 handle_operation_command(
                                     &mut core,
                                     &mut waiters,
                                     op_id,
                                     completion,
-                                    RouterCommand::Onboard { peer, challenge },
+                                    RouterCommand::Onboard { peer },
                                 );
                             }
                             BridgeCommand::SnapshotState { reply } => {
@@ -261,14 +288,43 @@ impl Bridge {
                             BridgeCommand::Status { reply } => {
                                 let _ = reply.send(Ok(core.status()));
                             }
-                            BridgeCommand::Policies { reply } => {
-                                let _ = reply.send(Ok(core.policies()));
+                            BridgeCommand::PeerPermissionStates { reply } => {
+                                let _ = reply.send(Ok(core.peer_permission_states()));
                             }
-                            BridgeCommand::SetPolicy { peer, policy, reply } => {
+                            BridgeCommand::ReadConfig { reply } => {
+                                let _ = reply.send(Ok(core.read_config()));
+                            }
+                            BridgeCommand::UpdateConfig { patch, reply } => {
                                 let result = core
-                                    .set_policy(peer, policy)
+                                    .update_config(patch)
                                     .map_err(|e| BridgeError::Internal(e.to_string()));
                                 let _ = reply.send(result);
+                            }
+                            BridgeCommand::PeerStatus { reply } => {
+                                let _ = reply.send(Ok(core.peer_status()));
+                            }
+                            BridgeCommand::Readiness { reply } => {
+                                let _ = reply.send(Ok(core.readiness()));
+                            }
+                            BridgeCommand::RuntimeStatus { reply } => {
+                                let _ = reply.send(Ok(core.runtime_status()));
+                            }
+                            BridgeCommand::RuntimeMetadata { reply } => {
+                                let _ = reply.send(Ok(core.runtime_metadata()));
+                            }
+                            BridgeCommand::SetPolicyOverride { peer, policy, reply } => {
+                                let result = core
+                                    .set_policy_override(peer, policy)
+                                    .map_err(|e| BridgeError::Internal(e.to_string()));
+                                let _ = reply.send(result);
+                            }
+                            BridgeCommand::ClearPolicyOverrides { reply } => {
+                                core.clear_policy_overrides();
+                                let _ = reply.send(Ok(()));
+                            }
+                            BridgeCommand::WipeState { reply } => {
+                                core.wipe_state();
+                                let _ = reply.send(Ok(()));
                             }
                             BridgeCommand::TakePersistenceHint { reply } => {
                                 let _ = reply.send(Ok(core.take_persistence_hint()));
@@ -399,7 +455,6 @@ impl Bridge {
     pub async fn onboard(
         &self,
         peer: String,
-        challenge: Option<[u8; 32]>,
         timeout: Duration,
     ) -> std::result::Result<OnboardResult, BridgeError> {
         let (tx, rx) = oneshot::channel();
@@ -407,7 +462,6 @@ impl Bridge {
             .send(BridgeCommand::Onboard {
                 op_id: self.next_op_id(),
                 peer,
-                challenge,
                 completion: tx,
             })
             .await
@@ -417,9 +471,13 @@ impl Bridge {
             CompletedOperation::Onboard {
                 request_id,
                 group_member_count,
+                group,
+                nonces,
             } => Ok(OnboardResult {
                 request_id,
                 group_member_count,
+                group,
+                nonces,
             }),
             _ => Err(BridgeError::UnexpectedCompletion),
         }
@@ -443,27 +501,104 @@ impl Bridge {
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
     }
 
-    pub async fn policies(&self) -> std::result::Result<HashMap<String, PeerPolicy>, BridgeError> {
+    pub async fn peer_permission_states(
+        &self,
+    ) -> std::result::Result<Vec<PeerPermissionState>, BridgeError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(BridgeCommand::Policies { reply: tx })
+            .send(BridgeCommand::PeerPermissionStates { reply: tx })
             .await
             .map_err(|_| BridgeError::CommandChannelClosed)?;
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
     }
 
-    pub async fn set_policy(
+    pub async fn read_config(&self) -> std::result::Result<DeviceConfig, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::ReadConfig { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn update_config(
         &self,
-        peer: String,
-        policy: PeerPolicy,
+        patch: DeviceConfigPatch,
     ) -> std::result::Result<(), BridgeError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(BridgeCommand::SetPolicy {
+            .send(BridgeCommand::UpdateConfig { patch, reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn peer_status(&self) -> std::result::Result<Vec<PeerStatus>, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::PeerStatus { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn readiness(&self) -> std::result::Result<RuntimeReadiness, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::Readiness { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn runtime_status(&self) -> std::result::Result<RuntimeStatusSummary, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::RuntimeStatus { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn runtime_metadata(&self) -> std::result::Result<RuntimeMetadata, BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::RuntimeMetadata { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn set_policy_override(
+        &self,
+        peer: String,
+        policy: PeerPolicyOverride,
+    ) -> std::result::Result<(), BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::SetPolicyOverride {
                 peer,
                 policy,
                 reply: tx,
             })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn clear_policy_overrides(&self) -> std::result::Result<(), BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::ClearPolicyOverrides { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn wipe_state(&self) -> std::result::Result<(), BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::WipeState { reply: tx })
             .await
             .map_err(|_| BridgeError::CommandChannelClosed)?;
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?

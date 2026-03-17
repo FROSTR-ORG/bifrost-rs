@@ -96,6 +96,7 @@ jobs:
           mkdir -p artifacts
           cargo llvm-cov --workspace --lcov --output-path artifacts/lcov.info --summary-only
           cargo llvm-cov report --summary-only | tee artifacts/coverage-summary.txt
+          bash scripts/evaluate-coverage-targets.sh artifacts/coverage-summary.txt | tee artifacts/coverage-targets.txt
 
       - name: Upload coverage artifacts
         if: matrix.task == 'coverage'
@@ -105,6 +106,7 @@ jobs:
           path: |
             artifacts/lcov.info
             artifacts/coverage-summary.txt
+            artifacts/coverage-targets.txt
 
       - name: Install cargo-audit
         if: matrix.task == 'security-audit'

@@ -19,18 +19,6 @@ pub(crate) fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn parse_request_id_components(request_id: &str) -> Option<(u64, u16, u64, u64)> {
-    let mut parts = request_id.split('-');
-    let ts = parts.next()?.parse::<u64>().ok()?;
-    let idx = parts.next()?.parse::<u16>().ok()?;
-    let boot = parts.next()?.parse::<u64>().ok()?;
-    let seq = parts.next()?.parse::<u64>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((ts, idx, boot, seq))
-}
-
 pub(crate) fn decode_member_index(members: &[MemberPackage], peer: &str) -> Result<u16> {
     if peer != peer.to_ascii_lowercase() {
         return Err(SignerError::InvalidConfig(
@@ -109,6 +97,12 @@ pub(crate) fn shuffle_strings(values: &mut [String]) {
         let j = (u64::from_le_bytes(bytes) as usize) % (i + 1);
         values.swap(i, j);
     }
+}
+
+pub(crate) fn random_request_id() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
 }
 
 pub(crate) fn is_valid_pubkey32_hex(value: &str) -> bool {

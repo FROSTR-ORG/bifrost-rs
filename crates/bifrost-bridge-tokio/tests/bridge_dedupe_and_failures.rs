@@ -123,9 +123,8 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                     request_id: envelope.request_id,
                     sent_at: envelope.sent_at.saturating_add(1),
                     payload: BridgePayload::OnboardRequest(OnboardRequestWire {
-                        share_pk: hex::encode(share.seckey),
-                        idx: 999,
-                        challenge: None,
+                        version: 1,
+                        nonces: vec![],
                     }),
                 };
                 let malformed_plain = encode_bridge_envelope(&malformed).expect("encode envelope");

@@ -14,29 +14,17 @@ cargo test --workspace --offline
 
 ## Runtime E2E
 
-```bash
-dev/scripts/toolchain_preflight.sh --require-cargo
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node
-cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-full --threshold 11 --count 15
-scripts/devnet.sh smoke
-scripts/test-node-e2e.sh
-scripts/test-tui-e2e.sh
-```
-
-`bifrost-devtools e2e-node` is the cross-platform primary path. The shell scripts remain as POSIX wrappers and TUI-specific checks.
+Shell-owned runtime e2e now lives in `repos/igloo-shell`.
 
 Observability controls:
-- `bifrost --verbose`
-- `bifrost --debug`
-- `bifrost-devtools --verbose`
-- `bifrost-devtools --debug`
+- hosted shell JSON logs around `bifrost_app::host`
 - `RUST_LOG=...` remains the low-level override when explicit crate filtering is needed
 
-## WS Soak / Fault Regression
-
-```bash
-dev/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-$(date +%F).txt
-```
+Use:
+- `../igloo-shell/scripts/devnet.sh smoke`
+- `../igloo-shell/scripts/test-node-e2e.sh`
+- `../igloo-shell/scripts/test-tui-e2e.sh`
+- `../igloo-shell/dev/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-$(date +%F).txt`
 
 ## Coverage Report
 
@@ -44,6 +32,8 @@ dev/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-$(d
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
 cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info --summary-only
+cargo llvm-cov report --summary-only | tee target/coverage/coverage-summary.txt
+bash scripts/evaluate-coverage-targets.sh target/coverage/coverage-summary.txt
 ```
 
 ## Test Coverage Surface
@@ -61,25 +51,32 @@ Current test classes in repo:
   - `crates/bifrost-bridge-tokio/tests/bridge_flow.rs`
   - `crates/bifrost-bridge-tokio/tests/bridge_queues.rs`
   - `crates/bifrost-bridge-tokio/tests/bridge_dedupe_and_failures.rs`
+  - `crates/bifrost-bridge-tokio/tests/bridge_admin_and_phases.rs`
+  - `crates/bifrost-bridge-tokio/tests/bridge_recovery.rs`
   - `crates/bifrost-app/tests/config_options.rs`
+  - `crates/bifrost-app/tests/daemon_lifecycle.rs`
+  - `crates/bifrost-app/tests/onboarding_runtime.rs`
   - `crates/bifrost-app/tests/state_store_limits.rs`
-- End-to-end/runtime tests:
-  - `cargo run -p bifrost-dev --bin bifrost-devtools --offline -- --verbose e2e-node`
-  - `scripts/test-node-e2e.sh`
-  - `scripts/test-tui-e2e.sh`
-  - `scripts/devnet.sh smoke`
+  - `crates/bifrost-app/tests/run_marker_v2.rs`
+  - `crates/bifrost-signer/tests/runtime_roundtrip.rs`
+- End-to-end/runtime tests: owned by `repos/igloo-shell`
 
 Coverage status:
 
 - `cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info --summary-only` collects overall workspace coverage and uploads summary artifacts.
-- There is no repository-defined minimum coverage threshold in CI; coverage quality is captured by artifact review.
+- `cargo llvm-cov report --summary-only` is the quickest local summary for crate-by-crate review after targeted test changes.
+- Soft targets are defined in `scripts/coverage-targets.env` and evaluated by `scripts/evaluate-coverage-targets.sh`.
+- Current soft targets:
+  - regions: `80.00%`
+  - lines: `82.00%`
+- CI does not fail on missed coverage targets in this phase; it publishes the target evaluation artifact for review.
 
 ## Testing Requirements By Change Type
 
 - Crypto/core changes: add deterministic correctness + reject-path tests.
 - Codec changes: add strict malformed/bounds tests.
 - Signer/router/bridge runtime changes: add request lifecycle, failure-mapping, and timeout-path tests.
-- App changes (`bifrost-app` / `bifrost-dev` bins/runtime): add CLI/TUI/devtools integration checks.
+- App changes (`bifrost-app` host/runtime): add host/control integration checks.
 
 ## CI Expectation
 

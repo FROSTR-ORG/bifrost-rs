@@ -87,4 +87,27 @@ mod tests {
         let recovered = recover_key(&input).expect("recover");
         assert_ne!(recovered.signing_key32, [0u8; 32]);
     }
+
+    #[test]
+    fn recover_key_rejects_insufficient_or_unknown_shares() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        let insufficient = RecoverKeyInput {
+            group: bundle.group.clone(),
+            shares: vec![bundle.shares[0].clone()],
+        };
+        assert!(recover_key(&insufficient).is_err());
+
+        let mut unknown_share = bundle.shares[0].clone();
+        unknown_share.idx = 99;
+        let invalid = RecoverKeyInput {
+            group: bundle.group,
+            shares: vec![unknown_share, bundle.shares[1].clone()],
+        };
+        assert!(recover_key(&invalid).is_err());
+    }
 }
