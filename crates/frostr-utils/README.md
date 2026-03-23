@@ -7,7 +7,7 @@
 - Keyset lifecycle:
   - create keysets
   - verify keysets
-  - rotate keysets (dealer reissue)
+  - rotate existing keysets from threshold shares while preserving the group public key
   - recover group signing key from threshold shares
 - Group/share verification helpers
 - Onboarding package helpers:

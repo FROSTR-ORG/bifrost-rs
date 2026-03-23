@@ -4,7 +4,7 @@
 
 ## Contents
 
-- `keyset.md`: keyset creation, verification, rotation, and recovery.
+- `keyset.md`: keyset creation, same-key rotation, and recovery.
 - `profile-packages.md`: canonical `bfshare`, `bfonboard`, `bfprofile`, and encrypted backup primitives.
 - `browser-wasm.md`: authoritative browser/WASM export surface for package and backup semantics.
 - `security.md`: security expectations for handling shares and exported package artifacts.

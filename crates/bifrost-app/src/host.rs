@@ -1681,9 +1681,7 @@ mod tests {
                     .and_then(serde_json::Value::as_array)
                     .and_then(|entries| {
                         entries.iter().find(|entry| {
-                            entry
-                                .get("pubkey")
-                                .and_then(serde_json::Value::as_str)
+                            entry.get("pubkey").and_then(serde_json::Value::as_str)
                                 == Some(peer.as_str())
                         })
                     })

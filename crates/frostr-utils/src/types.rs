@@ -20,8 +20,9 @@ pub struct KeysetVerificationReport {
     pub verified_shares: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RotateKeysetRequest {
+    pub shares: Vec<SharePackage>,
     pub threshold: u16,
     pub count: u16,
 }
@@ -29,6 +30,7 @@ pub struct RotateKeysetRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RotateKeysetResult {
     pub previous_group_id: Bytes32,
+    pub next_group_id: Bytes32,
     pub next: KeysetBundle,
 }
 

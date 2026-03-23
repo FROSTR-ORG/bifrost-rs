@@ -1,43 +1,47 @@
 use anyhow::{Result, anyhow};
-use bifrost_codec::wire::{DerivedPublicNonceWire, GroupPackageWire, SharePackageWire};
-use bifrost_core::nonce::NoncePoolConfig;
+use bifrost_codec::{
+    error::CodecError,
+    wire::{DerivedPublicNonceWire, GroupPackageWire, SharePackageWire},
+};
 use bifrost_core::types::{GroupPackage, PeerPolicyOverride, PolicyOverrideValue};
+use bifrost_core::{get_group_id, nonce::NoncePoolConfig};
 use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
-    RuntimeStatusSummary, SigningDevice, finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
+    RuntimeStatusSummary, SigningDevice, finalize_onboarding_bootstrap_seed,
+    generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
-    BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, EncryptedProfileBackup,
-    PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE, PROFILE_BACKUP_EVENT_KIND,
-    PROFILE_BACKUP_KEY_DOMAIN,
-    ProfilePackagePair, build_onboard_request_event as rust_build_onboard_request_event,
+    BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
+    EncryptedProfileBackup, PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE,
+    PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair, RotateKeysetRequest,
+    build_onboard_request_event as rust_build_onboard_request_event,
     build_profile_backup_event as rust_build_profile_backup_event,
-    create_keyset as rust_create_keyset,
     create_encrypted_profile_backup as rust_create_encrypted_profile_backup,
+    create_keyset as rust_create_keyset,
     create_profile_package_pair as rust_create_profile_package_pair,
     decode_bfonboard_package as rust_decode_bfonboard_package,
     decode_bfprofile_package as rust_decode_bfprofile_package,
     decode_bfshare_package as rust_decode_bfshare_package,
     decrypt_profile_backup_content as rust_decrypt_profile_backup_content,
+    derive_profile_backup_conversation_key as rust_derive_profile_backup_conversation_key,
     derive_profile_id_from_share_pubkey as rust_derive_profile_id_from_share_pubkey,
     derive_profile_id_from_share_secret as rust_derive_profile_id_from_share_secret,
-    generate_opaque_request_id as rust_generate_opaque_request_id,
-    derive_profile_backup_conversation_key as rust_derive_profile_backup_conversation_key,
     encode_bfonboard_package as rust_encode_bfonboard_package,
     encode_bfprofile_package as rust_encode_bfprofile_package,
     encode_bfshare_package as rust_encode_bfshare_package,
     encrypt_profile_backup_content as rust_encrypt_profile_backup_content,
+    generate_opaque_request_id as rust_generate_opaque_request_id,
     parse_profile_backup_event as rust_parse_profile_backup_event,
-    CreateKeysetConfig,
+    rotate_keyset_dealer as rust_rotate_keyset_dealer,
 };
+use k256::elliptic_curve::sec1::ToEncodedPoint;
 use nostr::Event;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -149,22 +153,12 @@ struct NoncePeerSnapshotJson {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CommandInput {
-    Sign {
-        message_hex_32: String,
-    },
-    Ecdh {
-        pubkey32_hex: String,
-    },
-    Ping {
-        peer_pubkey32_hex: String,
-    },
-    RefreshPeer {
-        peer_pubkey32_hex: String,
-    },
+    Sign { message_hex_32: String },
+    Ecdh { pubkey32_hex: String },
+    Ping { peer_pubkey32_hex: String },
+    RefreshPeer { peer_pubkey32_hex: String },
     RefreshAllPeers,
-    Onboard {
-        peer_pubkey32_hex: String,
-    },
+    Onboard { peer_pubkey32_hex: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -222,9 +216,24 @@ struct RuntimeDiagnosticsExport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct RotateKeysetBundleInput {
+    group: GroupPackageWire,
+    shares: Vec<SharePackageWire>,
+    threshold: u16,
+    count: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct KeysetBundleExport {
     group: GroupPackageWire,
     shares: Vec<SharePackageWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RotateKeysetBundleExport {
+    previous_group_id: String,
+    next_group_id: String,
+    next: KeysetBundleExport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -610,7 +619,6 @@ impl WasmBridgeRuntime {
             .map_err(|e| to_host_error(e.to_string()))?;
         Ok(())
     }
-
 }
 
 impl Default for WasmBridgeRuntime {
@@ -726,8 +734,8 @@ pub fn build_onboarding_runtime_snapshot(
         .map_err(|e: bifrost_codec::CodecError| to_host_error(e.to_string()))?;
     let share = decode_hex32(&share_secret).map_err(|e| to_host_error(e.to_string()))?;
     let local_idx = local_member_index(&group, share).map_err(|e| to_host_error(e.to_string()))?;
-    let inviter_idx =
-        member_index_for_peer(&group, &peer_pubkey32_hex).map_err(|e| to_host_error(e.to_string()))?;
+    let inviter_idx = member_index_for_peer(&group, &peer_pubkey32_hex)
+        .map_err(|e| to_host_error(e.to_string()))?;
     let response_nonces_wire: Vec<DerivedPublicNonceWire> =
         serde_json::from_str(&response_nonces_json).map_err(|e| to_host_error(e.to_string()))?;
     let response_nonces = response_nonces_wire
@@ -778,20 +786,22 @@ pub fn decode_bfprofile_package(package_text: String, password: String) -> HostR
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn derive_profile_id_from_share_secret(share_secret: String) -> HostResult<String> {
-    rust_derive_profile_id_from_share_secret(&share_secret).map_err(|e| to_host_error(e.to_string()))
+    rust_derive_profile_id_from_share_secret(&share_secret)
+        .map_err(|e| to_host_error(e.to_string()))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn derive_profile_id_from_share_pubkey(share_pubkey: String) -> HostResult<String> {
-    rust_derive_profile_id_from_share_pubkey(&share_pubkey).map_err(|e| to_host_error(e.to_string()))
+    rust_derive_profile_id_from_share_pubkey(&share_pubkey)
+        .map_err(|e| to_host_error(e.to_string()))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn create_profile_package_pair(payload_json: String, password: String) -> HostResult<String> {
     let payload: BfProfilePayload =
         serde_json::from_str(&payload_json).map_err(|e| to_host_error(e.to_string()))?;
-    let pair: ProfilePackagePair =
-        rust_create_profile_package_pair(&payload, &password).map_err(|e| to_host_error(e.to_string()))?;
+    let pair: ProfilePackagePair = rust_create_profile_package_pair(&payload, &password)
+        .map_err(|e| to_host_error(e.to_string()))?;
     serde_json::to_string(&pair).map_err(|e| to_host_error(e.to_string()))
 }
 
@@ -802,17 +812,75 @@ pub fn create_keyset_bundle(config_json: String) -> HostResult<String> {
     let bundle = rust_create_keyset(config).map_err(|e| to_host_error(e.to_string()))?;
     let exported = KeysetBundleExport {
         group: GroupPackageWire::from(bundle.group),
-        shares: bundle.shares.into_iter().map(SharePackageWire::from).collect(),
+        shares: bundle
+            .shares
+            .into_iter()
+            .map(SharePackageWire::from)
+            .collect(),
     };
     serde_json::to_string(&exported).map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn rotate_keyset_bundle(input_json: String) -> HostResult<String> {
+    let input: RotateKeysetBundleInput =
+        serde_json::from_str(&input_json).map_err(|e| to_host_error(e.to_string()))?;
+    let group: GroupPackage = input
+        .group
+        .try_into()
+        .map_err(|e: CodecError| to_host_error(e.to_string()))?;
+    let shares = input
+        .shares
+        .into_iter()
+        .map(|share| {
+            share
+                .try_into()
+                .map_err(|e: CodecError| anyhow!(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let rotated = rust_rotate_keyset_dealer(
+        &group,
+        RotateKeysetRequest {
+            shares,
+            threshold: input.threshold,
+            count: input.count,
+        },
+    )
+    .map_err(|e| to_host_error(e.to_string()))?;
+    let exported = RotateKeysetBundleExport {
+        previous_group_id: hex::encode(rotated.previous_group_id),
+        next_group_id: hex::encode(rotated.next_group_id),
+        next: KeysetBundleExport {
+            group: GroupPackageWire::from(rotated.next.group),
+            shares: rotated
+                .next
+                .shares
+                .into_iter()
+                .map(SharePackageWire::from)
+                .collect(),
+        },
+    };
+    serde_json::to_string(&exported).map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn derive_group_id(group_json: String) -> HostResult<String> {
+    let group_wire: GroupPackageWire =
+        serde_json::from_str(&group_json).map_err(|e| to_host_error(e.to_string()))?;
+    let group: GroupPackage = group_wire
+        .try_into()
+        .map_err(|e: CodecError| to_host_error(e.to_string()))?;
+    let group_id = get_group_id(&group).map_err(|e| to_host_error(e.to_string()))?;
+    Ok(hex::encode(group_id))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn create_encrypted_profile_backup(profile_json: String) -> HostResult<String> {
     let profile: BfProfilePayload =
         serde_json::from_str(&profile_json).map_err(|e| to_host_error(e.to_string()))?;
-    let backup = rust_create_encrypted_profile_backup(&profile)
-        .map_err(|e| to_host_error(e.to_string()))?;
+    let backup =
+        rust_create_encrypted_profile_backup(&profile).map_err(|e| to_host_error(e.to_string()))?;
     serde_json::to_string(&backup).map_err(|e| to_host_error(e.to_string()))
 }
 
@@ -852,12 +920,9 @@ pub fn build_profile_backup_event(
 ) -> HostResult<String> {
     let backup: EncryptedProfileBackup =
         serde_json::from_str(&backup_json).map_err(|e| to_host_error(e.to_string()))?;
-    let event = rust_build_profile_backup_event(
-        &share_secret,
-        &backup,
-        created_at_seconds.map(u64::from),
-    )
-    .map_err(|e| to_host_error(e.to_string()))?;
+    let event =
+        rust_build_profile_backup_event(&share_secret, &backup, created_at_seconds.map(u64::from))
+            .map_err(|e| to_host_error(e.to_string()))?;
     serde_json::to_string(&event).map_err(|e| to_host_error(e.to_string()))
 }
 
@@ -1415,10 +1480,7 @@ mod tests {
                 .expect("deserialize runtime diagnostics");
 
         assert!(diagnostics.runtime_status.readiness.sign_ready);
-        assert_eq!(
-            diagnostics.runtime_status.readiness.signing_peer_count,
-            1
-        );
+        assert_eq!(diagnostics.runtime_status.readiness.signing_peer_count, 1);
     }
 
     #[test]
@@ -1457,8 +1519,14 @@ mod tests {
             diagnostics.runtime_status.readiness.runtime_ready,
             readiness.runtime_ready
         );
-        assert_eq!(diagnostics.runtime_status.readiness.sign_ready, readiness.sign_ready);
-        assert_eq!(diagnostics.runtime_status.readiness.ecdh_ready, readiness.ecdh_ready);
+        assert_eq!(
+            diagnostics.runtime_status.readiness.sign_ready,
+            readiness.sign_ready
+        );
+        assert_eq!(
+            diagnostics.runtime_status.readiness.ecdh_ready,
+            readiness.ecdh_ready
+        );
     }
 
     #[test]
@@ -1553,9 +1621,11 @@ mod tests {
         };
         let encoded = encode_bfonboard_package(&payload, "password123").expect("encode package");
 
-        let decoded: BfOnboardPayload =
-            serde_json::from_str(&decode_bfonboard_package(encoded.clone(), "password123".to_string()).expect("decode package"))
-                .expect("decoded onboarding");
+        let decoded: BfOnboardPayload = serde_json::from_str(
+            &decode_bfonboard_package(encoded.clone(), "password123".to_string())
+                .expect("decode package"),
+        )
+        .expect("decoded onboarding");
         assert_eq!(decoded.relays, payload.relays);
         assert_eq!(decoded.peer_pk, payload.peer_pk);
 
@@ -1608,7 +1678,10 @@ mod tests {
             .iter()
             .find(|entry| entry.pubkey == first_peer)
             .expect("stored state");
-        assert_eq!(stored.manual_override.request.sign, PolicyOverrideValue::Deny);
+        assert_eq!(
+            stored.manual_override.request.sign,
+            PolicyOverrideValue::Deny
+        );
 
         let events: Vec<RuntimeEvent> =
             serde_json::from_str(&runtime.drain_runtime_events().expect("runtime events"))

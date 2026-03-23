@@ -1,5 +1,6 @@
 use bifrost_core::types::Bytes32;
 use frost_secp256k1_tr_unofficial as frost;
+use frost_secp256k1_tr_unofficial::keys::EvenY;
 
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
 use crate::types::{RecoverKeyInput, RecoveredKeyMaterial};
@@ -45,6 +46,14 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
 
     let signing_key = frost::keys::reconstruct(&key_packages)
         .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+    let signing_key = signing_key.into_even_y(None);
+
+    let derived_group_pk = verifying_key_to_group_pk(frost::VerifyingKey::from(&signing_key));
+    if derived_group_pk != input.group.group_pk {
+        return Err(FrostUtilsError::VerificationFailed(
+            "recovered signing key does not match group public key".to_string(),
+        ));
+    }
 
     let bytes = signing_key.serialize();
     if bytes.len() != 32 {
@@ -63,6 +72,16 @@ fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
     let mut out = [0u8; 33];
     out[0] = 0x02;
     out[1..].copy_from_slice(&pubkey);
+    out
+}
+
+fn verifying_key_to_group_pk(verifying_key: frost::VerifyingKey) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(
+        &verifying_key
+            .serialize()
+            .expect("secp256k1-tr verifying key serialization should succeed")[1..],
+    );
     out
 }
 
@@ -86,6 +105,27 @@ mod tests {
         };
         let recovered = recover_key(&input).expect("recover");
         assert_ne!(recovered.signing_key32, [0u8; 32]);
+    }
+
+    #[test]
+    fn recover_key_rejects_group_public_key_mismatch() {
+        let first = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+        let second = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        let mismatched = RecoverKeyInput {
+            group: second.group,
+            shares: first.shares[..2].to_vec(),
+        };
+
+        assert!(recover_key(&mismatched).is_err());
     }
 
     #[test]

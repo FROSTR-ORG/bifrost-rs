@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 
+use aes_gcm::AesGcm;
 use aes_gcm::aead::{Aead, KeyInit, consts::U24, generic_array::GenericArray};
 use aes_gcm::aes::Aes256;
-use aes_gcm::AesGcm;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
-use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 use bech32::primitives::checksum::Engine as ChecksumEngine;
 use bech32::primitives::decode::UncheckedHrpstring;
+use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 use bech32::{Checksum, Fe32};
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
@@ -183,17 +183,30 @@ pub struct ProfilePackagePair {
     pub share_string: String,
 }
 
-pub fn encode_bfshare_package(payload: &BfSharePayload, password: &str) -> FrostUtilsResult<String> {
+pub fn encode_bfshare_package(
+    payload: &BfSharePayload,
+    password: &str,
+) -> FrostUtilsResult<String> {
     let normalized = normalize_share_payload(payload)?;
-    encrypt_plaintext_payload(PREFIX_BFSHARE, &build_compact_package_text_share(&normalized), password)
+    encrypt_plaintext_payload(
+        PREFIX_BFSHARE,
+        &build_compact_package_text_share(&normalized),
+        password,
+    )
 }
 
-pub fn decode_bfshare_package(package_text: &str, password: &str) -> FrostUtilsResult<BfSharePayload> {
+pub fn decode_bfshare_package(
+    package_text: &str,
+    password: &str,
+) -> FrostUtilsResult<BfSharePayload> {
     let plaintext = decrypt_plaintext_payload(PREFIX_BFSHARE, package_text, password)?;
     parse_compact_share_payload(&plaintext)
 }
 
-pub fn encode_bfonboard_package(payload: &BfOnboardPayload, password: &str) -> FrostUtilsResult<String> {
+pub fn encode_bfonboard_package(
+    payload: &BfOnboardPayload,
+    password: &str,
+) -> FrostUtilsResult<String> {
     let normalized = normalize_onboard_payload(payload)?;
     encrypt_plaintext_payload(
         PREFIX_BFONBOARD,
@@ -217,7 +230,12 @@ pub fn encode_bfprofile_package(
     let normalized = normalize_profile_payload(payload)?;
     let plaintext = serde_json::to_string(&normalized)
         .map_err(|e| FrostUtilsError::Codec(format!("serialize bfprofile payload: {e}")))?;
-    encrypt_profile_payload_with_outer_id(PREFIX_BFPROFILE, &normalized.profile_id, &plaintext, password)
+    encrypt_profile_payload_with_outer_id(
+        PREFIX_BFPROFILE,
+        &normalized.profile_id,
+        &plaintext,
+        password,
+    )
 }
 
 pub fn decode_bfprofile_package(
@@ -286,7 +304,10 @@ pub fn derive_profile_id_from_share_secret(share_secret: &str) -> FrostUtilsResu
 
 pub fn derive_profile_backup_conversation_key(share_secret: &str) -> FrostUtilsResult<[u8; 32]> {
     let share_secret = normalize_hex32(share_secret, "share secret")?;
-    hmac_sha256(PROFILE_BACKUP_KEY_DOMAIN.as_bytes(), &hex::decode(&share_secret).expect("hex32"))
+    hmac_sha256(
+        PROFILE_BACKUP_KEY_DOMAIN.as_bytes(),
+        &hex::decode(&share_secret).expect("hex32"),
+    )
 }
 
 pub fn encrypt_profile_backup_content(
@@ -306,8 +327,9 @@ pub fn decrypt_profile_backup_content(
 ) -> FrostUtilsResult<EncryptedProfileBackup> {
     let conversation_key = derive_profile_backup_conversation_key(share_secret)?;
     let plaintext = decrypt_nip44_compatible_payload(&conversation_key, ciphertext)?;
-    let backup: EncryptedProfileBackup = serde_json::from_str(&plaintext)
-        .map_err(|_| FrostUtilsError::InvalidInput("Invalid encrypted profile backup.".to_string()))?;
+    let backup: EncryptedProfileBackup = serde_json::from_str(&plaintext).map_err(|_| {
+        FrostUtilsError::InvalidInput("Invalid encrypted profile backup.".to_string())
+    })?;
     normalize_profile_backup(&backup)
 }
 
@@ -441,12 +463,16 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
     };
     let expected_profile_id = derive_profile_id_from_share_secret(&normalized.device.share_secret)?;
     if normalized.profile_id != expected_profile_id {
-        return Err(FrostUtilsError::InvalidInput("Invalid profile id.".to_string()));
+        return Err(FrostUtilsError::InvalidInput(
+            "Invalid profile id.".to_string(),
+        ));
     }
     Ok(normalized)
 }
 
-fn normalize_profile_backup(backup: &EncryptedProfileBackup) -> FrostUtilsResult<EncryptedProfileBackup> {
+fn normalize_profile_backup(
+    backup: &EncryptedProfileBackup,
+) -> FrostUtilsResult<EncryptedProfileBackup> {
     let device_name = backup.device.name.trim();
     if device_name.is_empty() {
         return Err(FrostUtilsError::InvalidInput(
@@ -639,7 +665,9 @@ pub fn core_policy_override_value_to_bf(value: PolicyOverrideValue) -> BfPolicyO
     }
 }
 
-pub fn core_peer_scoped_policy_profile_to_bf(profile: &PeerScopedPolicyProfile) -> BfPeerScopedPolicyProfile {
+pub fn core_peer_scoped_policy_profile_to_bf(
+    profile: &PeerScopedPolicyProfile,
+) -> BfPeerScopedPolicyProfile {
     BfPeerScopedPolicyProfile {
         for_peer: hex::encode(profile.for_peer),
         revision: profile.revision,
@@ -668,7 +696,10 @@ fn normalize_group_member(member: &BfGroupMember) -> FrostUtilsResult<BfGroupMem
     }
     Ok(BfGroupMember {
         index: member.index,
-        share_public_key: normalize_hex32(&member.share_public_key, "group member share public key")?,
+        share_public_key: normalize_hex32(
+            &member.share_public_key,
+            "group member share public key",
+        )?,
     })
 }
 
@@ -753,7 +784,11 @@ fn split_compact_package_text(plaintext: &str) -> FrostUtilsResult<(&str, &str)>
     Ok((share_secret, query))
 }
 
-fn encrypt_plaintext_payload(prefix: &str, plaintext: &str, password: &str) -> FrostUtilsResult<String> {
+fn encrypt_plaintext_payload(
+    prefix: &str,
+    plaintext: &str,
+    password: &str,
+) -> FrostUtilsResult<String> {
     let salt = random_bytes(BF_PACKAGE_SALT_BYTES);
     let iv = random_bytes(BF_PACKAGE_IV_BYTES);
     let key = derive_package_encryption_key(password, &salt);
@@ -799,7 +834,11 @@ fn encrypt_profile_payload_with_outer_id(
     encode_profile_envelope(prefix, &normalized_profile_id, &envelope)
 }
 
-fn decrypt_plaintext_payload(prefix: &str, package_text: &str, password: &str) -> FrostUtilsResult<String> {
+fn decrypt_plaintext_payload(
+    prefix: &str,
+    package_text: &str,
+    password: &str,
+) -> FrostUtilsResult<String> {
     let envelope = decode_envelope(prefix, package_text)?;
     if envelope.version != BF_PACKAGE_VERSION {
         return Err(FrostUtilsError::UnsupportedFormat(format!(
@@ -880,7 +919,14 @@ fn encode_envelope(prefix: &str, envelope: &ProtectedPackageEnvelope) -> FrostUt
         .map_err(|e| FrostUtilsError::Codec(format!("serialize package envelope: {e}")))?;
     let hrp = Hrp::parse(prefix).map_err(|e| FrostUtilsError::Codec(e.to_string()))?;
     let mut out = String::with_capacity(prefix.len() + 1 + bytes.len() * 2);
-    out.extend(bytes.iter().copied().bytes_to_fes().with_checksum::<Bech32m>(&hrp).chars());
+    out.extend(
+        bytes
+            .iter()
+            .copied()
+            .bytes_to_fes()
+            .with_checksum::<Bech32m>(&hrp)
+            .chars(),
+    );
     Ok(out)
 }
 
@@ -897,7 +943,14 @@ fn encode_profile_envelope(
     bytes.extend_from_slice(&envelope_bytes);
     let hrp = Hrp::parse(prefix).map_err(|e| FrostUtilsError::Codec(e.to_string()))?;
     let mut out = String::with_capacity(prefix.len() + 1 + bytes.len() * 2);
-    out.extend(bytes.iter().copied().bytes_to_fes().with_checksum::<Bech32m>(&hrp).chars());
+    out.extend(
+        bytes
+            .iter()
+            .copied()
+            .bytes_to_fes()
+            .with_checksum::<Bech32m>(&hrp)
+            .chars(),
+    );
     Ok(out)
 }
 
@@ -911,16 +964,21 @@ fn decode_envelope(prefix: &str, value: &str) -> FrostUtilsResult<ProtectedPacka
     }
     validate_checksum_unchecked::<Bech32m>(&unchecked)
         .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
-    let ascii = &unchecked.data_part_ascii()[..unchecked.data_part_ascii().len() - Bech32m::CHECKSUM_LENGTH];
+    let ascii = &unchecked.data_part_ascii()
+        [..unchecked.data_part_ascii().len() - Bech32m::CHECKSUM_LENGTH];
     let bytes = ascii
         .iter()
         .map(|&b| Fe32::from_char_unchecked(b))
         .fes_to_bytes()
         .collect::<Vec<u8>>();
-    serde_json::from_slice(&bytes).map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))
+    serde_json::from_slice(&bytes)
+        .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))
 }
 
-fn decode_profile_envelope(prefix: &str, value: &str) -> FrostUtilsResult<(String, ProtectedPackageEnvelope)> {
+fn decode_profile_envelope(
+    prefix: &str,
+    value: &str,
+) -> FrostUtilsResult<(String, ProtectedPackageEnvelope)> {
     let unchecked = UncheckedHrpstring::new(value)
         .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
     if unchecked.hrp().as_str() != prefix {
@@ -930,7 +988,8 @@ fn decode_profile_envelope(prefix: &str, value: &str) -> FrostUtilsResult<(Strin
     }
     validate_checksum_unchecked::<Bech32m>(&unchecked)
         .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
-    let ascii = &unchecked.data_part_ascii()[..unchecked.data_part_ascii().len() - Bech32m::CHECKSUM_LENGTH];
+    let ascii = &unchecked.data_part_ascii()
+        [..unchecked.data_part_ascii().len() - Bech32m::CHECKSUM_LENGTH];
     let bytes = ascii
         .iter()
         .map(|&b| Fe32::from_char_unchecked(b))
@@ -971,7 +1030,10 @@ fn validate_checksum_unchecked<Ck: bech32::Checksum>(
 
 fn derive_share_public_key_hex(share_secret: &str) -> FrostUtilsResult<String> {
     let secret = secret_key_from_hex(share_secret)?;
-    Ok(Keys::new(secret).public_key().to_string().to_ascii_lowercase())
+    Ok(Keys::new(secret)
+        .public_key()
+        .to_string()
+        .to_ascii_lowercase())
 }
 
 fn secret_key_from_hex(hex32: &str) -> FrostUtilsResult<SecretKey> {
@@ -1024,7 +1086,10 @@ fn hkdf_expand_sha256(prk: &[u8], info: &[u8], len: usize) -> FrostUtilsResult<V
     Ok(okm)
 }
 
-fn encrypt_nip44_compatible_payload(conversation_key: &[u8; 32], plaintext: &str) -> FrostUtilsResult<String> {
+fn encrypt_nip44_compatible_payload(
+    conversation_key: &[u8; 32],
+    plaintext: &str,
+) -> FrostUtilsResult<String> {
     let nonce32 = random_nonce32();
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
     let mut padded = pad_message(plaintext)?;
@@ -1087,13 +1152,19 @@ fn get_message_keys(
 
 fn calc_padded_len(unpadded_len: usize) -> FrostUtilsResult<usize> {
     if unpadded_len == 0 {
-        return Err(FrostUtilsError::InvalidInput("invalid plaintext size".to_string()));
+        return Err(FrostUtilsError::InvalidInput(
+            "invalid plaintext size".to_string(),
+        ));
     }
     if unpadded_len <= 32 {
         return Ok(32);
     }
     let next_power = 1usize << ((usize::BITS - (unpadded_len - 1).leading_zeros()) as usize);
-    let chunk = if next_power <= 256 { 32 } else { next_power / 8 };
+    let chunk = if next_power <= 256 {
+        32
+    } else {
+        next_power / 8
+    };
     Ok(chunk * (((unpadded_len - 1) / chunk) + 1))
 }
 
@@ -1126,7 +1197,11 @@ fn unpad_message(padded: &[u8]) -> FrostUtilsResult<String> {
     String::from_utf8(bytes.to_vec()).map_err(|_| FrostUtilsError::DecryptionFailed)
 }
 
-fn hmac_aad(hmac_key: &[u8; 32], nonce32: &[u8; 32], ciphertext: &[u8]) -> FrostUtilsResult<[u8; 32]> {
+fn hmac_aad(
+    hmac_key: &[u8; 32],
+    nonce32: &[u8; 32],
+    ciphertext: &[u8],
+) -> FrostUtilsResult<[u8; 32]> {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key)
         .map_err(|e| FrostUtilsError::Crypto(format!("HMAC init failed: {e}")))?;
     mac.update(nonce32);
@@ -1143,57 +1218,55 @@ mod tests {
 
     fn sample_profile() -> BfProfilePayload {
         let device = BfProfileDevice {
-                name: "Alice Laptop".to_string(),
-                share_secret: "11".repeat(32),
-                manual_peer_policy_overrides: vec![BfManualPeerPolicyOverride {
-                    pubkey: "22".repeat(32),
-                    policy: BfPeerPolicyOverride {
-                        request: BfMethodPolicyOverride {
-                            echo: BfPolicyOverrideValue::Unset,
-                            ping: BfPolicyOverrideValue::Unset,
-                            onboard: BfPolicyOverrideValue::Unset,
-                            sign: BfPolicyOverrideValue::Allow,
-                            ecdh: BfPolicyOverrideValue::Unset,
-                        },
-                        respond: BfMethodPolicyOverride {
-                            echo: BfPolicyOverrideValue::Unset,
-                            ping: BfPolicyOverrideValue::Unset,
-                            onboard: BfPolicyOverrideValue::Unset,
-                            sign: BfPolicyOverrideValue::Deny,
-                            ecdh: BfPolicyOverrideValue::Unset,
-                        },
+            name: "Alice Laptop".to_string(),
+            share_secret: "11".repeat(32),
+            manual_peer_policy_overrides: vec![BfManualPeerPolicyOverride {
+                pubkey: "22".repeat(32),
+                policy: BfPeerPolicyOverride {
+                    request: BfMethodPolicyOverride {
+                        echo: BfPolicyOverrideValue::Unset,
+                        ping: BfPolicyOverrideValue::Unset,
+                        onboard: BfPolicyOverrideValue::Unset,
+                        sign: BfPolicyOverrideValue::Allow,
+                        ecdh: BfPolicyOverrideValue::Unset,
                     },
-                }],
-                remote_peer_policy_observations: vec![BfRemotePeerPolicyObservation {
-                    pubkey: "22".repeat(32),
-                    profile: BfPeerScopedPolicyProfile {
-                        for_peer: "11".repeat(32),
-                        revision: 7,
-                        updated: 1_700_000_000,
-                        block_all: false,
-                        request: BfMethodPolicy {
-                            echo: true,
-                            ping: true,
-                            onboard: true,
-                            sign: true,
-                            ecdh: true,
-                        },
-                        respond: BfMethodPolicy {
-                            echo: true,
-                            ping: true,
-                            onboard: true,
-                            sign: false,
-                            ecdh: true,
-                        },
+                    respond: BfMethodPolicyOverride {
+                        echo: BfPolicyOverrideValue::Unset,
+                        ping: BfPolicyOverrideValue::Unset,
+                        onboard: BfPolicyOverrideValue::Unset,
+                        sign: BfPolicyOverrideValue::Deny,
+                        ecdh: BfPolicyOverrideValue::Unset,
                     },
-                }],
-                relays: vec![
-                    "wss://relay.one".to_string(),
-                    "wss://relay.two".to_string(),
-                ],
-            };
+                },
+            }],
+            remote_peer_policy_observations: vec![BfRemotePeerPolicyObservation {
+                pubkey: "22".repeat(32),
+                profile: BfPeerScopedPolicyProfile {
+                    for_peer: "11".repeat(32),
+                    revision: 7,
+                    updated: 1_700_000_000,
+                    block_all: false,
+                    request: BfMethodPolicy {
+                        echo: true,
+                        ping: true,
+                        onboard: true,
+                        sign: true,
+                        ecdh: true,
+                    },
+                    respond: BfMethodPolicy {
+                        echo: true,
+                        ping: true,
+                        onboard: true,
+                        sign: false,
+                        ecdh: true,
+                    },
+                },
+            }],
+            relays: vec!["wss://relay.one".to_string(), "wss://relay.two".to_string()],
+        };
         BfProfilePayload {
-            profile_id: derive_profile_id_from_share_secret(&device.share_secret).expect("profile id"),
+            profile_id: derive_profile_id_from_share_secret(&device.share_secret)
+                .expect("profile id"),
             version: BF_PACKAGE_VERSION,
             device,
             group: BfProfileGroup {
@@ -1260,7 +1333,8 @@ mod tests {
     fn bfprofile_rejects_mismatched_profile_id() {
         let mut profile = sample_profile();
         profile.profile_id = "aa".repeat(32);
-        let err = encode_bfprofile_package(&profile, "secret").expect_err("mismatched profile id must fail");
+        let err = encode_bfprofile_package(&profile, "secret")
+            .expect_err("mismatched profile id must fail");
         assert!(err.to_string().contains("Invalid profile id"));
     }
 
@@ -1270,8 +1344,8 @@ mod tests {
         let backup = create_encrypted_profile_backup(&profile).expect("backup");
         let ciphertext =
             encrypt_profile_backup_content(&backup, &profile.device.share_secret).expect("encrypt");
-        let decrypted =
-            decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret).expect("decrypt");
+        let decrypted = decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret)
+            .expect("decrypt");
         assert_eq!(decrypted, backup);
     }
 

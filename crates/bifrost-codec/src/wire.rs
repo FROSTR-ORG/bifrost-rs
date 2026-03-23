@@ -867,10 +867,7 @@ mod tests {
         };
         let err: crate::error::CodecError =
             TryInto::<OnboardRequest>::try_into(wire).expect_err("must reject empty nonces");
-        assert!(matches!(
-            err,
-            crate::error::CodecError::InvalidPayload(_)
-        ));
+        assert!(matches!(err, crate::error::CodecError::InvalidPayload(_)));
     }
 
     #[test]

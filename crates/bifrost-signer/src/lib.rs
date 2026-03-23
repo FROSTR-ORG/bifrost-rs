@@ -12,12 +12,12 @@ use bifrost_core::create_session_package;
 use bifrost_core::nonce::{NoncePool, NoncePoolConfig};
 use bifrost_core::types::{
     Bytes32, DerivedPublicNonce, EcdhPackage, GroupPackage, OnboardResponse, PartialSigPackage,
-    PeerPolicy, PeerPolicyOverride, PeerScopedPolicyProfile, PingPayload,
-    PolicyOverrideValue, SharePackage, SignSessionPackage, SignSessionTemplate,
+    PeerPolicy, PeerPolicyOverride, PeerScopedPolicyProfile, PingPayload, PolicyOverrideValue,
+    SharePackage, SignSessionPackage, SignSessionTemplate,
 };
 use frostr_utils::{
-    ecdh_create_from_share, ecdh_finalize, sign_create_partial, sign_finalize,
-    sign_verify_partial, validate_sign_session,
+    ecdh_create_from_share, ecdh_finalize, sign_create_partial, sign_finalize, sign_verify_partial,
+    validate_sign_session,
 };
 use nostr::{Alphabet, Event, Filter, SingleLetterTag, TagKind};
 use serde::{Deserialize, Serialize};
@@ -181,7 +181,9 @@ pub fn finalize_onboarding_bootstrap_seed(
     state
         .nonce_pool
         .remap_peer_indexes(local_member_idx, &index_map);
-    state.nonce_pool.store_incoming(inviter_member_idx, inviter_nonces);
+    state
+        .nonce_pool
+        .store_incoming(inviter_member_idx, inviter_nonces);
     state.pending_operations.clear();
     state.last_active = now_unix_secs();
     Ok(state)
@@ -734,14 +736,8 @@ impl SigningDevice {
             echo: local.request.echo,
             ping: local.request.ping,
             onboard: local.request.onboard,
-            sign: local.request.sign
-                && remote
-                    .map(|profile| profile.respond.sign)
-                    .unwrap_or(true),
-            ecdh: local.request.ecdh
-                && remote
-                    .map(|profile| profile.respond.ecdh)
-                    .unwrap_or(true),
+            sign: local.request.sign && remote.map(|profile| profile.respond.sign).unwrap_or(true),
+            ecdh: local.request.ecdh && remote.map(|profile| profile.respond.ecdh).unwrap_or(true),
         };
         PeerPolicy {
             block_all: !(request.echo
@@ -832,7 +828,8 @@ impl SigningDevice {
     pub fn peer_permission_states(&self) -> Vec<PeerPermissionState> {
         let mut peers = self.peers.clone();
         peers.sort_unstable();
-        peers.into_iter()
+        peers
+            .into_iter()
             .map(|peer| PeerPermissionState {
                 pubkey: peer.clone(),
                 manual_override: self.manual_policy_override_for(&peer),
@@ -846,7 +843,9 @@ impl SigningDevice {
         let threshold = self.group.threshold.saturating_sub(1) as usize;
         let signing_peer_count = peers
             .iter()
-            .filter(|peer| peer.can_sign && self.effective_policy_for_peer(&peer.pubkey).request.sign)
+            .filter(|peer| {
+                peer.can_sign && self.effective_policy_for_peer(&peer.pubkey).request.sign
+            })
             .count();
         let ecdh_peer_count = peers
             .iter()
@@ -1453,15 +1452,20 @@ impl SigningDevice {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
-        self.state
-            .manual_policy_overrides
-            .insert(peer.to_string(), PeerPolicyOverride::from_peer_policy(&policy));
+        self.state.manual_policy_overrides.insert(
+            peer.to_string(),
+            PeerPolicyOverride::from_peer_policy(&policy),
+        );
         self.state.last_active = now_unix_secs();
         self.mark_persistence_hint(PersistenceHint::Immediate);
         Ok(())
     }
 
-    pub fn set_peer_policy_override(&mut self, peer: &str, policy: PeerPolicyOverride) -> Result<()> {
+    pub fn set_peer_policy_override(
+        &mut self,
+        peer: &str,
+        policy: PeerPolicyOverride,
+    ) -> Result<()> {
         if !self.member_idx_by_pubkey.contains_key(peer) {
             return Err(SignerError::UnknownPeer(peer.to_string()));
         }
@@ -1504,7 +1508,9 @@ impl SigningDevice {
         let mut fallback = self
             .peers
             .iter()
-            .filter(|peer| !online.contains(*peer) && self.effective_policy_for_peer(peer).request.ecdh)
+            .filter(|peer| {
+                !online.contains(*peer) && self.effective_policy_for_peer(peer).request.ecdh
+            })
             .cloned()
             .collect::<Vec<_>>();
 
@@ -1685,7 +1691,9 @@ impl SigningDevice {
                         "onboard bootstrap nonces missing".to_string(),
                     ));
                 }
-                self.state.nonce_pool.store_incoming(sender_idx, request.nonces);
+                self.state
+                    .nonce_pool
+                    .store_incoming(sender_idx, request.nonces);
 
                 self.state
                     .nonce_pool
@@ -2128,7 +2136,13 @@ impl SigningDevice {
         })
     }
 
-    fn reject_request(&self, peer: &str, request_id: String, code: &str, message: &str) -> Result<Vec<Event>> {
+    fn reject_request(
+        &self,
+        peer: &str,
+        request_id: String,
+        code: &str,
+        message: &str,
+    ) -> Result<Vec<Event>> {
         let response = BridgeEnvelope {
             request_id,
             sent_at: now_unix_secs(),
@@ -2140,7 +2154,13 @@ impl SigningDevice {
         self.encrypt_for_peers(&[peer.to_string()], &response)
     }
 
-    fn record_request(&mut self, sender: &str, request_id: &str, sent_at: u64, now: u64) -> Result<()> {
+    fn record_request(
+        &mut self,
+        sender: &str,
+        request_id: &str,
+        sent_at: u64,
+        now: u64,
+    ) -> Result<()> {
         if request_id.is_empty() {
             return Err(SignerError::InvalidRequest(
                 "request id must not be empty".to_string(),
@@ -2585,7 +2605,9 @@ mod tests {
         assert_eq!(ping_response.len(), 1);
 
         let onboard = requester
-            .apply(SignerInput::BeginOnboard { peer: inviter_pubkey })
+            .apply(SignerInput::BeginOnboard {
+                peer: inviter_pubkey,
+            })
             .expect("begin onboard")
             .outbound;
         assert_eq!(onboard.len(), 1);

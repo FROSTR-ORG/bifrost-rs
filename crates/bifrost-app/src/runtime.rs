@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,7 +13,9 @@ use bifrost_bridge_tokio::{
     DEFAULT_OUTBOUND_QUEUE_CAPACITY, DEFAULT_RELAY_BACKOFF_MS, QueueOverflowPolicy,
 };
 use bifrost_codec::{parse_group_package, parse_share_package};
-use bifrost_core::types::{GroupPackage, PeerPolicyOverride, PeerScopedPolicyProfile, SharePackage};
+use bifrost_core::types::{
+    GroupPackage, PeerPolicyOverride, PeerScopedPolicyProfile, SharePackage,
+};
 use bifrost_signer::{
     DeviceConfig, DeviceState, DeviceStore, PeerSelectionStrategy, SigningDevice,
 };

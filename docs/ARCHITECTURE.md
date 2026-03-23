@@ -16,7 +16,7 @@
 
 ## `frostr-utils`
 
-- Keyset lifecycle utilities: create, verify, rotate, recover.
+- Keyset lifecycle utilities: create, verify, rotate shares for the same key, recover.
 - Onboarding package encode/decode helpers.
 
 ## `bifrost-signer`

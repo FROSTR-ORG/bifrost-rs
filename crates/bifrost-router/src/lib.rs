@@ -74,18 +74,10 @@ impl Default for BridgeConfig {
 
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
-    Sign {
-        message: [u8; 32],
-    },
-    Ecdh {
-        pubkey: [u8; 32],
-    },
-    Ping {
-        peer: String,
-    },
-    Onboard {
-        peer: String,
-    },
+    Sign { message: [u8; 32] },
+    Ecdh { pubkey: [u8; 32] },
+    Ping { peer: String },
+    Onboard { peer: String },
 }
 
 #[derive(Debug)]

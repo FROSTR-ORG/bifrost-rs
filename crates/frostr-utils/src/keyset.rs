@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use bifrost_core::get_group_id;
 use bifrost_core::types::{GroupPackage, MemberPackage, SharePackage};
 use frost_secp256k1_tr_unofficial as frost;
@@ -7,29 +5,91 @@ use frost_secp256k1_tr_unofficial::keys::EvenY;
 use rand_core::OsRng;
 
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
-use crate::types::{CreateKeysetConfig, KeysetBundle, RotateKeysetRequest, RotateKeysetResult};
+use crate::recovery::recover_key;
+use crate::types::{
+    CreateKeysetConfig, KeysetBundle, RecoverKeyInput, RotateKeysetRequest, RotateKeysetResult,
+};
 use crate::verify::verify_keyset;
 
 pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundle> {
-    if config.threshold < 2 {
+    validate_keyset_shape(config.threshold, config.count)?;
+
+    let (shares, public_key_package) = frost::keys::generate_with_dealer(
+        config.count,
+        config.threshold,
+        frost::keys::IdentifierList::Default,
+        &mut OsRng,
+    )
+    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+
+    build_keyset_bundle(config.threshold, shares, public_key_package)
+}
+
+pub fn rotate_keyset_dealer(
+    current_group: &GroupPackage,
+    req: RotateKeysetRequest,
+) -> FrostUtilsResult<RotateKeysetResult> {
+    validate_keyset_shape(req.threshold, req.count)?;
+
+    let previous_group_id = get_group_id(current_group)
+        .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
+
+    let recovered = recover_key(&RecoverKeyInput {
+        group: current_group.clone(),
+        shares: req.shares,
+    })?;
+
+    let signing_key = frost::SigningKey::deserialize(&recovered.signing_key32)
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+        .into_even_y(None);
+
+    let (shares, public_key_package) = frost::keys::split(
+        &signing_key,
+        req.count,
+        req.threshold,
+        frost::keys::IdentifierList::Default,
+        &mut OsRng,
+    )
+    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+
+    let next = build_keyset_bundle(req.threshold, shares, public_key_package)?;
+
+    if next.group.group_pk != current_group.group_pk {
+        return Err(FrostUtilsError::VerificationFailed(
+            "rotation changed group public key".to_string(),
+        ));
+    }
+
+    let next_group_id = get_group_id(&next.group)
+        .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
+
+    Ok(RotateKeysetResult {
+        previous_group_id,
+        next_group_id,
+        next,
+    })
+}
+
+fn validate_keyset_shape(threshold: u16, count: u16) -> FrostUtilsResult<()> {
+    if threshold < 2 {
         return Err(FrostUtilsError::InvalidInput(
             "threshold must be >= 2".to_string(),
         ));
     }
-    if config.count < config.threshold {
+    if count < threshold {
         return Err(FrostUtilsError::InvalidInput(
             "count must be >= threshold".to_string(),
         ));
     }
+    Ok(())
+}
 
-    let (shares, pubkey_pkg) = frost::keys::generate_with_dealer(
-        config.count,
-        config.threshold,
-        frost::keys::IdentifierList::Default,
-        OsRng,
-    )
-    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
-    let pubkey_pkg = pubkey_pkg.into_even_y(None);
+fn build_keyset_bundle(
+    threshold: u16,
+    shares: std::collections::BTreeMap<frost::Identifier, frost::keys::SecretShare>,
+    public_key_package: frost::keys::PublicKeyPackage,
+) -> FrostUtilsResult<KeysetBundle> {
+    let public_key_package = public_key_package.into_even_y(None);
 
     let mut material = Vec::new();
     for (id, secret_share) in shares {
@@ -42,7 +102,7 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
 
     let mut group_pk = [0u8; 32];
     group_pk.copy_from_slice(
-        &pubkey_pkg
+        &public_key_package
             .verifying_key()
             .serialize()
             .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?[1..],
@@ -78,7 +138,7 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
     let bundle = KeysetBundle {
         group: GroupPackage {
             group_pk,
-            threshold: config.threshold,
+            threshold,
             members,
         },
         shares: share_packages,
@@ -88,33 +148,11 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
     Ok(bundle)
 }
 
-pub fn rotate_keyset_dealer(
-    current_group: &GroupPackage,
-    req: RotateKeysetRequest,
-) -> FrostUtilsResult<RotateKeysetResult> {
-    let _issued_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| FrostUtilsError::InvalidInput(e.to_string()))?
-        .as_secs();
-
-    let previous_group_id = get_group_id(current_group)
-        .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
-
-    let next = create_keyset(CreateKeysetConfig {
-        threshold: req.threshold,
-        count: req.count,
-    })?;
-
-    Ok(RotateKeysetResult {
-        previous_group_id,
-        next,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::CreateKeysetConfig;
+    use crate::{recover_key, verify_share};
 
     #[test]
     fn create_keyset_builds_valid_bundle() {
@@ -128,22 +166,105 @@ mod tests {
     }
 
     #[test]
-    fn rotate_keyset_returns_new_group() {
+    fn rotate_keyset_preserves_group_public_key() {
         let current = create_keyset(CreateKeysetConfig {
             threshold: 2,
             count: 3,
         })
         .expect("create");
+
         let rotated = rotate_keyset_dealer(
             &current.group,
             RotateKeysetRequest {
+                shares: current.shares[..2].to_vec(),
                 threshold: 2,
                 count: 3,
             },
         )
         .expect("rotate");
 
+        assert_eq!(rotated.next.group.group_pk, current.group.group_pk);
+        assert_ne!(rotated.next_group_id, rotated.previous_group_id);
         assert_eq!(rotated.next.group.members.len(), 3);
-        assert_ne!(rotated.next.group.group_pk, current.group.group_pk);
+        assert_ne!(rotated.next.shares, current.shares);
+    }
+
+    #[test]
+    fn rotate_keyset_allows_threshold_and_count_change() {
+        let current = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        let rotated = rotate_keyset_dealer(
+            &current.group,
+            RotateKeysetRequest {
+                shares: current.shares[..2].to_vec(),
+                threshold: 3,
+                count: 5,
+            },
+        )
+        .expect("rotate");
+
+        assert_eq!(rotated.next.group.group_pk, current.group.group_pk);
+        assert_eq!(rotated.next.group.threshold, 3);
+        assert_eq!(rotated.next.group.members.len(), 5);
+        assert_eq!(rotated.next.shares.len(), 5);
+    }
+
+    #[test]
+    fn rotated_group_rejects_old_shares() {
+        let current = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        let rotated = rotate_keyset_dealer(
+            &current.group,
+            RotateKeysetRequest {
+                shares: current.shares[..2].to_vec(),
+                threshold: 2,
+                count: 3,
+            },
+        )
+        .expect("rotate");
+
+        assert!(verify_share(&current.shares[0], &rotated.next.group).is_err());
+        assert!(verify_share(&rotated.next.shares[0], &rotated.next.group).is_ok());
+    }
+
+    #[test]
+    fn rotated_shares_recover_same_signing_key() {
+        let current = create_keyset(CreateKeysetConfig {
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create");
+
+        let original = recover_key(&RecoverKeyInput {
+            group: current.group.clone(),
+            shares: current.shares[..2].to_vec(),
+        })
+        .expect("recover original");
+
+        let rotated = rotate_keyset_dealer(
+            &current.group,
+            RotateKeysetRequest {
+                shares: current.shares[..2].to_vec(),
+                threshold: 2,
+                count: 4,
+            },
+        )
+        .expect("rotate");
+
+        let recovered = recover_key(&RecoverKeyInput {
+            group: rotated.next.group.clone(),
+            shares: rotated.next.shares[..2].to_vec(),
+        })
+        .expect("recover rotated");
+
+        assert_eq!(recovered.signing_key32, original.signing_key32);
     }
 }

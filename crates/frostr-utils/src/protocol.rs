@@ -6,8 +6,7 @@ use bifrost_codec::{
 };
 use bifrost_core::types::{
     Bytes32, DerivedPublicNonce, EcdhPackage, GroupPackage, OnboardRequest, OnboardResponse,
-    PartialSigPackage, SharePackage,
-    SignSessionPackage, SignatureEntry,
+    PartialSigPackage, SharePackage, SignSessionPackage, SignatureEntry,
 };
 use bifrost_core::{
     combine_ecdh_packages, combine_signatures, create_ecdh_package, create_partial_sig_package,
@@ -132,14 +131,11 @@ pub fn decode_onboard_response_event(
     if !has_exact_local_recipient_tag(event, expected_local_pubkey32_hex) {
         return Ok(None);
     }
-    let plaintext = match decrypt_content_from_peer(
-        share_seckey,
-        expected_peer_pubkey32_hex,
-        &event.content,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
+    let plaintext =
+        match decrypt_content_from_peer(share_seckey, expected_peer_pubkey32_hex, &event.content) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
     let envelope = match decode_bridge_envelope(&plaintext) {
         Ok(value) => value,
         Err(_) => return Ok(None),
@@ -148,9 +144,11 @@ pub fn decode_onboard_response_event(
         return Ok(None);
     }
     match envelope.payload {
-        BridgePayload::OnboardResponse(wire) => <OnboardResponse as TryFrom<OnboardResponseWire>>::try_from(wire)
-            .map(Some)
-            .map_err(|e| FrostUtilsError::Codec(e.to_string())),
+        BridgePayload::OnboardResponse(wire) => {
+            <OnboardResponse as TryFrom<OnboardResponseWire>>::try_from(wire)
+                .map(Some)
+                .map_err(|e| FrostUtilsError::Codec(e.to_string()))
+        }
         BridgePayload::Error(err) => Err(FrostUtilsError::VerificationFailed(err.message)),
         _ => Ok(None),
     }
@@ -338,7 +336,11 @@ fn calc_padded_len(unpadded_len: usize) -> FrostUtilsResult<usize> {
         return Ok(32);
     }
     let next_power = 1usize << ((usize::BITS - (unpadded_len - 1).leading_zeros()) as usize);
-    let chunk = if next_power <= 256 { 32 } else { next_power / 8 };
+    let chunk = if next_power <= 256 {
+        32
+    } else {
+        next_power / 8
+    };
     Ok(chunk * (((unpadded_len - 1) / chunk) + 1))
 }
 
@@ -374,7 +376,11 @@ fn unpad_message(padded: &[u8]) -> FrostUtilsResult<String> {
     String::from_utf8(unpadded.to_vec()).map_err(|_| FrostUtilsError::DecryptionFailed)
 }
 
-fn hmac_aad(hmac_key: &[u8; 32], nonce32: &[u8; 32], ciphertext: &[u8]) -> FrostUtilsResult<[u8; 32]> {
+fn hmac_aad(
+    hmac_key: &[u8; 32],
+    nonce32: &[u8; 32],
+    ciphertext: &[u8],
+) -> FrostUtilsResult<[u8; 32]> {
     let mut mac = hmac::Hmac::<Sha256>::new_from_slice(hmac_key)
         .map_err(|e| FrostUtilsError::Crypto(format!("hmac init failed: {e}")))?;
     mac.update(nonce32);
@@ -533,8 +539,15 @@ mod tests {
         let local_share = bundle.shares[0].clone();
         let inviter_share = bundle.shares[1].clone();
         let inviter_secret = SecretKey::from_slice(&inviter_share.seckey).expect("inviter secret");
-        let inviter_pubkey32 = hex::encode(&inviter_secret.public_key().to_encoded_point(false).x().expect("x")[..]);
-        let local_pubkey32 = hex::encode(local_pubkey_from_share(&local_share).expect("local pubkey"));
+        let inviter_pubkey32 = hex::encode(
+            &inviter_secret
+                .public_key()
+                .to_encoded_point(false)
+                .x()
+                .expect("x")[..],
+        );
+        let local_pubkey32 =
+            hex::encode(local_pubkey_from_share(&local_share).expect("local pubkey"));
         let request_id = generate_opaque_request_id();
         let bootstrap_nonces = vec![DerivedPublicNonce {
             binder_pn: [7u8; 33],
@@ -550,8 +563,9 @@ mod tests {
             &bootstrap_nonces,
         )
         .expect("build request");
-        let plaintext = decrypt_content_from_peer(inviter_share.seckey, &local_pubkey32, &event.content)
-            .expect("decrypt request");
+        let plaintext =
+            decrypt_content_from_peer(inviter_share.seckey, &local_pubkey32, &event.content)
+                .expect("decrypt request");
         let envelope = decode_bridge_envelope(&plaintext).expect("decode request");
         assert_eq!(envelope.request_id, request_id);
         let response = OnboardResponse {

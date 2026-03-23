@@ -4,8 +4,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bifrost_app::runtime::{
-    AppConfig, AppOptions, DeviceLock, EncryptedFileStore, ResolvedAppConfig,
-    begin_run, complete_clean_run, expand_tilde, inspect_state_health, load_config,
+    AppConfig, AppOptions, DeviceLock, EncryptedFileStore, ResolvedAppConfig, begin_run,
+    complete_clean_run, expand_tilde, inspect_state_health, load_config,
     load_or_init_signer_resolved, load_share, resolve_config,
 };
 use bifrost_codec::package::{encode_group_package_json, encode_share_package_json};
@@ -233,7 +233,10 @@ fn load_or_init_signer_discards_volatile_state_after_dirty_restart_and_applies_p
         .into_iter()
         .find(|entry| entry.pubkey == peer)
         .expect("peer permission state");
-    assert_eq!(peer_state.manual_override.request.sign, PolicyOverrideValue::Deny);
+    assert_eq!(
+        peer_state.manual_override.request.sign,
+        PolicyOverrideValue::Deny
+    );
     assert!(!peer_state.effective_policy.request.sign);
 
     let _ = fs::remove_file(resolved.state_path);

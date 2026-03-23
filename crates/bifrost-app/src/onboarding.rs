@@ -1,7 +1,7 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::Path;
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bifrost_bridge_tokio::{NostrSdkAdapter, RelayAdapter};
@@ -76,22 +76,19 @@ where
     let local_pubkey_hex = hex::encode(&local_pubkey[1..]);
     let request_id = generate_opaque_request_id();
     let event_kind = DeviceConfig::default().event_kind;
-    let bootstrap_seed = generate_onboarding_bootstrap_seed(
+    let bootstrap_seed =
+        generate_onboarding_bootstrap_seed(share_secret, NoncePoolConfig::default().pool_size)
+            .map_err(|e| anyhow!(e.to_string()))?;
+    let filter = onboarding_filter(event_kind, &peer_pubkey, &local_pubkey_hex)?;
+    let request_event = build_onboard_request_event(
         share_secret,
-        NoncePoolConfig::default().pool_size,
+        &peer_pubkey,
+        event_kind,
+        &request_id,
+        now_unix_secs(),
+        &bootstrap_seed.request_nonces,
     )
     .map_err(|e| anyhow!(e.to_string()))?;
-    let filter = onboarding_filter(event_kind, &peer_pubkey, &local_pubkey_hex)?;
-    let request_event =
-        build_onboard_request_event(
-            share_secret,
-            &peer_pubkey,
-            event_kind,
-            &request_id,
-            now_unix_secs(),
-            &bootstrap_seed.request_nonces,
-        )
-        .map_err(|e| anyhow!(e.to_string()))?;
 
     let mut adapter = adapter;
     adapter.connect().await?;
@@ -268,7 +265,11 @@ fn validate_onboarding_result(
     peer_pubkey: &str,
 ) -> Result<()> {
     let expected_local = derive_member_pubkey(share_seckey)?;
-    let Some(local_member) = group.members.iter().find(|member| member.pubkey == expected_local) else {
+    let Some(local_member) = group
+        .members
+        .iter()
+        .find(|member| member.pubkey == expected_local)
+    else {
         bail!("onboard response group is missing the local share pubkey");
     };
     if local_member.pubkey != expected_local {
@@ -348,7 +349,13 @@ where
         ) {
             Ok(Some(response)) => return Ok(response),
             Ok(None) => continue,
-            Err(err) => return Err(anyhow!("onboarding rejected by peer {}: {}", peer_pubkey, err)),
+            Err(err) => {
+                return Err(anyhow!(
+                    "onboarding rejected by peer {}: {}",
+                    peer_pubkey,
+                    err
+                ));
+            }
         }
     }
 }
@@ -479,7 +486,9 @@ mod tests {
             &bootstrap_seed.request_nonces,
         )
         .expect("build request");
-        let outbound = inviter.process_event(&event).expect("process onboard request");
+        let outbound = inviter
+            .process_event(&event)
+            .expect("process onboard request");
         assert_eq!(outbound.len(), 1);
     }
 }

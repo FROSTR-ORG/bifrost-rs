@@ -11,8 +11,8 @@ use bifrost_router::{
 };
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, DeviceStatus,
-    OperationFailure, OperationFailureCode, PeerStatus, PersistenceHint, RuntimeMetadata,
-    RuntimeReadiness, RuntimeStatusSummary, SigningDevice, PeerPermissionState,
+    OperationFailure, OperationFailureCode, PeerPermissionState, PeerStatus, PersistenceHint,
+    RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary, SigningDevice,
 };
 use nostr::{Event, Filter};
 use nostr_sdk::{Client, RelayPoolNotification};
