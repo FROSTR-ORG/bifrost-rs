@@ -46,7 +46,7 @@
 
 - `bifrost-rs` exports `bifrost_app::host` as the reusable host/listen/control layer.
 - Runnable shell binaries now live in `repos/igloo-shell`.
-- `igloo-shell` owns operator CLI/TUI/invite orchestration on top of the shared host layer.
+- `igloo-shell` owns operator CLI/invite orchestration on top of the shared host layer.
 - `bifrost-devtools` owns developer relay/keygen/e2e orchestration.
 - `execute_command(...)` is the typed host executor; `run_command(...)` is the thin stdout wrapper for shell binaries.
 

@@ -28,7 +28,7 @@ Start with:
 
 - `bifrost_app::host` is the reusable host/listen/control layer consumed by `igloo-shell`
 - hosted clients such as `igloo-chrome` use signer-owned APIs like `runtime_status()`, `prepare_sign()`, `prepare_ecdh()`, `drain_runtime_events()`, and `wipe_state()`
-- Operator CLI/TUI flows belong to `repos/igloo-shell`
+- Operator CLI flows belong to `repos/igloo-shell`
 - Developer relay, keygen, and runtime shell e2e belong to `bifrost-devtools`
 
 ## 4. Local Verification

@@ -12,7 +12,7 @@ This file gives working guidance for agent-driven changes inside `repos/bifrost-
 - onboarding/invite encoding utilities
 - WASM and Tokio bridge surfaces
 
-It does not own the operator shell surface. `igloo-shell` owns the operator CLI/TUI; `bifrost-devtools` in this repo owns developer relay, keygen, and shell-side devnet/e2e flows.
+It does not own the operator shell surface. `igloo-shell` owns the operator CLI; `bifrost-devtools` in this repo owns developer relay, keygen, and shell-side devnet/e2e flows.
 
 ## Build And Test Commands
 

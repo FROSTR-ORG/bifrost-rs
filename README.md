@@ -37,7 +37,7 @@ Rust implementation of the FROSTR threshold-signing stack.
 
 Shell/operator workflows are no longer owned by `bifrost-rs`.
 
-- Use `repos/igloo-shell` for operator CLI, TUI, `bfshare` / `bfonboard` / `bfprofile` workflows, and managed-profile UX.
+- Use `repos/igloo-shell` for operator CLI, `bfshare` / `bfonboard` / `bfprofile` workflows, and managed-profile UX.
 - Use `bifrost-devtools` in this repo for developer relay, keygen, and shell runtime e2e flows.
 - Use `bifrost-rs` directly for library, signer, router, bridge, and WASM work.
 
