@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::form_urlencoded::{Serializer, parse as parse_urlencoded};
 
+use bifrost_codec::wire::GroupPackageWire;
 use bifrost_core::types::{
+    GroupPackage,
     MethodPolicy, MethodPolicyOverride, PeerPolicyOverride, PeerScopedPolicyProfile,
     PolicyOverrideValue,
 };
@@ -103,12 +105,6 @@ pub struct BfRemotePeerPolicyObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BfGroupMember {
-    pub index: u16,
-    pub share_public_key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BfSharePayload {
     pub share_secret: String,
     pub relays: Vec<String>,
@@ -133,20 +129,12 @@ pub struct BfProfileDevice {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BfProfileGroup {
-    pub keyset_name: String,
-    pub group_public_key: String,
-    pub threshold: u16,
-    pub total_count: u16,
-    pub members: Vec<BfGroupMember>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BfProfilePayload {
     pub profile_id: String,
     pub version: u8,
+    pub keyset_name: String,
     pub device: BfProfileDevice,
-    pub group: BfProfileGroup,
+    pub group_package: GroupPackageWire,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,8 +151,9 @@ pub struct EncryptedProfileBackupDevice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedProfileBackup {
     pub version: u8,
+    pub keyset_name: String,
     pub device: EncryptedProfileBackupDevice,
-    pub group: BfProfileGroup,
+    pub group_package: GroupPackageWire,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +267,7 @@ pub fn create_encrypted_profile_backup(
     let normalized = normalize_profile_payload(payload)?;
     Ok(EncryptedProfileBackup {
         version: normalized.version,
+        keyset_name: normalized.keyset_name,
         device: EncryptedProfileBackupDevice {
             name: normalized.device.name,
             share_public_key: derive_share_public_key_hex(&normalized.device.share_secret)?,
@@ -285,7 +275,7 @@ pub fn create_encrypted_profile_backup(
             remote_peer_policy_observations: normalized.device.remote_peer_policy_observations,
             relays: normalized.device.relays,
         },
-        group: normalized.group,
+        group_package: normalized.group_package,
     })
 }
 
@@ -401,32 +391,13 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
             "device name must be non-empty".to_string(),
         ));
     }
-    let keyset_name = payload.group.keyset_name.trim();
+    let keyset_name = payload.keyset_name.trim();
     if keyset_name.is_empty() {
         return Err(FrostUtilsError::InvalidInput(
             "keyset name must be non-empty".to_string(),
         ));
     }
-    let threshold = payload.group.threshold;
-    let total_count = payload.group.total_count;
-    if threshold == 0 || total_count == 0 || threshold > total_count {
-        return Err(FrostUtilsError::InvalidInput(
-            "invalid threshold or total_count".to_string(),
-        ));
-    }
-    let mut members = payload
-        .group
-        .members
-        .iter()
-        .map(normalize_group_member)
-        .collect::<FrostUtilsResult<Vec<_>>>()?;
-    members.sort_by_key(|member| member.index);
-    members.dedup_by_key(|member| member.index);
-    if members.is_empty() || members.len() != total_count as usize {
-        return Err(FrostUtilsError::InvalidInput(
-            "group members must exactly match total_count".to_string(),
-        ));
-    }
+    let group = normalize_group_package(&payload.group_package)?;
     let manual_peer_policy_overrides = payload
         .device
         .manual_peer_policy_overrides
@@ -446,6 +417,7 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
         } else {
             payload.version
         },
+        keyset_name: keyset_name.to_string(),
         device: BfProfileDevice {
             name: device_name.to_string(),
             share_secret: normalize_hex32(&payload.device.share_secret, "share secret")?,
@@ -453,13 +425,7 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
             remote_peer_policy_observations,
             relays: normalize_relays(&payload.device.relays)?,
         },
-        group: BfProfileGroup {
-            keyset_name: keyset_name.to_string(),
-            group_public_key: normalize_hex32(&payload.group.group_public_key, "group public key")?,
-            threshold,
-            total_count,
-            members,
-        },
+        group_package: group,
     };
     let expected_profile_id = derive_profile_id_from_share_secret(&normalized.device.share_secret)?;
     if normalized.profile_id != expected_profile_id {
@@ -479,31 +445,20 @@ fn normalize_profile_backup(
             "backup device name must be non-empty".to_string(),
         ));
     }
-    let keyset_name = backup.group.keyset_name.trim();
+    let keyset_name = backup.keyset_name.trim();
     if keyset_name.is_empty() {
         return Err(FrostUtilsError::InvalidInput(
             "backup keyset name must be non-empty".to_string(),
         ));
     }
-    let mut members = backup
-        .group
-        .members
-        .iter()
-        .map(normalize_group_member)
-        .collect::<FrostUtilsResult<Vec<_>>>()?;
-    members.sort_by_key(|member| member.index);
-    members.dedup_by_key(|member| member.index);
-    if members.is_empty() || members.len() != backup.group.total_count as usize {
-        return Err(FrostUtilsError::InvalidInput(
-            "backup members must exactly match total_count".to_string(),
-        ));
-    }
+    let group_package = normalize_group_package(&backup.group_package)?;
     Ok(EncryptedProfileBackup {
         version: if backup.version == 0 {
             BF_PACKAGE_VERSION
         } else {
             backup.version
         },
+        keyset_name: keyset_name.to_string(),
         device: EncryptedProfileBackupDevice {
             name: device_name.to_string(),
             share_public_key: normalize_hex32(&backup.device.share_public_key, "share public key")?,
@@ -521,13 +476,7 @@ fn normalize_profile_backup(
                 .collect::<FrostUtilsResult<Vec<_>>>()?,
             relays: normalize_relays(&backup.device.relays)?,
         },
-        group: BfProfileGroup {
-            keyset_name: keyset_name.to_string(),
-            group_public_key: normalize_hex32(&backup.group.group_public_key, "group public key")?,
-            threshold: backup.group.threshold,
-            total_count: backup.group.total_count,
-            members,
-        },
+        group_package,
     })
 }
 
@@ -688,19 +637,14 @@ pub fn core_method_policy_to_bf(policy: &MethodPolicy) -> BfMethodPolicy {
     }
 }
 
-fn normalize_group_member(member: &BfGroupMember) -> FrostUtilsResult<BfGroupMember> {
-    if member.index == 0 {
-        return Err(FrostUtilsError::InvalidInput(
-            "group member index must be positive".to_string(),
-        ));
-    }
-    Ok(BfGroupMember {
-        index: member.index,
-        share_public_key: normalize_hex32(
-            &member.share_public_key,
-            "group member share public key",
-        )?,
-    })
+fn normalize_group_package(group: &GroupPackageWire) -> FrostUtilsResult<GroupPackageWire> {
+    let parsed: GroupPackage = group
+        .clone()
+        .try_into()
+        .map_err(|e: bifrost_codec::CodecError| {
+            FrostUtilsError::InvalidInput(format!("Invalid group package: {e}"))
+        })?;
+    Ok(GroupPackageWire::from(parsed))
 }
 
 fn normalize_relays(relays: &[String]) -> FrostUtilsResult<Vec<String>> {
@@ -1268,24 +1212,23 @@ mod tests {
             profile_id: derive_profile_id_from_share_secret(&device.share_secret)
                 .expect("profile id"),
             version: BF_PACKAGE_VERSION,
+            keyset_name: "Alpha".to_string(),
             device,
-            group: BfProfileGroup {
-                keyset_name: "Alpha".to_string(),
-                group_public_key: "33".repeat(32),
+            group_package: GroupPackageWire {
+                group_pk: "33".repeat(32),
                 threshold: 2,
-                total_count: 3,
                 members: vec![
-                    BfGroupMember {
-                        index: 1,
-                        share_public_key: "44".repeat(32),
+                    bifrost_codec::wire::MemberPackageWire {
+                        idx: 1,
+                        pubkey: format!("02{}", "44".repeat(32)),
                     },
-                    BfGroupMember {
-                        index: 2,
-                        share_public_key: "55".repeat(32),
+                    bifrost_codec::wire::MemberPackageWire {
+                        idx: 2,
+                        pubkey: format!("03{}", "55".repeat(32)),
                     },
-                    BfGroupMember {
-                        index: 3,
-                        share_public_key: "66".repeat(32),
+                    bifrost_codec::wire::MemberPackageWire {
+                        idx: 3,
+                        pubkey: format!("02{}", "66".repeat(32)),
                     },
                 ],
             },
@@ -1347,6 +1290,44 @@ mod tests {
         let decrypted = decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret)
             .expect("decrypt");
         assert_eq!(decrypted, backup);
+    }
+
+    #[test]
+    fn odd_parity_member_pubkeys_survive_profile_and_backup_round_trips() {
+        let profile = sample_profile();
+        let expected_pubkeys = profile
+            .group_package
+            .members
+            .iter()
+            .map(|member| member.pubkey.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            expected_pubkeys.iter().any(|pubkey| pubkey.starts_with("03")),
+            "sample profile must include an odd-parity compressed member pubkey"
+        );
+
+        let encoded = encode_bfprofile_package(&profile, "secret").expect("encode");
+        let decoded = decode_bfprofile_package(&encoded, "secret").expect("decode");
+        let decoded_pubkeys = decoded
+            .group_package
+            .members
+            .iter()
+            .map(|member| member.pubkey.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(decoded_pubkeys, expected_pubkeys);
+
+        let backup = create_encrypted_profile_backup(&profile).expect("backup");
+        let ciphertext =
+            encrypt_profile_backup_content(&backup, &profile.device.share_secret).expect("encrypt");
+        let decrypted = decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret)
+            .expect("decrypt");
+        let backup_pubkeys = decrypted
+            .group_package
+            .members
+            .iter()
+            .map(|member| member.pubkey.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(backup_pubkeys, expected_pubkeys);
     }
 
     #[test]

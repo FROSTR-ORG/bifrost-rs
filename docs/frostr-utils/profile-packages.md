@@ -60,15 +60,15 @@ The outer 64-byte ASCII-hex prefix is the canonical `profile_id`.
 Canonical JSON before encryption with:
 
 - profile id
+- keyset name
 - device name
 - share secret
 - manual peer policy overrides
 - remote peer policy observations
 - relays
-- keyset name
-- group public key
-- threshold / total count
-- member index/share-pubkey list
+- structured `groupPackage`
+
+`groupPackage` is stored losslessly and preserves full compressed member pubkeys. The package/backup layer does not use a shadow `members[index, share_public_key]` schema anymore.
 
 The canonical profile id is:
 
@@ -88,7 +88,7 @@ Encrypted profile backups are Nostr `kind: 10000` events.
 
 - author pubkey: derived from the share secret
 - content: encrypted backup JSON
-- backup JSON excludes the share secret
+- backup JSON excludes the share secret and includes top-level `keysetName` plus structured `groupPackage`
 
 The backup conversation key is derived from the share secret alone with the domain string:
 
