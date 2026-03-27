@@ -2,9 +2,7 @@
 
 This manual covers the runtime configuration shape consumed by `bifrost_app::host` and the hosted signer runtime.
 
-The operator-facing JSON config files, generation flow, and runnable examples are now documented in:
-- `../../igloo-shell/docs/CONFIGURATION.md`
-- `../../igloo-shell/docs/GUIDE.md`
+Host-specific config generation flows, runnable examples, and operator UX are intentionally out of scope for this manual.
 
 ## Runtime Config Semantics
 
@@ -20,7 +18,7 @@ These values are consumed by the shared host layer exported from `bifrost_app::h
 
 ## Important Runtime Options
 
-`options` controls the signer/runtime behavior surfaced by hosted clients such as `igloo-shell` and `igloo-chrome`.
+`options` controls the signer/runtime behavior surfaced by consuming hosts such as native shells and browser hosts.
 
 Relevant fields include:
 - `sign_timeout_secs`

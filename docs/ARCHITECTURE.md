@@ -1,5 +1,7 @@
 # Architecture
 
+This manual covers repo-local architecture only: crate ownership, hosted runtime boundaries, and request flow inside `bifrost-rs`.
+
 ## Crate Responsibilities
 
 ## `bifrost-core`
@@ -42,13 +44,12 @@
 - Pass-through transport adapter (no duplicate routing policy logic outside router/signer).
 - Command dispatch (`sign`, `ecdh`, `ping`, `onboard`) and completion routing.
 
-## Shell boundary
+## Host Boundary
 
 - `bifrost-rs` exports `bifrost_app::host` as the reusable host/listen/control layer.
-- Runnable shell binaries now live in `repos/igloo-shell`.
-- `igloo-shell` owns operator CLI/invite orchestration on top of the shared host layer.
+- Consuming hosts own their own CLI, UI, onboarding, and operator orchestration surfaces.
 - `bifrost-devtools` owns developer relay/keygen/e2e orchestration.
-- `execute_command(...)` is the typed host executor; `run_command(...)` is the thin stdout wrapper for shell binaries.
+- `execute_command(...)` is the typed host executor; `run_command(...)` is the thin stdout wrapper for CLI binaries.
 
 ## Hosted Runtime Contract
 
@@ -65,7 +66,7 @@ Host applications should not infer readiness from snapshot internals, nonce inve
 
 ## Key Data Flow: Sign
 
-1. Caller invokes a shell client such as `igloo-shell sign <message_hex32>`.
+1. Caller invokes a host command that starts a sign operation.
 2. Bridge starts adapter session and subscribes to peer authors plus local recipient `#p`.
 3. Signer creates a sign request, encrypts envelope, and emits events.
 4. Peers process encrypted requests and return encrypted partials.
@@ -74,7 +75,7 @@ Host applications should not infer readiness from snapshot internals, nonce inve
 
 ## Key Data Flow: ECDH
 
-1. Caller invokes a shell client such as `igloo-shell ecdh <pubkey_hex32>`.
+1. Caller invokes a host command that starts an ECDH operation.
 2. Signer creates local ECDH package and requests peer shares.
 3. Signer enforces locked responder semantics for the selected peer set.
 4. Signer validates responses and combines final shared secret.

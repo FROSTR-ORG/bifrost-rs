@@ -45,5 +45,6 @@ cargo check --workspace --offline
 If behavior changes:
 
 1. Update root `README.md` if user-facing behavior changed.
-2. Update technical docs in `docs/`.
+2. Update repo-specific technical docs in `docs/` when crate behavior, runtime contracts, or utility formats change.
+3. Do not duplicate general FROSTR protocol, cryptography, or glossary topics in this repo-local manual set.
 3. Update release/audit artifacts (`RELEASE.md`, `dev/artifacts/current-status.md`, `dev/audit/*`) when relevant.

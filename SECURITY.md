@@ -34,5 +34,5 @@ Security-sensitive areas include:
 ## Security Documentation
 
 - Threat model: `docs/SECURITY-MODEL.md`
-- Cryptography details: `docs/CRYPTOGRAPHY.md`
+- Repo architecture and crate boundaries: `docs/ARCHITECTURE.md`
 - Release security checks: `RELEASE.md`

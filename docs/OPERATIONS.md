@@ -2,8 +2,6 @@
 
 Runtime internals and persistence behavior for `bifrost-rs`.
 
-Shell/operator runbooks now live in `repos/igloo-shell/docs/`.
-
 ## Build and Test Gates
 
 ```bash
@@ -13,14 +11,8 @@ cargo check --workspace --offline
 cargo test --workspace --offline
 ```
 
-## Shell-Owned Runbooks
+## Package and Backup Rules
 
-Use these manuals for runnable commands and local operator workflows:
-- `../../igloo-shell/docs/GUIDE.md`
-- `../../igloo-shell/docs/CONFIGURATION.md`
-- `../../igloo-shell/docs/OPERATIONS.md`
-
-Package/onboarding rules:
 - `bfonboard` is the only onboarding package artifact.
 - `bfprofile` is the full encrypted local device profile package.
 - `bfshare` is the compact encrypted recovery package.
@@ -30,7 +22,7 @@ Package/onboarding rules:
 
 - Device state snapshots: `state_path` from each signer config.
 - Run marker snapshots: `<state_path>.run.json`.
-- Structured shell/runtime logs are documented in `../../igloo-shell/docs/OPERATIONS.md`.
+- Structured runtime logs should be collected by the consuming host according to its own operational surface.
 - `RUST_LOG=...` overrides default crate filters when explicit tuning is needed.
 
 `state-health` reports:
@@ -51,14 +43,10 @@ Dirty restart reason codes and event IDs:
 
 ## Runtime E2E
 
-Preferred operator/runtime e2e is documented in `../../igloo-shell/docs/OPERATIONS.md`.
-Use these current entrypoints:
+Use these current workspace-owned entrypoints:
 
 ```bash
-../igloo-shell/scripts/devnet.sh smoke
-../igloo-shell/scripts/test-node-e2e.sh
-../igloo-shell/scripts/test-tui-e2e.sh
-../igloo-shell/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-<date>.txt
+cargo test --workspace --offline
 ```
 
-`e2e-node` relay preflight behavior is owned by `igloo-shell`.
+Host-specific runtime E2E and soak workflows are intentionally owned by the consuming host repositories rather than this manual.

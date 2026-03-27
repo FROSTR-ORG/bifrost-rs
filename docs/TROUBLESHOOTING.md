@@ -16,11 +16,11 @@ Symptoms:
 - `read config ... No such file or directory`
 
 Fix:
-- Confirm `--config <path>` points to a generated `igloo-shell-<name>.json` file.
-- Re-generate artifacts if missing:
+- Confirm `--config <path>` points to a valid generated runtime config file.
+- Re-generate local artifacts if missing:
 
 ```bash
-cargo run -p bifrost-devtools --manifest-path ../../bifrost-rs/Cargo.toml -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
+cargo run -p bifrost-devtools --manifest-path Cargo.toml -- keygen --out-dir ./data --threshold 2 --count 3 --relay ws://127.0.0.1:8194
 ```
 
 ## Relay Connection Failures
@@ -28,8 +28,7 @@ cargo run -p bifrost-devtools --manifest-path ../../bifrost-rs/Cargo.toml -- key
 Checks:
 
 ```bash
-cargo run -p bifrost-devtools --manifest-path ../../bifrost-rs/Cargo.toml -- relay --host 127.0.0.1 --port 8194
-cargo run -p igloo-shell-cli --manifest-path ../../igloo-shell/Cargo.toml -- --verbose --config ./data/igloo-shell-alice.json status
+cargo run -p bifrost-devtools --manifest-path Cargo.toml -- relay --host 127.0.0.1 --port 8194
 ```
 
 Typical causes:
@@ -40,17 +39,9 @@ Typical causes:
 ## `ping` / `sign` / `ecdh` Timeouts
 
 Checks:
-- confirm peer listeners are running with `listen`
+- confirm the consuming host has active peer listeners/runtimes
 - confirm all peers share the same `event_kind`
 - confirm peer pubkeys in config match group members
-
-Run baseline:
-
-```bash
-cargo run -p igloo-shell-cli --manifest-path ../../igloo-shell/Cargo.toml -- --verbose --config ./data/igloo-shell-bob.json listen
-cargo run -p igloo-shell-cli --manifest-path ../../igloo-shell/Cargo.toml -- --verbose --config ./data/igloo-shell-carol.json listen
-cargo run -p igloo-shell-cli --manifest-path ../../igloo-shell/Cargo.toml -- --verbose --config ./data/igloo-shell-alice.json ping <peer_pubkey_hex>
-```
 
 ## State Corruption Errors
 
@@ -67,6 +58,6 @@ Fix:
 If blocked, collect:
 - command run
 - exact stderr output
-- structured shell/runtime logs (`--verbose` or `--debug`)
+- structured runtime logs
 - relay logs
 - active config JSON (redact sensitive fields)

@@ -88,19 +88,18 @@ Snapshot exports remain useful for persistence and diagnostics, but not as the n
 
 The bridge API returns JSON strings for structured payloads; `_json` suffixes are not used in method names.
 
-## Shell surfaces
+## Host-facing surfaces
 
-Runnable shell binaries now live in `repos/igloo-shell`:
-- `igloo-shell`: operator CLI for managed profiles, `bfprofile` / `bfshare` / `bfonboard`, backup recovery/publish, and runtime control
-- `igloo-shell-tui`: terminal dashboard
-- `bifrost-devtools`: developer relay, keygen, and shell e2e orchestration
+`bifrost-rs` exports reusable host and runtime APIs for consuming hosts and developer tools.
 
-`bifrost-rs` exports the reusable host and runtime APIs behind those binaries; it does not own runnable shell binaries directly.
+Examples:
+- host CLIs and UI surfaces in consuming repositories
+- `bifrost-devtools` for developer relay, key generation, and runtime orchestration
 
 ## `bifrost_app::host`
 
 Reusable host/listen/control layer (`crates/bifrost-app/src/host.rs`):
-- `execute_command(...)` returns typed host results for shell clients.
+- `execute_command(...)` returns typed host results for native-style host callers.
 - `run_command(...)` is the thin stdout-printing wrapper used by CLI binaries.
 - Unix control-socket commands now cover:
   - status and runtime status

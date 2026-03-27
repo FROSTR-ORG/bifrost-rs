@@ -1,8 +1,8 @@
 # Security Model
 
-Threat model and control map for `bifrost-rs`.
+Threat model and control map for `bifrost-rs` crates and hosted runtime boundaries.
 
-## System Boundary
+## Repository Boundary
 
 - Encrypted peer protocol over relay transport (`bifrost-router` + platform bridge adapter).
 - Stateful cryptographic engine (`bifrost-signer`).
@@ -42,6 +42,6 @@ Threat model and control map for `bifrost-rs`.
 
 ## Related Docs
 
-- `SECURITY.md`
-- `docs/CRYPTOGRAPHY.md`
-- `docs/PROTOCOL.md`
+- `../SECURITY.md`
+- `ARCHITECTURE.md`
+- `API.md`

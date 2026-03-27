@@ -860,7 +860,9 @@ mod tests {
     use std::fs;
     use tokio::sync::mpsc;
 
-    use crate::runtime::{AppConfig, AppOptions, PeerConfig};
+    use crate::runtime::{
+        AppConfig, AppOptions, load_or_init_signer_resolved, resolve_config,
+    };
 
     struct MockRelayAdapter {
         inbound_rx: mpsc::UnboundedReceiver<Event>,
@@ -970,6 +972,8 @@ mod tests {
             state_path: store_path,
             relays: vec!["ws://127.0.0.1:8194".to_string()],
             peers: vec![],
+            manual_policy_overrides: Default::default(),
+            remote_policy_observations: Default::default(),
             options: AppOptions::default(),
         };
         HostFixture {
@@ -1029,11 +1033,10 @@ mod tests {
                 .members
                 .iter()
                 .filter(|member| member.idx != bundle.shares[0].idx)
-                .map(|member| PeerConfig {
-                    pubkey: hex::encode(&member.pubkey[1..]),
-                    policy: PeerPolicy::default(),
-                })
+                .map(|member| hex::encode(&member.pubkey[1..]))
                 .collect(),
+            manual_policy_overrides: Default::default(),
+            remote_policy_observations: Default::default(),
             options: AppOptions::default(),
         };
         let worker = tokio::spawn(async move {
@@ -1098,11 +1101,10 @@ mod tests {
                     .members
                     .iter()
                     .filter(|member| member.idx != bundle.shares[0].idx)
-                    .map(|member| PeerConfig {
-                        pubkey: hex::encode(&member.pubkey[1..]),
-                        policy: PeerPolicy::default(),
-                    })
+                    .map(|member| hex::encode(&member.pubkey[1..]))
                     .collect(),
+                manual_policy_overrides: Default::default(),
+                remote_policy_observations: Default::default(),
                 options: AppOptions::default(),
             })
             .expect("serialize config"),
@@ -1480,12 +1482,7 @@ mod tests {
     #[tokio::test]
     async fn execute_control_command_round_trips_live_ping_onboard_sign_and_ecdh() {
         let (fixture, worker) = host_live_fixture().await;
-        let peer_pubkeys = fixture
-            .config
-            .peers
-            .iter()
-            .map(|peer| peer.pubkey.clone())
-            .collect::<Vec<_>>();
+        let peer_pubkeys = fixture.config.peers.clone();
         let target_peer = peer_pubkeys[0].clone();
 
         for peer in &peer_pubkeys {
@@ -1671,26 +1668,17 @@ mod tests {
             other => panic!("unexpected policy update result: {other:?}"),
         }
 
-        let runtime_status = execute_command(&fixture.config_path, HostCommand::RuntimeStatus, log)
-            .await
-            .expect("runtime status after update");
-        match runtime_status {
-            HostCommandResult::RuntimeStatus { runtime_status } => {
-                let peer_policy = runtime_status
-                    .get("peer_permission_states")
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|entries| {
-                        entries.iter().find(|entry| {
-                            entry.get("pubkey").and_then(serde_json::Value::as_str)
-                                == Some(peer.as_str())
-                        })
-                    })
-                    .expect("peer policy entry");
-                assert_eq!(peer_policy["pubkey"], peer);
-                assert_eq!(peer_policy["effective_policy"]["respond"]["sign"], true);
-            }
-            other => panic!("unexpected runtime status result: {other:?}"),
-        }
+        let config = load_config(&fixture.config_path).expect("reload config");
+        let resolved = resolve_config(&config).expect("resolve config");
+        let store = EncryptedFileStore::new(resolved.state_path.clone(), resolved.share.clone());
+        let signer = load_or_init_signer_resolved(&resolved, &store).expect("load signer");
+        let peer_policy = signer
+            .peer_permission_states()
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer policy entry");
+        assert_eq!(peer_policy.pubkey, peer);
+        assert!(peer_policy.effective_policy.respond.sign);
 
         let health = execute_command(&fixture.config_path, HostCommand::StateHealth, log)
             .await
@@ -1719,7 +1707,7 @@ mod tests {
             HostCommand::SetPolicyOverride {
                 peer: {
                     let config = load_config(&fixture.config_path).expect("load config");
-                    config.peers[0].pubkey.clone()
+                    config.peers[0].clone()
                 },
                 policy_json: "{".to_string(),
             },
@@ -1734,12 +1722,6 @@ mod tests {
 
     #[test]
     fn print_host_result_handles_all_non_network_variants() {
-        assert!(
-            print_host_result(&HostCommandResult::RuntimeStatus {
-                runtime_status: json!({}),
-            })
-            .is_ok()
-        );
         assert!(
             print_host_result(&HostCommandResult::StateHealth {
                 report: json!({"clean": true}),

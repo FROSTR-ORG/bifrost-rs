@@ -12,17 +12,19 @@ Migrate `bifrost-ts` to Rust with behavior parity and stronger safety.
 2. `CONTRIBUTING.md`
 3. `SECURITY.md`
 4. `TESTING.md`
-5. `RELEASES.md`
+5. `RELEASE.md`
 6. `docs/INDEX.md`
-7. `docs/GUIDE.md`
-8. `dev/artifacts/current-status.md`
-9. `dev/planner/README.md`
-10. `dev/planner/04-backlog.md`
+7. `docs/API.md`
+8. `docs/ARCHITECTURE.md`
+9. `dev/artifacts/current-status.md`
+10. `dev/planner/README.md`
+11. `dev/planner/04-backlog.md`
 
 ## Documentation Structure
 
-- `docs/` is the product manual and knowledgebase for `bifrost-rs` users and integrators.
-- Root governance docs (`CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`, `CHANGELOG.md`) define project policy and operational process.
+- Root docs are the entrypoint for project onboarding, testing, release, and contribution workflow.
+- `docs/` is the repo-specific technical manual for `bifrost-rs` crates, runtime contracts, and `frostr-utils`.
+- Root governance docs (`CONTRIBUTING.md`, `TESTING.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`) define project policy and operational process.
 - Agent-oriented planning source-of-truth: `dev/planner/`
 - Agent-oriented execution/context artifacts: `dev/artifacts/`
 
@@ -39,7 +41,7 @@ Migrate `bifrost-ts` to Rust with behavior parity and stronger safety.
 - update test evidence
 - update milestones/risk/decision logs if changed
 5. Only mark backlog item `done` with concrete evidence.
-6. Keep root governance docs (`CONTRIBUTING.md`, `TESTING.md`, `RELEASES.md`, `SECURITY.md`, `CHANGELOG.md`) aligned with implementation reality.
+6. Keep root governance docs (`CONTRIBUTING.md`, `TESTING.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`) aligned with implementation reality.
 
 ## Technical Constraints
 
@@ -59,4 +61,4 @@ Migrate `bifrost-ts` to Rust with behavior parity and stronger safety.
 - Root `.gitignore` ignores build artifacts (`target/`) and common local outputs.
 - Workspace was reset to remove a polluted initial commit; ensure future commits stay clean.
 - `bifrost-transport-ws` remains partially implemented for production reliability features.
-- Canonical technical docs live in `docs/` and must be updated alongside behavior changes.
+- Canonical repo-specific technical docs live in `docs/` and must be updated alongside behavior changes.

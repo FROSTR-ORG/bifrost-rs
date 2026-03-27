@@ -12,7 +12,7 @@ This file gives working guidance for agent-driven changes inside `repos/bifrost-
 - onboarding/invite encoding utilities
 - WASM and Tokio bridge surfaces
 
-It does not own the operator shell surface. `igloo-shell` owns the operator CLI; `bifrost-devtools` in this repo owns developer relay, keygen, and shell-side devnet/e2e flows.
+It does not own any host-specific operator UI or CLI surface. `bifrost-devtools` in this repo owns developer relay, key generation, and runtime orchestration flows.
 
 ## Build And Test Commands
 
@@ -36,16 +36,6 @@ cargo test -p bifrost-signer -p bifrost-router -p bifrost-bridge-wasm -p bifrost
 cargo fmt
 ```
 
-For shell/operator workflows, use `repos/igloo-shell` instead:
-
-```bash
-cd ../igloo-shell
-cargo check --workspace
-scripts/devnet.sh smoke
-scripts/test-node-e2e.sh
-scripts/test-tui-e2e.sh
-```
-
 ## Current Architecture
 
 ### Core crates
@@ -59,14 +49,14 @@ scripts/test-tui-e2e.sh
 ### Host and bridge crates
 
 - `bifrost-app`: reusable host layer. `bifrost_app::host` owns config bootstrap, bridge startup, control socket serving, and typed command execution.
-- `bifrost-bridge-wasm`: browser-facing bridge used by `igloo-chrome`.
+- `bifrost-bridge-wasm`: browser-facing bridge for external host integrations.
 - `bifrost-bridge-tokio`: Tokio runtime bridge and Unix control socket support.
 
 ## Ownership Rules
 
 - Keep `bifrost-rs` library-first.
-- Do not add new shell/operator workflows here; put them in `repos/igloo-shell`.
-- Keep host logic typed. Presentation and stdout formatting belong in `igloo-shell`, not in reusable host code.
+- Do not add new host-specific operator workflows here.
+- Keep host logic typed. Presentation and stdout formatting belong in consuming hosts, not in reusable host code.
 - `runtime_status()` is the canonical hosted read model.
 - `drain_runtime_events()` is incremental and lossy-safe; clients must recover truth from `runtime_status()`.
 - `prepare_sign()` and `prepare_ecdh()` are the operation-prep APIs. Hosted clients should not infer readiness from snapshots.
@@ -86,6 +76,4 @@ When making architectural changes here, keep these cleanup constraints in mind:
 - `README.md`
 - `docs/ARCHITECTURE.md`
 - `docs/API.md`
-- `docs/PROTOCOL.md`
-- `../igloo-shell/docs/INDEX.md`
-- `../../docs/INDEX.md`
+- `docs/SECURITY-MODEL.md`

@@ -27,7 +27,7 @@
 - host storage
 - host lifecycle or UI state
 
-Those responsibilities belong to host layers such as `igloo-shared` and `igloo-shell`.
+Those responsibilities belong to consuming host layers.
 
 ## Package Shapes
 

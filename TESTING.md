@@ -14,17 +14,11 @@ cargo test --workspace --offline
 
 ## Runtime E2E
 
-Shell-owned runtime e2e now lives in `repos/igloo-shell`.
-
 Observability controls:
-- hosted shell JSON logs around `bifrost_app::host`
+- hosted JSON logs around `bifrost_app::host`
 - `RUST_LOG=...` remains the low-level override when explicit crate filtering is needed
 
-Use:
-- `../igloo-shell/scripts/devnet.sh smoke`
-- `../igloo-shell/scripts/test-node-e2e.sh`
-- `../igloo-shell/scripts/test-tui-e2e.sh`
-- `../igloo-shell/dev/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-$(date +%F).txt`
+Host-owned runtime E2E, soak, and operator workflows are intentionally outside this repository.
 
 ## Coverage Report
 
@@ -57,9 +51,9 @@ Current test classes in repo:
   - `crates/bifrost-app/tests/daemon_lifecycle.rs`
   - `crates/bifrost-app/tests/onboarding_runtime.rs`
   - `crates/bifrost-app/tests/state_store_limits.rs`
-  - `crates/bifrost-app/tests/run_marker_v2.rs`
-  - `crates/bifrost-signer/tests/runtime_roundtrip.rs`
-- End-to-end/runtime tests: owned by `repos/igloo-shell`
+- `crates/bifrost-app/tests/run_marker_v2.rs`
+- `crates/bifrost-signer/tests/runtime_roundtrip.rs`
+- End-to-end/runtime host tests: owned by consuming host projects
 
 Coverage status:
 

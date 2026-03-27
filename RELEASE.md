@@ -19,17 +19,11 @@ Use semantic versioning:
    - `cargo clippy --workspace --all-targets --offline --no-deps -- -D warnings`
    - `cargo check --workspace --offline`
    - `cargo test --workspace --offline`
-2. Runtime smoke/e2e passes:
-   - `cargo run -p igloo-shell-cli --manifest-path ../igloo-shell/Cargo.toml --offline -- e2e-node --out-dir dev/data --relay ws://127.0.0.1:8194`
-   - `cargo run -p igloo-shell-cli --manifest-path ../igloo-shell/Cargo.toml --offline -- e2e-full --threshold 11 --count 15`
-   - `../igloo-shell/scripts/devnet.sh smoke`
-   - `../igloo-shell/scripts/test-node-e2e.sh`
-   - `../igloo-shell/scripts/test-tui-e2e.sh`
-3. WS forced-fault soak evidence captured:
-   - `../igloo-shell/dev/scripts/ws_soak.sh --iterations 25 --out dev/audit/work/evidence/ws-soak-<date>.txt`
+2. Repository-owned verification gates and runtime integration tests pass.
+3. Any required host-owned runtime smoke/e2e evidence for this release has been collected separately.
 4. Docs are updated:
    - `README.md`
-   - `docs/*` (as applicable)
+   - repo-local `docs/*` manuals that still exist (`API.md`, `ARCHITECTURE.md`, `CONFIGURATION.md`, `OPERATIONS.md`, `TROUBLESHOOTING.md`, `SECURITY-MODEL.md`, `docs/frostr-utils/*`) as applicable
    - `CONTRIBUTING.md`
    - `TESTING.md`
    - `SECURITY.md`
@@ -54,5 +48,5 @@ Confirm:
 
 - no known critical unresolved vulnerabilities
 - recent security-impacting changes include tests
-- security guidance in `SECURITY.md` and `docs/SECURITY-MODEL.md` is still accurate
+- security guidance in `SECURITY.md` and `docs/SECURITY-MODEL.md` is still accurate for this repo
 - `cargo audit` report is attached for the release candidate

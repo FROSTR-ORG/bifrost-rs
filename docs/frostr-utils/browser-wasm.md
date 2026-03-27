@@ -42,5 +42,5 @@ The generated browser module must expose:
 
 - `frostr-utils` owns the package and backup spec.
 - `bifrost-bridge-wasm` exposes that spec to browser hosts.
-- Browser host layers such as `igloo-shared` own relay transport, storage, and app-state orchestration only.
+- Browser host layers own relay transport, storage, and app-state orchestration only.
 - Browser apps should treat the WASM bridge as the authoritative package/backup API and should not maintain parallel JS codecs.

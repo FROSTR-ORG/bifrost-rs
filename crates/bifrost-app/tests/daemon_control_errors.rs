@@ -32,6 +32,8 @@ fn resolved_config() -> ResolvedAppConfig {
         state_path: temp_path("state", "bin"),
         relays: vec!["ws://127.0.0.1:65535".to_string()],
         peers: vec![],
+        manual_policy_overrides: Default::default(),
+        remote_policy_observations: Default::default(),
         options: AppOptions::default(),
     }
 }
