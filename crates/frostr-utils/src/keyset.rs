@@ -22,7 +22,12 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
     )
     .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
 
-    build_keyset_bundle(config.threshold, shares, public_key_package)
+    build_keyset_bundle(
+        config.group_name,
+        config.threshold,
+        shares,
+        public_key_package,
+    )
 }
 
 pub fn rotate_keyset_dealer(
@@ -52,7 +57,12 @@ pub fn rotate_keyset_dealer(
     )
     .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
 
-    let next = build_keyset_bundle(req.threshold, shares, public_key_package)?;
+    let next = build_keyset_bundle(
+        current_group.group_name.clone(),
+        req.threshold,
+        shares,
+        public_key_package,
+    )?;
 
     if next.group.group_pk != current_group.group_pk {
         return Err(FrostUtilsError::VerificationFailed(
@@ -85,6 +95,7 @@ fn validate_keyset_shape(threshold: u16, count: u16) -> FrostUtilsResult<()> {
 }
 
 fn build_keyset_bundle(
+    group_name: String,
     threshold: u16,
     shares: std::collections::BTreeMap<frost::Identifier, frost::keys::SecretShare>,
     public_key_package: frost::keys::PublicKeyPackage,
@@ -137,6 +148,7 @@ fn build_keyset_bundle(
 
     let bundle = KeysetBundle {
         group: GroupPackage {
+            group_name,
             group_pk,
             threshold,
             members,
@@ -157,6 +169,7 @@ mod tests {
     #[test]
     fn create_keyset_builds_valid_bundle() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -168,6 +181,7 @@ mod tests {
     #[test]
     fn rotate_keyset_preserves_group_public_key() {
         let current = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -192,6 +206,7 @@ mod tests {
     #[test]
     fn rotate_keyset_allows_threshold_and_count_change() {
         let current = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -216,6 +231,7 @@ mod tests {
     #[test]
     fn rotated_group_rejects_old_shares() {
         let current = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -238,6 +254,7 @@ mod tests {
     #[test]
     fn rotated_shares_recover_same_signing_key() {
         let current = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })

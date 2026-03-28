@@ -945,6 +945,7 @@ mod tests {
 
     async fn host_fixture_with_state(state: DeviceState) -> HostFixture {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -973,7 +974,6 @@ mod tests {
             relays: vec!["ws://127.0.0.1:8194".to_string()],
             peers: vec![],
             manual_policy_overrides: Default::default(),
-            remote_policy_observations: Default::default(),
             options: AppOptions::default(),
         };
         HostFixture {
@@ -989,6 +989,7 @@ mod tests {
 
     async fn host_live_fixture() -> (HostFixture, tokio::task::JoinHandle<()>) {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -1036,7 +1037,6 @@ mod tests {
                 .map(|member| hex::encode(&member.pubkey[1..]))
                 .collect(),
             manual_policy_overrides: Default::default(),
-            remote_policy_observations: Default::default(),
             options: AppOptions::default(),
         };
         let worker = tokio::spawn(async move {
@@ -1072,6 +1072,7 @@ mod tests {
 
     fn host_config_fixture() -> HostConfigFixture {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -1104,7 +1105,6 @@ mod tests {
                     .map(|member| hex::encode(&member.pubkey[1..]))
                     .collect(),
                 manual_policy_overrides: Default::default(),
-                remote_policy_observations: Default::default(),
                 options: AppOptions::default(),
             })
             .expect("serialize config"),

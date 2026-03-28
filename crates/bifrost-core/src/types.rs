@@ -171,6 +171,7 @@ pub struct MemberPackage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupPackage {
+    pub group_name: String,
     #[serde(with = "serde_fixed_array::bytes32")]
     pub group_pk: IdentityPubkey32,
     pub threshold: u16,
@@ -508,6 +509,7 @@ mod tests {
         };
         let onboard = OnboardResponse {
             group: GroupPackage {
+                group_name: "Test Group".to_string(),
                 group_pk: [1u8; 32],
                 threshold: 2,
                 members: vec![

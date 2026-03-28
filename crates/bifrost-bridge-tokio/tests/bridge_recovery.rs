@@ -74,6 +74,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 #[tokio::test]
 async fn bridge_recovers_from_repeated_next_event_failures_and_completes_rounds() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -194,6 +195,7 @@ async fn bridge_recovers_from_repeated_next_event_failures_and_completes_rounds(
 #[tokio::test]
 async fn bridge_runtime_queries_survive_closed_inbound_stream() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })

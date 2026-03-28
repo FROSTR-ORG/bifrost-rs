@@ -36,7 +36,6 @@ fn resolved_config(
         relays: vec!["ws://127.0.0.1:65535".to_string()],
         peers: vec![],
         manual_policy_overrides: Default::default(),
-        remote_policy_observations: Default::default(),
         options: AppOptions::default(),
     }
 }
@@ -54,6 +53,7 @@ async fn wait_for_socket(socket_path: &PathBuf) {
 #[tokio::test]
 async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -104,6 +104,7 @@ async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
 #[tokio::test]
 async fn daemon_control_admin_commands_roundtrip() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -161,6 +162,7 @@ async fn daemon_control_admin_commands_roundtrip() {
 #[tokio::test]
 async fn daemon_control_runtime_surfaces_roundtrip() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })

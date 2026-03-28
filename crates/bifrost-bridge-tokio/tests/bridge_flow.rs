@@ -62,6 +62,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 #[tokio::test]
 async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })

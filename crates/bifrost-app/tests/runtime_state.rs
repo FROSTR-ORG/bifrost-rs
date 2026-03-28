@@ -44,6 +44,7 @@ fn base_config() -> (
     bifrost_core::types::SharePackage,
 ) {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -68,7 +69,6 @@ fn base_config() -> (
             },
         ))
         .collect(),
-        remote_policy_observations: Default::default(),
         options: AppOptions::default(),
     };
     (resolved, group, share)
@@ -131,6 +131,7 @@ fn expand_tilde_uses_home_only_for_tilde_prefix() {
 #[test]
 fn resolve_config_loads_group_and_share_packages_from_disk() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -154,7 +155,6 @@ fn resolve_config_loads_group_and_share_packages_from_disk() {
         relays: vec!["ws://127.0.0.1:8194".to_string()],
         peers: Vec::new(),
         manual_policy_overrides: Default::default(),
-        remote_policy_observations: Default::default(),
         options: AppOptions::default(),
     };
 
@@ -171,6 +171,7 @@ fn resolve_config_loads_group_and_share_packages_from_disk() {
 fn load_share_supports_tilde_paths() {
     let _guard = home_env_lock().lock().expect("lock HOME env");
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })

@@ -379,6 +379,7 @@ mod tests {
 
         (
             GroupPackage {
+                group_name: "Test Group".to_string(),
                 group_pk,
                 threshold: 2,
                 members,
@@ -429,6 +430,7 @@ mod tests {
         group_pk.copy_from_slice(&group_key[1..]);
 
         let group = GroupPackage {
+            group_name: "Test Group".to_string(),
             group_pk,
             threshold: 2,
             members,

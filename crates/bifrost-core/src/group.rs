@@ -32,6 +32,7 @@ mod tests {
     #[test]
     fn group_id_is_deterministic() {
         let group = GroupPackage {
+            group_name: "Test Group".to_string(),
             group_pk: [2; 32],
             threshold: 2,
             members: vec![

@@ -24,6 +24,7 @@ pub struct MemberPackageWire {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupPackageWire {
+    pub group_name: String,
     pub group_pk: String,
     pub threshold: u16,
     pub members: Vec<MemberPackageWire>,
@@ -174,6 +175,11 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: GroupPackageWire) -> Result<Self, Self::Error> {
+        if value.group_name.trim().is_empty() {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "group name must be non-empty",
+            ));
+        }
         if value.members.is_empty() {
             return Err(crate::error::CodecError::InvalidPayload(
                 "group members must not be empty",
@@ -210,6 +216,7 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
         }
 
         Ok(Self {
+            group_name: value.group_name,
             group_pk: hexbytes::decode(&value.group_pk)?,
             threshold: value.threshold,
             members,
@@ -220,6 +227,7 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
 impl From<GroupPackage> for GroupPackageWire {
     fn from(value: GroupPackage) -> Self {
         Self {
+            group_name: value.group_name,
             group_pk: hexbytes::encode(&value.group_pk),
             threshold: value.threshold,
             members: value.members.into_iter().map(Into::into).collect(),
@@ -844,6 +852,7 @@ mod tests {
     #[test]
     fn group_wire_rejects_member_pubkey32_when_verifying_share33_required() {
         let wire = GroupPackageWire {
+            group_name: "Test Group".to_string(),
             group_pk: hex::encode([1u8; 32]),
             threshold: 1,
             members: vec![MemberPackageWire {
@@ -871,6 +880,57 @@ mod tests {
     }
 
     #[test]
+    fn group_wire_rejects_empty_group_name() {
+        let wire = GroupPackageWire {
+            group_name: String::new(),
+            group_pk: hex::encode([1u8; 32]),
+            threshold: 1,
+            members: vec![MemberPackageWire {
+                idx: 1,
+                pubkey: hex::encode([2u8; 33]),
+            }],
+        };
+        let err: crate::error::CodecError =
+            TryInto::<GroupPackage>::try_into(wire).expect_err("must reject empty group name");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("group name must be non-empty")
+        ));
+    }
+
+    #[test]
+    fn group_wire_json_requires_group_name_field() {
+        let err = serde_json::from_str::<GroupPackageWire>(
+            r#"{
+                "group_pk":"0101010101010101010101010101010101010101010101010101010101010101",
+                "threshold":1,
+                "members":[{"idx":1,"pubkey":"020202020202020202020202020202020202020202020202020202020202020202"}]
+            }"#,
+        )
+        .expect_err("must reject missing group_name");
+        assert!(err.to_string().contains("group_name"));
+    }
+
+    #[test]
+    fn group_wire_rejects_whitespace_only_group_name() {
+        let wire = GroupPackageWire {
+            group_name: "   ".to_string(),
+            group_pk: hex::encode([1u8; 32]),
+            threshold: 1,
+            members: vec![MemberPackageWire {
+                idx: 1,
+                pubkey: hex::encode([2u8; 33]),
+            }],
+        };
+        let err: crate::error::CodecError = TryInto::<GroupPackage>::try_into(wire)
+            .expect_err("must reject whitespace-only group name");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("group name must be non-empty")
+        ));
+    }
+
+    #[test]
     fn onboard_wire_roundtrips_version_and_nonces() {
         let request = OnboardRequest {
             version: 1,
@@ -890,6 +950,7 @@ mod tests {
         let pubkey_a = hex::encode([2u8; 33]);
         let pubkey_b = hex::encode([3u8; 33]);
         let wire = GroupPackageWire {
+            group_name: "Test Group".to_string(),
             group_pk: hex::encode([1u8; 32]),
             threshold: 1,
             members: vec![
@@ -915,6 +976,7 @@ mod tests {
     fn group_wire_rejects_duplicate_member_pubkey() {
         let pubkey = hex::encode([2u8; 33]);
         let wire = GroupPackageWire {
+            group_name: "Test Group".to_string(),
             group_pk: hex::encode([1u8; 32]),
             threshold: 1,
             members: vec![
@@ -942,6 +1004,7 @@ mod tests {
         };
         let wire = OnboardResponseWire {
             group: GroupPackageWire {
+                group_name: "Test Group".to_string(),
                 group_pk: hex::encode([1u8; 32]),
                 threshold: 1,
                 members: vec![MemberPackageWire {

@@ -22,6 +22,7 @@ fn temp_path(name: &str, suffix: &str) -> PathBuf {
 
 fn resolved_config() -> ResolvedAppConfig {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
@@ -33,7 +34,6 @@ fn resolved_config() -> ResolvedAppConfig {
         relays: vec!["ws://127.0.0.1:65535".to_string()],
         peers: vec![],
         manual_policy_overrides: Default::default(),
-        remote_policy_observations: Default::default(),
         options: AppOptions::default(),
     }
 }

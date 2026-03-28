@@ -2238,6 +2238,7 @@ mod tests {
 
     fn fixture(strategy: PeerSelectionStrategy) -> Fixture {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })

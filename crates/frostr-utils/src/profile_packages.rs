@@ -21,9 +21,7 @@ use url::form_urlencoded::{Serializer, parse as parse_urlencoded};
 
 use bifrost_codec::wire::GroupPackageWire;
 use bifrost_core::types::{
-    GroupPackage,
-    MethodPolicy, MethodPolicyOverride, PeerPolicyOverride, PeerScopedPolicyProfile,
-    PolicyOverrideValue,
+    GroupPackage, MethodPolicyOverride, PeerPolicyOverride, PolicyOverrideValue,
 };
 
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
@@ -65,15 +63,6 @@ pub struct BfMethodPolicyOverride {
     pub ecdh: BfPolicyOverrideValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BfMethodPolicy {
-    pub echo: bool,
-    pub ping: bool,
-    pub onboard: bool,
-    pub sign: bool,
-    pub ecdh: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BfPeerPolicyOverride {
     #[serde(default)]
@@ -86,22 +75,6 @@ pub struct BfPeerPolicyOverride {
 pub struct BfManualPeerPolicyOverride {
     pub pubkey: String,
     pub policy: BfPeerPolicyOverride,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BfPeerScopedPolicyProfile {
-    pub for_peer: String,
-    pub revision: u64,
-    pub updated: u64,
-    pub block_all: bool,
-    pub request: BfMethodPolicy,
-    pub respond: BfMethodPolicy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BfRemotePeerPolicyObservation {
-    pub pubkey: String,
-    pub profile: BfPeerScopedPolicyProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,8 +96,6 @@ pub struct BfProfileDevice {
     pub share_secret: String,
     #[serde(default)]
     pub manual_peer_policy_overrides: Vec<BfManualPeerPolicyOverride>,
-    #[serde(default)]
-    pub remote_peer_policy_observations: Vec<BfRemotePeerPolicyObservation>,
     pub relays: Vec<String>,
 }
 
@@ -132,7 +103,6 @@ pub struct BfProfileDevice {
 pub struct BfProfilePayload {
     pub profile_id: String,
     pub version: u8,
-    pub keyset_name: String,
     pub device: BfProfileDevice,
     pub group_package: GroupPackageWire,
 }
@@ -143,15 +113,12 @@ pub struct EncryptedProfileBackupDevice {
     pub share_public_key: String,
     #[serde(default)]
     pub manual_peer_policy_overrides: Vec<BfManualPeerPolicyOverride>,
-    #[serde(default)]
-    pub remote_peer_policy_observations: Vec<BfRemotePeerPolicyObservation>,
     pub relays: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedProfileBackup {
     pub version: u8,
-    pub keyset_name: String,
     pub device: EncryptedProfileBackupDevice,
     pub group_package: GroupPackageWire,
 }
@@ -267,12 +234,10 @@ pub fn create_encrypted_profile_backup(
     let normalized = normalize_profile_payload(payload)?;
     Ok(EncryptedProfileBackup {
         version: normalized.version,
-        keyset_name: normalized.keyset_name,
         device: EncryptedProfileBackupDevice {
             name: normalized.device.name,
             share_public_key: derive_share_public_key_hex(&normalized.device.share_secret)?,
             manual_peer_policy_overrides: normalized.device.manual_peer_policy_overrides,
-            remote_peer_policy_observations: normalized.device.remote_peer_policy_observations,
             relays: normalized.device.relays,
         },
         group_package: normalized.group_package,
@@ -391,24 +356,12 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
             "device name must be non-empty".to_string(),
         ));
     }
-    let keyset_name = payload.keyset_name.trim();
-    if keyset_name.is_empty() {
-        return Err(FrostUtilsError::InvalidInput(
-            "keyset name must be non-empty".to_string(),
-        ));
-    }
     let group = normalize_group_package(&payload.group_package)?;
     let manual_peer_policy_overrides = payload
         .device
         .manual_peer_policy_overrides
         .iter()
         .map(normalize_manual_peer_policy_override)
-        .collect::<FrostUtilsResult<Vec<_>>>()?;
-    let remote_peer_policy_observations = payload
-        .device
-        .remote_peer_policy_observations
-        .iter()
-        .map(normalize_remote_peer_policy_observation)
         .collect::<FrostUtilsResult<Vec<_>>>()?;
     let normalized = BfProfilePayload {
         profile_id,
@@ -417,12 +370,10 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
         } else {
             payload.version
         },
-        keyset_name: keyset_name.to_string(),
         device: BfProfileDevice {
             name: device_name.to_string(),
             share_secret: normalize_hex32(&payload.device.share_secret, "share secret")?,
             manual_peer_policy_overrides,
-            remote_peer_policy_observations,
             relays: normalize_relays(&payload.device.relays)?,
         },
         group_package: group,
@@ -445,12 +396,6 @@ fn normalize_profile_backup(
             "backup device name must be non-empty".to_string(),
         ));
     }
-    let keyset_name = backup.keyset_name.trim();
-    if keyset_name.is_empty() {
-        return Err(FrostUtilsError::InvalidInput(
-            "backup keyset name must be non-empty".to_string(),
-        ));
-    }
     let group_package = normalize_group_package(&backup.group_package)?;
     Ok(EncryptedProfileBackup {
         version: if backup.version == 0 {
@@ -458,7 +403,6 @@ fn normalize_profile_backup(
         } else {
             backup.version
         },
-        keyset_name: keyset_name.to_string(),
         device: EncryptedProfileBackupDevice {
             name: device_name.to_string(),
             share_public_key: normalize_hex32(&backup.device.share_public_key, "share public key")?,
@@ -467,12 +411,6 @@ fn normalize_profile_backup(
                 .manual_peer_policy_overrides
                 .iter()
                 .map(normalize_manual_peer_policy_override)
-                .collect::<FrostUtilsResult<Vec<_>>>()?,
-            remote_peer_policy_observations: backup
-                .device
-                .remote_peer_policy_observations
-                .iter()
-                .map(normalize_remote_peer_policy_observation)
                 .collect::<FrostUtilsResult<Vec<_>>>()?,
             relays: normalize_relays(&backup.device.relays)?,
         },
@@ -489,15 +427,6 @@ fn normalize_manual_peer_policy_override(
     })
 }
 
-fn normalize_remote_peer_policy_observation(
-    observation: &BfRemotePeerPolicyObservation,
-) -> FrostUtilsResult<BfRemotePeerPolicyObservation> {
-    Ok(BfRemotePeerPolicyObservation {
-        pubkey: normalize_hex32(&observation.pubkey, "peer observation pubkey")?,
-        profile: normalize_peer_scoped_policy_profile(&observation.profile)?,
-    })
-}
-
 fn normalize_peer_policy_override(policy: &BfPeerPolicyOverride) -> BfPeerPolicyOverride {
     BfPeerPolicyOverride {
         request: normalize_method_policy_override(&policy.request),
@@ -507,29 +436,6 @@ fn normalize_peer_policy_override(policy: &BfPeerPolicyOverride) -> BfPeerPolicy
 
 fn normalize_method_policy_override(policy: &BfMethodPolicyOverride) -> BfMethodPolicyOverride {
     BfMethodPolicyOverride {
-        echo: policy.echo,
-        ping: policy.ping,
-        onboard: policy.onboard,
-        sign: policy.sign,
-        ecdh: policy.ecdh,
-    }
-}
-
-fn normalize_peer_scoped_policy_profile(
-    profile: &BfPeerScopedPolicyProfile,
-) -> FrostUtilsResult<BfPeerScopedPolicyProfile> {
-    Ok(BfPeerScopedPolicyProfile {
-        for_peer: normalize_hex32(&profile.for_peer, "peer policy for_peer")?,
-        revision: profile.revision,
-        updated: profile.updated,
-        block_all: profile.block_all,
-        request: normalize_method_policy(&profile.request),
-        respond: normalize_method_policy(&profile.respond),
-    })
-}
-
-fn normalize_method_policy(policy: &BfMethodPolicy) -> BfMethodPolicy {
-    BfMethodPolicy {
         echo: policy.echo,
         ping: policy.ping,
         onboard: policy.onboard,
@@ -563,32 +469,6 @@ pub fn bf_policy_override_value_to_core(value: BfPolicyOverrideValue) -> PolicyO
     }
 }
 
-pub fn bf_peer_scoped_policy_profile_to_core(
-    profile: &BfPeerScopedPolicyProfile,
-) -> FrostUtilsResult<PeerScopedPolicyProfile> {
-    let for_peer = normalize_hex32(&profile.for_peer, "peer policy for_peer")?;
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&hex::decode(for_peer).expect("hex32"));
-    Ok(PeerScopedPolicyProfile {
-        for_peer: bytes,
-        revision: profile.revision,
-        updated: profile.updated,
-        block_all: profile.block_all,
-        request: bf_method_policy_to_core(&profile.request),
-        respond: bf_method_policy_to_core(&profile.respond),
-    })
-}
-
-pub fn bf_method_policy_to_core(policy: &BfMethodPolicy) -> MethodPolicy {
-    MethodPolicy {
-        echo: policy.echo,
-        ping: policy.ping,
-        onboard: policy.onboard,
-        sign: policy.sign,
-        ecdh: policy.ecdh,
-    }
-}
-
 pub fn core_peer_policy_override_to_bf(policy: &PeerPolicyOverride) -> BfPeerPolicyOverride {
     BfPeerPolicyOverride {
         request: core_method_policy_override_to_bf(&policy.request),
@@ -611,29 +491,6 @@ pub fn core_policy_override_value_to_bf(value: PolicyOverrideValue) -> BfPolicyO
         PolicyOverrideValue::Unset => BfPolicyOverrideValue::Unset,
         PolicyOverrideValue::Allow => BfPolicyOverrideValue::Allow,
         PolicyOverrideValue::Deny => BfPolicyOverrideValue::Deny,
-    }
-}
-
-pub fn core_peer_scoped_policy_profile_to_bf(
-    profile: &PeerScopedPolicyProfile,
-) -> BfPeerScopedPolicyProfile {
-    BfPeerScopedPolicyProfile {
-        for_peer: hex::encode(profile.for_peer),
-        revision: profile.revision,
-        updated: profile.updated,
-        block_all: profile.block_all,
-        request: core_method_policy_to_bf(&profile.request),
-        respond: core_method_policy_to_bf(&profile.respond),
-    }
-}
-
-pub fn core_method_policy_to_bf(policy: &MethodPolicy) -> BfMethodPolicy {
-    BfMethodPolicy {
-        echo: policy.echo,
-        ping: policy.ping,
-        onboard: policy.onboard,
-        sign: policy.sign,
-        ecdh: policy.ecdh,
     }
 }
 
@@ -1183,38 +1040,15 @@ mod tests {
                     },
                 },
             }],
-            remote_peer_policy_observations: vec![BfRemotePeerPolicyObservation {
-                pubkey: "22".repeat(32),
-                profile: BfPeerScopedPolicyProfile {
-                    for_peer: "11".repeat(32),
-                    revision: 7,
-                    updated: 1_700_000_000,
-                    block_all: false,
-                    request: BfMethodPolicy {
-                        echo: true,
-                        ping: true,
-                        onboard: true,
-                        sign: true,
-                        ecdh: true,
-                    },
-                    respond: BfMethodPolicy {
-                        echo: true,
-                        ping: true,
-                        onboard: true,
-                        sign: false,
-                        ecdh: true,
-                    },
-                },
-            }],
             relays: vec!["wss://relay.one".to_string(), "wss://relay.two".to_string()],
         };
         BfProfilePayload {
             profile_id: derive_profile_id_from_share_secret(&device.share_secret)
                 .expect("profile id"),
             version: BF_PACKAGE_VERSION,
-            keyset_name: "Alpha".to_string(),
             device,
             group_package: GroupPackageWire {
+                group_name: "Alpha".to_string(),
                 group_pk: "33".repeat(32),
                 threshold: 2,
                 members: vec![

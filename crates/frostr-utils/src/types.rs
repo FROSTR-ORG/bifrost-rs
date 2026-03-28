@@ -1,8 +1,9 @@
 use bifrost_core::types::{Bytes32, GroupPackage, SharePackage};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateKeysetConfig {
+    pub group_name: String,
     pub threshold: u16,
     pub count: u16,
 }

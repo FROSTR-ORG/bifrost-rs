@@ -20,6 +20,7 @@ mod tests {
     #[test]
     fn parse_group_and_share_package_json() {
         let group_json = r#"{
+            "group_name":"Test Group",
             "group_pk":"0202020202020202020202020202020202020202020202020202020202020202",
             "threshold":2,
             "members":[

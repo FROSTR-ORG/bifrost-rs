@@ -74,6 +74,6 @@ When making architectural changes here, keep these cleanup constraints in mind:
 ## Related Docs
 
 - `README.md`
-- `docs/ARCHITECTURE.md`
-- `docs/API.md`
-- `docs/SECURITY-MODEL.md`
+- `TESTING.md`
+- `CONTRIBUTING.md`
+- `RELEASE.md`

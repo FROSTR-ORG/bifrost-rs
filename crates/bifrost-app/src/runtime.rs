@@ -13,9 +13,7 @@ use bifrost_bridge_tokio::{
     DEFAULT_OUTBOUND_QUEUE_CAPACITY, DEFAULT_RELAY_BACKOFF_MS, QueueOverflowPolicy,
 };
 use bifrost_codec::{parse_group_package, parse_share_package};
-use bifrost_core::types::{
-    GroupPackage, PeerPolicyOverride, PeerScopedPolicyProfile, SharePackage,
-};
+use bifrost_core::types::{GroupPackage, PeerPolicyOverride, SharePackage};
 use bifrost_signer::{
     DeviceConfig, DeviceState, DeviceStore, PeerSelectionStrategy, SigningDevice,
 };
@@ -38,8 +36,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     #[serde(default)]
-    pub remote_policy_observations: HashMap<String, PeerScopedPolicyProfile>,
-    #[serde(default)]
     pub options: AppOptions,
 }
 
@@ -51,7 +47,6 @@ pub struct ResolvedAppConfig {
     pub relays: Vec<String>,
     pub peers: Vec<String>,
     pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
-    pub remote_policy_observations: HashMap<String, PeerScopedPolicyProfile>,
     pub options: AppOptions,
 }
 
@@ -268,7 +263,6 @@ pub fn resolve_config(config: &AppConfig) -> Result<ResolvedAppConfig> {
         relays: config.relays.clone(),
         peers: config.peers.clone(),
         manual_policy_overrides: config.manual_policy_overrides.clone(),
-        remote_policy_observations: config.remote_policy_observations.clone(),
         options: config.options.clone(),
     })
 }
@@ -340,9 +334,6 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
 
     for (peer, policy_override) in &config.manual_policy_overrides {
         signer.set_peer_policy_override(peer, policy_override.clone())?;
-    }
-    for (peer, observation) in &config.remote_policy_observations {
-        signer.set_remote_policy_observation(peer, observation.clone())?;
     }
 
     Ok(signer)

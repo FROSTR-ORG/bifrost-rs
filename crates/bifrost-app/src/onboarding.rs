@@ -372,6 +372,7 @@ mod tests {
     #[test]
     fn persist_validated_onboarding_state_preserves_inviter_nonces() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -442,6 +443,7 @@ mod tests {
     #[test]
     fn stateless_onboard_request_event_roundtrips_with_signer() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })

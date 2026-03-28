@@ -874,10 +874,12 @@ mod tests {
     #[cfg(unix)]
     fn write_fake_shell(script: &str) -> PathBuf {
         let path = temp_path("fake-shell");
-        fs::write(&path, script).expect("write fake shell");
-        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        let staging = temp_path("fake-shell-staging");
+        fs::write(&staging, script).expect("write fake shell");
+        let mut perms = fs::metadata(&staging).expect("metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).expect("chmod");
+        fs::set_permissions(&staging, perms).expect("chmod");
+        fs::rename(&staging, &path).expect("rename fake shell");
         path
     }
 
@@ -1005,6 +1007,7 @@ mod tests {
     #[test]
     fn import_profiles_and_runtime_helpers_work_with_fake_shell() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })

@@ -1228,6 +1228,7 @@ mod tests {
     #[test]
     fn build_core_seeds_initial_peer_nonces_into_runtime_state() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1272,6 +1273,7 @@ mod tests {
     #[test]
     fn snapshot_json_serializes_nonce_pool_stats() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1317,6 +1319,7 @@ mod tests {
     #[test]
     fn read_and_update_config_round_trip() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1376,6 +1379,7 @@ mod tests {
     #[test]
     fn readiness_reports_capability_counts() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1434,6 +1438,7 @@ mod tests {
     #[test]
     fn runtime_diagnostics_reports_operation_readiness_fields() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1486,6 +1491,7 @@ mod tests {
     #[test]
     fn runtime_diagnostics_matches_runtime_status_contract() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1532,6 +1538,7 @@ mod tests {
     #[test]
     fn init_runtime_rejects_invalid_bridge_config_and_bad_command_hex() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1573,6 +1580,7 @@ mod tests {
     #[test]
     fn restore_runtime_round_trip_preserves_runtime_metadata_and_status() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1608,6 +1616,7 @@ mod tests {
     #[test]
     fn decode_bfonboard_package_round_trips_and_rejects_wrong_password() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1638,6 +1647,7 @@ mod tests {
     #[test]
     fn refresh_all_peers_policy_updates_and_runtime_events_round_trip() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -1706,6 +1716,7 @@ mod tests {
     #[test]
     fn wipe_state_clears_runtime_status_and_emits_state_wiped_event() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1742,6 +1753,7 @@ mod tests {
     #[test]
     fn runtime_metadata_peer_status_and_empty_drains_are_queryable() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -1854,6 +1866,7 @@ mod tests {
     #[test]
     fn queue_runtime_status_event_dedupes_unchanged_status_changed_events() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1889,6 +1902,7 @@ mod tests {
     #[test]
     fn public_runtime_error_paths_cover_invalid_input_helpers() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -1921,6 +1935,7 @@ mod tests {
     #[test]
     fn ping_round_trip_flows_through_outbound_inbound_tick_and_completions() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })
@@ -2007,6 +2022,7 @@ mod tests {
     #[test]
     fn timeout_flow_surfaces_failures_through_runtime_wrapper() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 2,
         })

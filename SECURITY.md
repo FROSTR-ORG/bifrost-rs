@@ -33,6 +33,6 @@ Security-sensitive areas include:
 
 ## Security Documentation
 
-- Threat model: `docs/SECURITY-MODEL.md`
-- Repo architecture and crate boundaries: `docs/ARCHITECTURE.md`
+- Threat model and security model notes: `README.md`
+- Repo architecture and crate boundaries: `README.md`
 - Release security checks: `RELEASE.md`

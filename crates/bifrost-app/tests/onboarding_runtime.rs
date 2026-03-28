@@ -79,6 +79,7 @@ fn temp_state_path(name: &str) -> PathBuf {
 
 async fn complete_onboarding_fixture() -> (BootstrapImportResult, GroupPackage, SharePackage) {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })

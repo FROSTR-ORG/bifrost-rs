@@ -59,6 +59,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 #[tokio::test]
 async fn outbound_queue_overflow_fails_round() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 5,
         count: 6,
     })

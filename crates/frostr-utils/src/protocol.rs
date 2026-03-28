@@ -422,6 +422,7 @@ mod tests {
         Vec<frost::round1::SigningNonces>,
     ) {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -510,6 +511,7 @@ mod tests {
     #[test]
     fn stateless_ecdh_flow_roundtrip() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -532,6 +534,7 @@ mod tests {
     #[test]
     fn stateless_onboard_exchange_roundtrip() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })

@@ -152,6 +152,7 @@ mod tests {
     #[test]
     fn verify_keyset_accepts_valid_bundle() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -163,6 +164,7 @@ mod tests {
     #[test]
     fn verify_share_rejects_tamper() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -175,6 +177,7 @@ mod tests {
     #[test]
     fn verify_group_config_rejects_invalid_threshold_and_duplicates() {
         let mut bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -184,6 +187,7 @@ mod tests {
         assert!(verify_group_config(&bundle.group).is_err());
 
         let mut bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })
@@ -195,6 +199,7 @@ mod tests {
     #[test]
     fn verify_keyset_rejects_share_count_mismatch_and_missing_share_member() {
         let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
             threshold: 2,
             count: 3,
         })

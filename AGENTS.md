@@ -13,17 +13,14 @@ Migrate `bifrost-ts` to Rust with behavior parity and stronger safety.
 3. `SECURITY.md`
 4. `TESTING.md`
 5. `RELEASE.md`
-6. `docs/INDEX.md`
-7. `docs/API.md`
-8. `docs/ARCHITECTURE.md`
-9. `dev/artifacts/current-status.md`
-10. `dev/planner/README.md`
-11. `dev/planner/04-backlog.md`
+6. `dev/artifacts/current-status.md`
+7. `dev/planner/README.md`
+8. `dev/planner/04-backlog.md`
 
 ## Documentation Structure
 
 - Root docs are the entrypoint for project onboarding, testing, release, and contribution workflow.
-- `docs/` is the repo-specific technical manual for `bifrost-rs` crates, runtime contracts, and `frostr-utils`.
+- Root docs also carry the repo-specific technical manual content for `bifrost-rs` crates, runtime contracts, and `frostr-utils`.
 - Root governance docs (`CONTRIBUTING.md`, `TESTING.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`) define project policy and operational process.
 - Agent-oriented planning source-of-truth: `dev/planner/`
 - Agent-oriented execution/context artifacts: `dev/artifacts/`
@@ -61,4 +58,4 @@ Migrate `bifrost-ts` to Rust with behavior parity and stronger safety.
 - Root `.gitignore` ignores build artifacts (`target/`) and common local outputs.
 - Workspace was reset to remove a polluted initial commit; ensure future commits stay clean.
 - `bifrost-transport-ws` remains partially implemented for production reliability features.
-- Canonical repo-specific technical docs live in `docs/` and must be updated alongside behavior changes.
+- Canonical repo-specific technical docs live in the root doc set and must be updated alongside behavior changes.

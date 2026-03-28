@@ -67,6 +67,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 #[tokio::test]
 async fn ecdh_round_fails_on_invalid_locked_peer_response() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 3,
         count: 4,
     })
@@ -175,6 +176,7 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
 #[tokio::test]
 async fn inbound_duplicate_event_is_processed_once() {
     let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
         threshold: 2,
         count: 3,
     })
