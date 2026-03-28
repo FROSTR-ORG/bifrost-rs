@@ -72,8 +72,7 @@ struct DeviceOptions {
 
 pub fn run_keygen_command(args: &[String]) -> Result<()> {
     let out_dir = arg_value(args, "--out-dir").unwrap_or_else(|| "dev/data".to_string());
-    let group_name =
-        arg_value(args, "--group-name").unwrap_or_else(|| "Test Group".to_string());
+    let group_name = arg_value(args, "--group-name").unwrap_or_else(|| "Test Group".to_string());
     let threshold = arg_value(args, "--threshold")
         .and_then(|v| v.parse::<u16>().ok())
         .unwrap_or(2);
@@ -100,7 +99,7 @@ pub fn run_keygen_command(args: &[String]) -> Result<()> {
         threshold,
         count,
     })
-        .map_err(|e| anyhow!("create keyset: {e}"))?;
+    .map_err(|e| anyhow!("create keyset: {e}"))?;
     let group = bundle.group;
     let share_packages = bundle.shares;
     let members = group.members.clone();

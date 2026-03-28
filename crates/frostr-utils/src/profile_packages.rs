@@ -495,12 +495,13 @@ pub fn core_policy_override_value_to_bf(value: PolicyOverrideValue) -> BfPolicyO
 }
 
 fn normalize_group_package(group: &GroupPackageWire) -> FrostUtilsResult<GroupPackageWire> {
-    let parsed: GroupPackage = group
-        .clone()
-        .try_into()
-        .map_err(|e: bifrost_codec::CodecError| {
-            FrostUtilsError::InvalidInput(format!("Invalid group package: {e}"))
-        })?;
+    let parsed: GroupPackage =
+        group
+            .clone()
+            .try_into()
+            .map_err(|e: bifrost_codec::CodecError| {
+                FrostUtilsError::InvalidInput(format!("Invalid group package: {e}"))
+            })?;
     Ok(GroupPackageWire::from(parsed))
 }
 
@@ -1136,7 +1137,9 @@ mod tests {
             .map(|member| member.pubkey.clone())
             .collect::<Vec<_>>();
         assert!(
-            expected_pubkeys.iter().any(|pubkey| pubkey.starts_with("03")),
+            expected_pubkeys
+                .iter()
+                .any(|pubkey| pubkey.starts_with("03")),
             "sample profile must include an odd-parity compressed member pubkey"
         );
 

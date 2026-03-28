@@ -258,16 +258,14 @@ impl NostrRelay {
                         break;
                     }
                     if match_filter(event, filter) {
-                        let _ = tx.send(Message::Text(
-                            json!(["EVENT", sub_id, event]).to_string().into(),
-                        ));
+                        let _ = tx.send(Message::Text(json!(["EVENT", sub_id, event]).to_string()));
                         if let Some(left) = remaining.as_mut() {
                             *left = left.saturating_sub(1);
                         }
                     }
                 }
             }
-            let _ = tx.send(Message::Text(json!(["EOSE", sub_id]).to_string().into()));
+            let _ = tx.send(Message::Text(json!(["EOSE", sub_id]).to_string()));
         }
     }
 
@@ -341,7 +339,7 @@ impl NostrRelay {
             state.clients.get(&client_id).cloned()
         };
         if let Some(tx) = sender {
-            let _ = tx.send(Message::Text(message.into()));
+            let _ = tx.send(Message::Text(message));
         }
     }
 }

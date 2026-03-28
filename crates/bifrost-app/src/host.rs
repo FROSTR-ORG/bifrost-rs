@@ -860,9 +860,7 @@ mod tests {
     use std::fs;
     use tokio::sync::mpsc;
 
-    use crate::runtime::{
-        AppConfig, AppOptions, load_or_init_signer_resolved, resolve_config,
-    };
+    use crate::runtime::{AppConfig, AppOptions, load_or_init_signer_resolved, resolve_config};
 
     struct MockRelayAdapter {
         inbound_rx: mpsc::UnboundedReceiver<Event>,

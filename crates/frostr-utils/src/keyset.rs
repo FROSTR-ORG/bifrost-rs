@@ -18,7 +18,7 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
         config.count,
         config.threshold,
         frost::keys::IdentifierList::Default,
-        &mut OsRng,
+        OsRng,
     )
     .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
 

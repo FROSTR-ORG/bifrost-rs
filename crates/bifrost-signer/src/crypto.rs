@@ -266,20 +266,18 @@ mod tests {
         alice.copy_from_slice(&alice_seckey);
         bob.copy_from_slice(&bob_seckey);
         let bob_xonly = hex::encode(
-            k256::SecretKey::from_slice(&bob)
+            &k256::SecretKey::from_slice(&bob)
                 .expect("bob secret key")
                 .public_key()
                 .to_encoded_point(true)
-                .as_bytes()[1..]
-                .to_vec(),
+                .as_bytes()[1..],
         );
         let alice_xonly = hex::encode(
-            k256::SecretKey::from_slice(&alice)
+            &k256::SecretKey::from_slice(&alice)
                 .expect("alice secret key")
                 .public_key()
                 .to_encoded_point(true)
-                .as_bytes()[1..]
-                .to_vec(),
+                .as_bytes()[1..],
         );
 
         let payload = encrypt_content_for_peer_with_nonce(
@@ -307,20 +305,18 @@ mod tests {
         alice.copy_from_slice(&alice_seckey);
         bob.copy_from_slice(&bob_seckey);
         let bob_xonly = hex::encode(
-            k256::SecretKey::from_slice(&bob)
+            &k256::SecretKey::from_slice(&bob)
                 .expect("bob secret key")
                 .public_key()
                 .to_encoded_point(true)
-                .as_bytes()[1..]
-                .to_vec(),
+                .as_bytes()[1..],
         );
         let alice_xonly = hex::encode(
-            k256::SecretKey::from_slice(&alice)
+            &k256::SecretKey::from_slice(&alice)
                 .expect("alice secret key")
                 .public_key()
                 .to_encoded_point(true)
-                .as_bytes()[1..]
-                .to_vec(),
+                .as_bytes()[1..],
         );
 
         let payload =

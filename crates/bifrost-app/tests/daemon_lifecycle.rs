@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bifrost_app::host::{
@@ -40,7 +40,7 @@ fn resolved_config(
     }
 }
 
-async fn wait_for_socket(socket_path: &PathBuf) {
+async fn wait_for_socket(socket_path: &Path) {
     for _ in 0..100 {
         if socket_path.exists() {
             return;

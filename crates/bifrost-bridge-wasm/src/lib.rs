@@ -1182,6 +1182,7 @@ fn decode_fixed_hex<const N: usize>(value: &str, field: &str) -> Result<[u8; N]>
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use bifrost_signer::PeerPermissionState;
@@ -2029,8 +2030,10 @@ mod tests {
         .expect("create keyset");
         let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
         let bob_peer = alice_bootstrap.peers[0].clone();
-        let mut device = DeviceConfig::default();
-        device.ping_timeout_secs = 1;
+        let device = DeviceConfig {
+            ping_timeout_secs: 1,
+            ..DeviceConfig::default()
+        };
         let mut alice = WasmBridgeRuntime::new();
         alice
             .init_runtime(

@@ -4,6 +4,24 @@ All notable changes to `bifrost-rs` should be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-27
+
+### Added
+
+- First-class operator rotation generation and adoption flows across the current package model.
+- Explicit regression coverage for structured `group_package` handling, rotation adoption, and required `group_name` validation.
+
+### Changed
+
+- Canonical profile and backup payloads now carry lossless structured `group_package` data only, with `group_name` embedded inside that structure.
+- Remote peer policy observations are now runtime-only state and no longer persist through profile, backup, or startup config surfaces.
+- Repo-local documentation is now rooted in `README.md`, `TESTING.md`, `CONTRIBUTING.md`, `RELEASE.md`, and `SECURITY.md` instead of the retired repo `docs/` tree.
+
+### Fixed
+
+- Stale host/runtime tests in `bifrost-app` now match the current config and command model.
+- Group metadata decode now rejects missing or blank `group_name` at the codec boundary.
+
 ## [0.4.0] - 2026-03-08
 
 ### Added
