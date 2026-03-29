@@ -1608,10 +1608,21 @@ mod tests {
             restored.runtime_metadata().expect("metadata after"),
             metadata_before
         );
-        assert_eq!(
-            restored.runtime_status().expect("status after"),
-            runtime_status_before
-        );
+        let mut status_after: serde_json::Value =
+            serde_json::from_str(&restored.runtime_status().expect("status after"))
+                .expect("status after json");
+        let mut status_before: serde_json::Value =
+            serde_json::from_str(&runtime_status_before).expect("status before json");
+        let after_last_active = status_after["status"]["last_active"]
+            .as_i64()
+            .expect("status after last_active");
+        let before_last_active = status_before["status"]["last_active"]
+            .as_i64()
+            .expect("status before last_active");
+        assert!(after_last_active >= before_last_active);
+        status_after["status"]["last_active"] = serde_json::Value::Null;
+        status_before["status"]["last_active"] = serde_json::Value::Null;
+        assert_eq!(status_after, status_before);
     }
 
     #[test]
