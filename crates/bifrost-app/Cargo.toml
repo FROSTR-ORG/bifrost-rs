@@ -21,12 +21,15 @@ rand_core.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 sha2.workspace = true
+futures-util.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio-tungstenite.workspace = true
 chacha20poly1305.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 bifrost-bridge-tokio = { path = "../bifrost-bridge-tokio" }
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
+bifrost-profile = { path = "../bifrost-profile" }
 bifrost-signer = { path = "../bifrost-signer" }
 frostr-utils = { path = "../frostr-utils" }

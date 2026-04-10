@@ -177,7 +177,7 @@ struct ManagedShellEnv {
     xdg_config_home: PathBuf,
     xdg_data_home: PathBuf,
     xdg_state_home: PathBuf,
-    vault_passphrase: String,
+    passphrase: String,
 }
 
 impl ManagedShellEnv {
@@ -186,7 +186,7 @@ impl ManagedShellEnv {
             xdg_config_home: work_dir.join("config"),
             xdg_data_home: work_dir.join("data"),
             xdg_state_home: work_dir.join("state"),
-            vault_passphrase: DEFAULT_VAULT_PASSPHRASE.to_string(),
+            passphrase: DEFAULT_VAULT_PASSPHRASE.to_string(),
         }
     }
 
@@ -194,7 +194,7 @@ impl ManagedShellEnv {
         command.env("XDG_CONFIG_HOME", &self.xdg_config_home);
         command.env("XDG_DATA_HOME", &self.xdg_data_home);
         command.env("XDG_STATE_HOME", &self.xdg_state_home);
-        command.env("IGLOO_SHELL_VAULT_PASSPHRASE", &self.vault_passphrase);
+        command.env("IGLOO_SHELL_PROFILE_PASSPHRASE", &self.passphrase);
     }
 }
 
@@ -917,7 +917,7 @@ mod tests {
         assert!(stdout.contains("XDG_CONFIG_HOME="));
         assert!(stdout.contains("XDG_DATA_HOME="));
         assert!(stdout.contains("XDG_STATE_HOME="));
-        assert!(stdout.contains("IGLOO_SHELL_VAULT_PASSPHRASE="));
+        assert!(stdout.contains("IGLOO_SHELL_PROFILE_PASSPHRASE="));
     }
 
     #[test]
@@ -928,7 +928,7 @@ mod tests {
         let output = command.output().expect("run env");
         let stdout = String::from_utf8(output.stdout).expect("utf8");
         assert!(stdout.contains("XDG_CONFIG_HOME="));
-        assert!(stdout.contains("IGLOO_SHELL_VAULT_PASSPHRASE="));
+        assert!(stdout.contains("IGLOO_SHELL_PROFILE_PASSPHRASE="));
     }
 
     #[test]

@@ -5,6 +5,8 @@ members = [
   "crates/bifrost-codec",
   "crates/bifrost-signer",
   "crates/bifrost-router",
+  "crates/bifrost-profile",
+  "crates/bifrost-profile-wasm",
   "crates/bifrost-bridge-tokio",
   "crates/bifrost-bridge-wasm",
   "crates/bifrost-app",

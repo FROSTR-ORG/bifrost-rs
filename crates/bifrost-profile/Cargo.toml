@@ -1,0 +1,28 @@
+[package]
+name = "bifrost-profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["native-relay"]
+native-relay = ["dep:tokio", "dep:tokio-tungstenite"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+chacha20poly1305.workspace = true
+rand_core.workspace = true
+k256.workspace = true
+futures-util.workspace = true
+nostr.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+bifrost-core = { path = "../bifrost-core" }
+bifrost-codec = { path = "../bifrost-codec" }
+frostr-utils = { path = "../frostr-utils" }
+argon2 = "0.5"

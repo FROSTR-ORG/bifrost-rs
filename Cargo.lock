@@ -211,12 +211,14 @@ dependencies = [
  "bifrost-bridge-tokio",
  "bifrost-codec",
  "bifrost-core",
+ "bifrost-profile",
  "bifrost-signer",
  "bincode",
  "chacha20",
  "chacha20poly1305",
  "frostr-utils",
  "fs2",
+ "futures-util",
  "hex",
  "hmac",
  "k256",
@@ -227,6 +229,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "tracing",
  "tracing-subscriber",
 ]
@@ -316,6 +319,45 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bifrost-profile"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "bifrost-codec",
+ "bifrost-core",
+ "chacha20poly1305",
+ "frostr-utils",
+ "futures-util",
+ "hex",
+ "k256",
+ "nostr",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+]
+
+[[package]]
+name = "bifrost-profile-wasm"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "bifrost-codec",
+ "bifrost-profile",
+ "console_error_panic_hook",
+ "frostr-utils",
+ "hex",
+ "js-sys",
+ "nostr",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

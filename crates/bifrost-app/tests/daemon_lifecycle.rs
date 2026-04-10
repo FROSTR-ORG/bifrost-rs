@@ -88,8 +88,7 @@ async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
         .expect("runtime diagnostics");
     let diagnostics: RuntimeDiagnosticsSnapshot =
         serde_json::from_value(diagnostics_value).expect("parse diagnostics");
-    assert!(diagnostics.runtime_status.is_object());
-    assert!(diagnostics.runtime_status["readiness"].is_object());
+    assert!(!diagnostics.runtime_status.0.metadata.device_id.is_empty());
 
     client
         .request_ok(ControlCommand::Shutdown)
