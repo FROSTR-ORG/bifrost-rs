@@ -44,7 +44,6 @@ pub struct NoncePeerStats {
     pub outgoing_available: usize,
     pub outgoing_spent: usize,
     pub can_sign: bool,
-    pub should_send_nonces: bool,
 }
 
 impl NoncePool {
@@ -282,13 +281,6 @@ impl NoncePool {
             .unwrap_or(false)
     }
 
-    pub fn should_send_nonces_to(&self, peer_idx: u16) -> bool {
-        self.outgoing_public
-            .get(&peer_idx)
-            .map(|m| m.len() < self.config.min_threshold)
-            .unwrap_or(true)
-    }
-
     pub fn peer_stats(&self, peer_idx: u16) -> NoncePeerStats {
         let incoming_available = self.incoming.get(&peer_idx).map(|m| m.len()).unwrap_or(0);
         let outgoing_available = self
@@ -307,7 +299,6 @@ impl NoncePool {
             outgoing_available,
             outgoing_spent,
             can_sign: self.can_sign(peer_idx),
-            should_send_nonces: self.should_send_nonces_to(peer_idx),
         }
     }
 
@@ -318,6 +309,28 @@ impl NoncePool {
         let mut nonces = map.values().cloned().collect::<Vec<_>>();
         nonces.sort_by(|a, b| a.code.cmp(&b.code));
         nonces
+    }
+
+    pub fn outgoing_public_nonce_codes(&self, peer_idx: u16) -> Vec<Bytes32> {
+        let Some(map) = self.outgoing_public.get(&peer_idx) else {
+            return Vec::new();
+        };
+        let mut codes = map.keys().copied().collect::<Vec<_>>();
+        codes.sort_unstable();
+        codes
+    }
+
+    pub fn incoming_nonce_codes(&self, peer_idx: u16) -> Vec<Bytes32> {
+        let Some(map) = self.incoming.get(&peer_idx) else {
+            return Vec::new();
+        };
+        let mut codes = map.keys().copied().collect::<Vec<_>>();
+        codes.sort_unstable();
+        codes
+    }
+
+    pub fn config(&self) -> &NoncePoolConfig {
+        &self.config
     }
 }
 

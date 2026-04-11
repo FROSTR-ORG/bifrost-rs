@@ -110,7 +110,8 @@ pub struct EcdhPackageWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingPayloadWire {
     pub version: u16,
-    pub nonces: Option<Vec<DerivedPublicNonceWire>>,
+    pub advertised_nonces: Vec<DerivedPublicNonceWire>,
+    pub held_peer_nonce_codes: Vec<String>,
     pub policy_profile: Option<PeerScopedPolicyProfileWire>,
 }
 
@@ -580,21 +581,36 @@ impl TryFrom<PingPayloadWire> for PingPayload {
     type Error = crate::error::CodecError;
 
     fn try_from(value: PingPayloadWire) -> Result<Self, Self::Error> {
-        let nonces = value
-            .nonces
-            .map(|n| {
-                if n.len() > MAX_NONCE_PACKAGE {
-                    return Err(crate::error::CodecError::InvalidPayload(
-                        "ping nonces exceed max size",
-                    ));
-                }
-                n.into_iter().map(TryInto::try_into).collect()
-            })
-            .transpose()?;
+        if value.version != 2 {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "unsupported ping payload version",
+            ));
+        }
+        if value.advertised_nonces.len() > MAX_NONCE_PACKAGE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ping advertised nonces exceed max size",
+            ));
+        }
+        if value.held_peer_nonce_codes.len() > MAX_NONCE_PACKAGE {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ping held peer nonce codes exceed max size",
+            ));
+        }
+        let advertised_nonces = value
+            .advertised_nonces
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
+        let held_peer_nonce_codes = value
+            .held_peer_nonce_codes
+            .into_iter()
+            .map(|code| hexbytes::decode(&code))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             version: value.version,
-            nonces,
+            advertised_nonces,
+            held_peer_nonce_codes,
             policy_profile: value.policy_profile.map(TryInto::try_into).transpose()?,
         })
     }
@@ -604,9 +620,12 @@ impl From<PingPayload> for PingPayloadWire {
     fn from(value: PingPayload) -> Self {
         Self {
             version: value.version,
-            nonces: value
-                .nonces
-                .map(|n| n.into_iter().map(Into::into).collect()),
+            advertised_nonces: value.advertised_nonces.into_iter().map(Into::into).collect(),
+            held_peer_nonce_codes: value
+                .held_peer_nonce_codes
+                .into_iter()
+                .map(|code| hexbytes::encode(&code))
+                .collect(),
             policy_profile: value.policy_profile.map(Into::into),
         }
     }
@@ -943,6 +962,39 @@ mod tests {
         let wire = OnboardRequestWire::from(request.clone());
         let decoded = OnboardRequest::try_from(wire).expect("decode");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn ping_wire_roundtrips_inventory_fields() {
+        let payload = PingPayload {
+            version: 2,
+            advertised_nonces: vec![DerivedPublicNonce {
+                binder_pn: [1u8; 33],
+                hidden_pn: [2u8; 33],
+                code: [3u8; 32],
+            }],
+            held_peer_nonce_codes: vec![[4u8; 32], [5u8; 32]],
+            policy_profile: None,
+        };
+        let wire = PingPayloadWire::from(payload.clone());
+        let decoded = PingPayload::try_from(wire).expect("decode");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn ping_wire_rejects_legacy_version() {
+        let wire = PingPayloadWire {
+            version: 1,
+            advertised_nonces: Vec::new(),
+            held_peer_nonce_codes: Vec::new(),
+            policy_profile: None,
+        };
+        let err: crate::error::CodecError =
+            TryInto::<PingPayload>::try_into(wire).expect_err("must reject legacy version");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidPayload("unsupported ping payload version")
+        ));
     }
 
     #[test]

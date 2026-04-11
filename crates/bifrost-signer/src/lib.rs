@@ -101,6 +101,8 @@ pub struct DeviceState {
     #[serde(default)]
     pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
+    #[serde(default)]
+    pub remote_nonce_inventory_observations: HashMap<String, PeerNonceInventoryObservation>,
     pub pending_operations: HashMap<String, PendingOperation>,
     #[serde(default)]
     pub peer_last_seen: HashMap<String, u64>,
@@ -110,7 +112,7 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
-    pub const VERSION: u32 = 4;
+    pub const VERSION: u32 = 5;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
         let mut nonce_pool =
@@ -125,6 +127,7 @@ impl DeviceState {
             sig_cache_order: VecDeque::new(),
             manual_policy_overrides: HashMap::new(),
             remote_scoped_policies: HashMap::new(),
+            remote_nonce_inventory_observations: HashMap::new(),
             pending_operations: HashMap::new(),
             peer_last_seen: HashMap::new(),
             request_seq: 1,
@@ -141,8 +144,16 @@ impl DeviceState {
         self.nonce_pool =
             NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
         self.pending_operations.clear();
+        self.remote_nonce_inventory_observations.clear();
         self.last_active = now_unix_secs();
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PeerNonceInventoryObservation {
+    #[serde(default)]
+    pub held_codes: Vec<Bytes32>,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -789,7 +800,7 @@ impl SigningDevice {
                     outgoing_available: stats.outgoing_available,
                     outgoing_spent: stats.outgoing_spent,
                     can_sign: stats.can_sign,
-                    should_send_nonces: stats.should_send_nonces,
+                    should_send_nonces: self.peer_needs_nonce_refill(peer, idx),
                 })
             })
             .collect::<Vec<_>>();
@@ -1263,16 +1274,7 @@ impl SigningDevice {
             .member_idx_by_pubkey
             .get(peer)
             .ok_or_else(|| SignerError::UnknownPeer(peer.to_string()))?;
-        let nonces = if self.state.nonce_pool.should_send_nonces_to(peer_idx) {
-            Some(
-                self.state
-                    .nonce_pool
-                    .generate_for_peer(peer_idx, NoncePoolConfig::default().replenish_count)
-                    .map_err(|e| SignerError::InvalidRequest(e.to_string()))?,
-            )
-        } else {
-            None
-        };
+        let payload = self.ping_payload(peer, peer_idx)?;
 
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
@@ -1291,12 +1293,6 @@ impl SigningDevice {
                 context: PendingOpContext::PingRequest,
             },
         );
-
-        let payload = PingPayload {
-            version: 1,
-            nonces,
-            policy_profile: Some(self.local_policy_profile_for(peer)?),
-        };
 
         let envelope = BridgeEnvelope {
             request_id,
@@ -1627,35 +1623,27 @@ impl SigningDevice {
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
                     })?;
-                if let Some(nonces) = ping.nonces {
-                    self.state.nonce_pool.store_incoming(sender_idx, nonces);
+                if !ping.advertised_nonces.is_empty() {
+                    self.state
+                        .nonce_pool
+                        .store_incoming(sender_idx, ping.advertised_nonces);
                 }
+                self.store_remote_nonce_inventory_observation(
+                    &sender,
+                    sender_idx,
+                    ping.held_peer_nonce_codes,
+                    now,
+                );
                 if let Some(profile) = ping.policy_profile {
                     self.store_remote_scoped_policy(&sender, profile)?;
                 }
 
-                let nonces = if self.state.nonce_pool.should_send_nonces_to(sender_idx) {
-                    Some(
-                        self.state
-                            .nonce_pool
-                            .generate_for_peer(
-                                sender_idx,
-                                NoncePoolConfig::default().replenish_count,
-                            )
-                            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?,
-                    )
-                } else {
-                    None
-                };
-
                 let response = BridgeEnvelope {
                     request_id: envelope.request_id,
                     sent_at: now,
-                    payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
-                        version: 1,
-                        nonces,
-                        policy_profile: Some(self.local_policy_profile_for(&sender)?),
-                    })),
+                    payload: BridgePayload::PingResponse(PingPayloadWire::from(
+                        self.ping_payload(&sender, sender_idx)?,
+                    )),
                 };
                 self.encrypt_for_peers(&[sender], &response)
             }
@@ -1783,16 +1771,9 @@ impl SigningDevice {
                     sign_create_partial(&self.group, &session, &self.share, &signing_nonces, None)
                         .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
-                if self.state.nonce_pool.should_send_nonces_to(sender_idx) {
-                    partial.replenish = Some(
-                        self.state
-                            .nonce_pool
-                            .generate_for_peer(
-                                sender_idx,
-                                NoncePoolConfig::default().replenish_count,
-                            )
-                            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?,
-                    );
+                let replenish = self.advertised_nonces_for_peer(&sender, sender_idx)?;
+                if !replenish.is_empty() {
+                    partial.replenish = Some(replenish);
                 }
 
                 let response = BridgeEnvelope {
@@ -1884,9 +1865,17 @@ impl SigningDevice {
                     .get(sender)
                     .copied()
                     .ok_or_else(|| SignerError::UnknownPeer(sender.to_string()))?;
-                if let Some(nonces) = ping.nonces {
-                    self.state.nonce_pool.store_incoming(sender_idx, nonces);
+                if !ping.advertised_nonces.is_empty() {
+                    self.state
+                        .nonce_pool
+                        .store_incoming(sender_idx, ping.advertised_nonces);
                 }
+                self.store_remote_nonce_inventory_observation(
+                    sender,
+                    sender_idx,
+                    ping.held_peer_nonce_codes,
+                    now,
+                );
                 if let Some(profile) = ping.policy_profile {
                     self.store_remote_scoped_policy(sender, profile)?;
                 }
@@ -2133,6 +2122,106 @@ impl SigningDevice {
             block_all: policy.block_all,
             request: policy.request,
             respond: policy.respond,
+        })
+    }
+
+    fn nonce_sync_target_size(&self) -> usize {
+        let cfg = self.state.nonce_pool.config();
+        cfg.pool_size
+            .min(cfg.min_threshold.saturating_add(cfg.replenish_count))
+    }
+
+    fn normalized_remote_held_nonce_codes(&self, peer: &str, peer_idx: u16) -> Vec<Bytes32> {
+        let current_codes = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx);
+        if current_codes.is_empty() {
+            return Vec::new();
+        }
+        let current_code_set = current_codes.into_iter().collect::<HashSet<_>>();
+        let mut held_codes = self
+            .state
+            .remote_nonce_inventory_observations
+            .get(peer)
+            .map(|observation| {
+                observation
+                    .held_codes
+                    .iter()
+                    .copied()
+                    .filter(|code| current_code_set.contains(code))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        held_codes.sort_unstable();
+        held_codes.dedup();
+        held_codes
+    }
+
+    fn peer_needs_nonce_refill(&self, peer: &str, peer_idx: u16) -> bool {
+        self.normalized_remote_held_nonce_codes(peer, peer_idx).len()
+            < self.state.nonce_pool.config().min_threshold
+    }
+
+    fn store_remote_nonce_inventory_observation(
+        &mut self,
+        peer: &str,
+        peer_idx: u16,
+        held_codes: Vec<Bytes32>,
+        updated_at: u64,
+    ) {
+        let current_codes = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx);
+        let current_code_set = current_codes.into_iter().collect::<HashSet<_>>();
+        let mut normalized_codes = held_codes
+            .into_iter()
+            .filter(|code| current_code_set.contains(code))
+            .collect::<Vec<_>>();
+        normalized_codes.sort_unstable();
+        normalized_codes.dedup();
+        self.state.remote_nonce_inventory_observations.insert(
+            peer.to_string(),
+            PeerNonceInventoryObservation {
+                held_codes: normalized_codes,
+                updated_at,
+            },
+        );
+    }
+
+    fn advertised_nonces_for_peer(
+        &mut self,
+        peer: &str,
+        peer_idx: u16,
+    ) -> Result<Vec<DerivedPublicNonce>> {
+        let observed_codes = self.normalized_remote_held_nonce_codes(peer, peer_idx);
+        let cfg = self.state.nonce_pool.config().clone();
+        if observed_codes.len() >= cfg.min_threshold {
+            return Ok(Vec::new());
+        }
+
+        let target_size = self.nonce_sync_target_size();
+        let current_available = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx).len();
+        if current_available < target_size {
+            self.state
+                .nonce_pool
+                .generate_for_peer(peer_idx, target_size.saturating_sub(current_available))
+                .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+        }
+
+        let observed_code_set = observed_codes.into_iter().collect::<HashSet<_>>();
+        let advertise_limit = target_size.saturating_sub(observed_code_set.len());
+        Ok(self
+            .state
+            .nonce_pool
+            .outgoing_public_nonces(peer_idx)
+            .into_iter()
+            .filter(|nonce| !observed_code_set.contains(&nonce.code))
+            .take(advertise_limit)
+            .collect())
+    }
+
+    fn ping_payload(&mut self, peer: &str, peer_idx: u16) -> Result<PingPayload> {
+        Ok(PingPayload {
+            version: 2,
+            advertised_nonces: self.advertised_nonces_for_peer(peer, peer_idx)?,
+            held_peer_nonce_codes: self.state.nonce_pool.incoming_nonce_codes(peer_idx),
+            policy_profile: Some(self.local_policy_profile_for(peer)?),
         })
     }
 
@@ -2634,6 +2723,161 @@ mod tests {
     }
 
     #[test]
+    fn ping_resends_available_public_nonces_after_a_timed_out_attempt() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+
+        let first_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin first ping")
+            .outbound;
+        assert_eq!(first_ping.len(), 1);
+
+        let expired = fixture
+            .signer
+            .apply(SignerInput::Expire {
+                now: now_unix_secs() + fixture.signer.config.ping_timeout_secs + 1,
+            })
+            .expect("expire timed-out ping");
+        assert_eq!(expired.failures.len(), 1);
+
+        let second_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin second ping")
+            .outbound;
+        assert_eq!(second_ping.len(), 1);
+
+        let response = peer_signer
+            .process_event(&second_ping[0])
+            .expect("peer processes second ping");
+        assert_eq!(response.len(), 1);
+
+        let peer_status = peer_signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == fixture.signer.local_pubkey32())
+            .expect("local peer status");
+        assert!(peer_status.can_sign);
+        assert!(peer_status.incoming_available > 0);
+    }
+
+    #[test]
+    fn ping_stops_advertising_after_peer_reports_sufficient_inventory() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+
+        let first_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin first ping")
+            .outbound;
+        assert_eq!(first_ping.len(), 1);
+
+        let decoded = decode_envelope_for_local(
+            &peer_share,
+            fixture.signer.local_pubkey32(),
+            &first_ping[0],
+        );
+        let BridgePayload::PingRequest(wire) = decoded.payload else {
+            panic!("expected ping request");
+        };
+        let payload = PingPayload::try_from(wire).expect("decode ping payload");
+        assert!(!payload.advertised_nonces.is_empty());
+        assert!(payload.held_peer_nonce_codes.is_empty());
+
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+        let response = peer_signer
+            .process_event(&first_ping[0])
+            .expect("peer processes first ping");
+        assert_eq!(response.len(), 1);
+        fixture
+            .signer
+            .process_event(&response[0])
+            .expect("process ping response");
+
+        let second_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin second ping")
+            .outbound;
+        assert_eq!(second_ping.len(), 1);
+
+        let decoded = decode_envelope_for_local(
+            &peer_share,
+            fixture.signer.local_pubkey32(),
+            &second_ping[0],
+        );
+        let BridgePayload::PingRequest(wire) = decoded.payload else {
+            panic!("expected ping request");
+        };
+        let payload = PingPayload::try_from(wire).expect("decode ping payload");
+        assert!(payload.advertised_nonces.is_empty());
+    }
+
+    #[test]
+    fn ping_refills_after_peer_observed_inventory_drops_below_threshold() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let peer_idx = decode_member_index(&fixture.group.members, &peer).expect("peer idx");
+
+        let first_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin first ping")
+            .outbound;
+        assert_eq!(first_ping.len(), 1);
+
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+        let response = peer_signer
+            .process_event(&first_ping[0])
+            .expect("peer processes first ping");
+        assert_eq!(response.len(), 1);
+        fixture
+            .signer
+            .process_event(&response[0])
+            .expect("process ping response");
+
+        let cfg = fixture.signer.state.nonce_pool.config().clone();
+        let remaining_target = cfg.min_threshold.saturating_sub(1);
+        let outgoing_codes = fixture
+            .signer
+            .state
+            .nonce_pool
+            .outgoing_public_nonce_codes(peer_idx);
+        let spend_count = outgoing_codes.len().saturating_sub(remaining_target);
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .take_outgoing_signing_nonces_many(peer_idx, &outgoing_codes[..spend_count])
+            .expect("consume local outgoing nonces");
+
+        let refill_ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin refill ping")
+            .outbound;
+        assert_eq!(refill_ping.len(), 1);
+
+        let decoded = decode_envelope_for_local(
+            &peer_share,
+            fixture.signer.local_pubkey32(),
+            &refill_ping[0],
+        );
+        let BridgePayload::PingRequest(wire) = decoded.payload else {
+            panic!("expected ping request");
+        };
+        let payload = PingPayload::try_from(wire).expect("decode ping payload");
+        assert_eq!(payload.advertised_nonces.len(), spend_count);
+    }
+
+    #[test]
     fn invalid_locked_peer_response_fails_round_terminally() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
         let locked_peer = fixture.signer.peers[0].clone();
@@ -2838,8 +3082,9 @@ mod tests {
             request_id: request_id.clone(),
             sent_at: now,
             payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
-                version: 1,
-                nonces: None,
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
                 policy_profile: None,
             })),
         };

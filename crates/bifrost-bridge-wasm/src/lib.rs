@@ -8,7 +8,8 @@ use bifrost_core::{get_group_id, nonce::NoncePoolConfig};
 use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
-    RuntimeStatusSummary, SigningDevice, finalize_onboarding_bootstrap_seed,
+    PeerNonceInventoryObservation, RuntimeStatusSummary, SigningDevice,
+    finalize_onboarding_bootstrap_seed,
     generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
@@ -130,6 +131,7 @@ struct DeviceStateSnapshotJson {
     sig_cache_size: usize,
     manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     remote_scoped_policies: HashMap<String, bifrost_core::types::PeerScopedPolicyProfile>,
+    remote_nonce_inventory_observations: HashMap<String, PeerNonceInventoryObservation>,
     pending_operations: HashMap<String, bifrost_signer::PendingOperation>,
     nonce_pool: NoncePoolSnapshotJson,
 }
@@ -1062,6 +1064,7 @@ fn device_state_snapshot_json(
         sig_cache_size: state.sig_cache.len(),
         manual_policy_overrides: state.manual_policy_overrides.clone(),
         remote_scoped_policies: state.remote_scoped_policies.clone(),
+        remote_nonce_inventory_observations: state.remote_nonce_inventory_observations.clone(),
         pending_operations: state.pending_operations.clone(),
         nonce_pool: nonce_pool_snapshot_json(state, bootstrap)?,
     })
@@ -1089,6 +1092,19 @@ fn nonce_pool_snapshot_json(
     for peer in &bootstrap.peers {
         let idx = decode_member_index(&group, peer)?;
         let stats = state.nonce_pool.peer_stats(idx);
+        let current_codes = state.nonce_pool.outgoing_public_nonce_codes(idx);
+        let current_code_set = current_codes.into_iter().collect::<std::collections::HashSet<_>>();
+        let observed_count = state
+            .remote_nonce_inventory_observations
+            .get(peer)
+            .map(|observation| {
+                observation
+                    .held_codes
+                    .iter()
+                    .filter(|code| current_code_set.contains(*code))
+                    .count()
+            })
+            .unwrap_or(0);
         peers.push(NoncePeerSnapshotJson {
             idx,
             pubkey: peer.clone(),
@@ -1096,7 +1112,7 @@ fn nonce_pool_snapshot_json(
             outgoing_available: stats.outgoing_available,
             outgoing_spent: stats.outgoing_spent,
             can_sign: stats.can_sign,
-            should_send_nonces: stats.should_send_nonces,
+            should_send_nonces: observed_count < state.nonce_pool.config().min_threshold,
         });
     }
 

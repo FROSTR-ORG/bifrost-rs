@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -7,7 +9,7 @@ use bifrost_core::types::{GroupPackage, SharePackage};
 use bifrost_signer::{DeviceConfig, DeviceState, SigningDevice};
 use frostr_utils::{CreateKeysetConfig, create_keyset};
 use nostr::{Event, Filter};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 struct MockRelayAdapter {
     inbound_rx: mpsc::UnboundedReceiver<Event>,
@@ -57,6 +59,119 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         DeviceConfig::default(),
     )
     .expect("build signer")
+}
+
+#[derive(Clone, Default)]
+struct SharedRelayHub {
+    peers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Event>>>>,
+}
+
+impl SharedRelayHub {
+    async fn register(&self, adapter_id: &str) -> mpsc::UnboundedReceiver<Event> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.peers.lock().await.insert(adapter_id.to_string(), tx);
+        rx
+    }
+
+    async fn publish(&self, sender_id: &str, event: Event) -> Result<()> {
+        let peers = self.peers.lock().await;
+        for (peer_id, tx) in peers.iter() {
+            if peer_id == sender_id {
+                continue;
+            }
+            tx.send(event.clone())
+                .map_err(|_| anyhow!("shared relay subscriber channel closed"))?;
+        }
+        Ok(())
+    }
+
+    async fn unregister(&self, adapter_id: &str) {
+        self.peers.lock().await.remove(adapter_id);
+    }
+}
+
+struct SharedRelayAdapter {
+    adapter_id: String,
+    hub: SharedRelayHub,
+    inbound_rx: mpsc::UnboundedReceiver<Event>,
+}
+
+impl SharedRelayAdapter {
+    async fn new(hub: SharedRelayHub, adapter_id: impl Into<String>) -> Self {
+        let adapter_id = adapter_id.into();
+        let inbound_rx = hub.register(&adapter_id).await;
+        Self {
+            adapter_id,
+            hub,
+            inbound_rx,
+        }
+    }
+}
+
+#[async_trait]
+impl RelayAdapter for SharedRelayAdapter {
+    async fn connect(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> Result<()> {
+        self.hub.unregister(&self.adapter_id).await;
+        Ok(())
+    }
+
+    async fn subscribe(&mut self, _filters: Vec<Filter>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn publish(&mut self, event: Event) -> Result<()> {
+        self.hub.publish(&self.adapter_id, event).await
+    }
+
+    async fn next_event(&mut self) -> Result<Event> {
+        self.inbound_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("inbound channel closed"))
+    }
+}
+
+async fn refresh_all_peers(bridge: &Bridge) {
+    let peers = bridge
+        .runtime_metadata()
+        .await
+        .expect("runtime metadata")
+        .peers;
+    for peer in peers {
+        bridge
+            .ping(peer, Duration::from_secs(5))
+            .await
+            .expect("refresh peer ping");
+    }
+}
+
+async fn assert_all_peers_nonce_ready(bridge: &Bridge, expected_peers: usize) -> Result<()> {
+    let readiness = bridge.readiness().await.expect("readiness");
+    let peers = bridge.peer_status().await.expect("peer status");
+    if peers.len() != expected_peers {
+        return Err(anyhow!(
+            "expected {expected_peers} peers, got {}\n{peers:#?}",
+            peers.len()
+        ));
+    }
+    if !readiness.sign_ready {
+        return Err(anyhow!(
+            "runtime is not sign-ready\nreadiness: {readiness:#?}\npeers: {peers:#?}"
+        ));
+    }
+    for peer in peers {
+        if !peer.online || !peer.can_sign || peer.incoming_available == 0 {
+            return Err(anyhow!(
+                "peer {} is not symmetrically nonce-ready\n{peer:#?}",
+                peer.pubkey
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -148,4 +263,70 @@ async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
     bridge.shutdown().await;
     drop(inbound_tx);
     let _ = worker.await;
+}
+
+#[tokio::test]
+async fn refresh_all_peers_converges_to_symmetric_nonce_ready_status_across_three_bridges() {
+    let bundle = create_keyset(CreateKeysetConfig {
+        group_name: "Test Group".to_string(),
+        threshold: 2,
+        count: 3,
+    })
+    .expect("create keyset");
+    let group = bundle.group.clone();
+    let relay_hub = SharedRelayHub::default();
+
+    let alice = Bridge::start_with_config(
+        SharedRelayAdapter::new(relay_hub.clone(), "alice").await,
+        build_signer(&group, &bundle.shares[0]),
+        BridgeConfig::default(),
+    )
+    .await
+    .expect("start alice bridge");
+    let bob = Bridge::start_with_config(
+        SharedRelayAdapter::new(relay_hub.clone(), "bob").await,
+        build_signer(&group, &bundle.shares[1]),
+        BridgeConfig::default(),
+    )
+    .await
+    .expect("start bob bridge");
+    let carol = Bridge::start_with_config(
+        SharedRelayAdapter::new(relay_hub, "carol").await,
+        build_signer(&group, &bundle.shares[2]),
+        BridgeConfig::default(),
+    )
+    .await
+    .expect("start carol bridge");
+
+    refresh_all_peers(&alice).await;
+    refresh_all_peers(&bob).await;
+    refresh_all_peers(&carol).await;
+
+    let convergence = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let statuses = tokio::try_join!(
+                assert_all_peers_nonce_ready(&alice, 2),
+                assert_all_peers_nonce_ready(&bob, 2),
+                assert_all_peers_nonce_ready(&carol, 2),
+            );
+            if statuses.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+
+    if convergence.is_err() {
+        let alice_status = alice.runtime_status().await.expect("alice runtime status");
+        let bob_status = bob.runtime_status().await.expect("bob runtime status");
+        let carol_status = carol.runtime_status().await.expect("carol runtime status");
+        panic!(
+            "three-bridge refresh never reached symmetric nonce readiness\nalice: {alice_status:#?}\n\nbob: {bob_status:#?}\n\ncarol: {carol_status:#?}"
+        );
+    }
+
+    alice.shutdown().await;
+    bob.shutdown().await;
+    carol.shutdown().await;
 }

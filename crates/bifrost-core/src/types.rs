@@ -445,7 +445,9 @@ pub struct PeerError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingPayload {
     pub version: u16,
-    pub nonces: Option<Vec<DerivedPublicNonce>>,
+    pub advertised_nonces: Vec<DerivedPublicNonce>,
+    #[serde(with = "serde_fixed_array::vec_bytes32")]
+    pub held_peer_nonce_codes: Vec<Bytes32>,
     pub policy_profile: Option<PeerScopedPolicyProfile>,
 }
 
@@ -492,12 +494,13 @@ mod tests {
     #[test]
     fn core_runtime_types_preserve_expected_fields() {
         let ping = PingPayload {
-            version: 1,
-            nonces: Some(vec![DerivedPublicNonce {
+            version: 2,
+            advertised_nonces: vec![DerivedPublicNonce {
                 binder_pn: [5u8; 33],
                 hidden_pn: [6u8; 33],
                 code: [7u8; 32],
-            }]),
+            }],
+            held_peer_nonce_codes: vec![[11u8; 32]],
             policy_profile: Some(PeerScopedPolicyProfile {
                 for_peer: [8u8; 32],
                 revision: 9,
@@ -523,7 +526,7 @@ mod tests {
                     },
                 ],
             },
-            nonces: ping.nonces.clone().expect("nonces"),
+            nonces: ping.advertised_nonces.clone(),
         };
         let share = SharePackage {
             idx: 2,
@@ -533,7 +536,8 @@ mod tests {
         assert_eq!(share.idx, 2);
         assert_eq!(onboard.group.threshold, 2);
         assert_eq!(onboard.group.members.len(), 2);
-        assert_eq!(ping.version, 1);
+        assert_eq!(ping.version, 2);
+        assert_eq!(ping.held_peer_nonce_codes.len(), 1);
         assert_eq!(
             ping.policy_profile
                 .as_ref()
