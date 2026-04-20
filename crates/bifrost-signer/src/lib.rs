@@ -313,7 +313,26 @@ pub struct RuntimeStatusSummary {
     pub readiness: RuntimeReadiness,
     pub peers: Vec<PeerStatus>,
     pub peer_permission_states: Vec<PeerPermissionState>,
+    #[serde(default)]
+    pub onboarding_statuses: Vec<OnboardingStatus>,
     pub pending_operations: Vec<PendingOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingStatusStage {
+    DeviceContactedHost,
+    HandshakeCompleted,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OnboardingStatus {
+    pub pubkey: String,
+    pub stage: OnboardingStatusStage,
+    pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -505,6 +524,7 @@ pub struct SigningDevice {
     device_id: DeviceId,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
+    onboarding_statuses: HashMap<String, OnboardingStatus>,
     latest_request_id: Option<String>,
     runtime_persistence_hint: PersistenceHint,
 }
@@ -565,6 +585,7 @@ impl SigningDevice {
             device_id,
             completions: VecDeque::new(),
             failures: VecDeque::new(),
+            onboarding_statuses: HashMap::new(),
             latest_request_id: None,
             runtime_persistence_hint: PersistenceHint::None,
         })
@@ -614,6 +635,7 @@ impl SigningDevice {
         self.state.nonce_pool.init_peer(self.share.idx);
         self.completions.clear();
         self.failures.clear();
+        self.onboarding_statuses.clear();
         self.latest_request_id = None;
         self.runtime_persistence_hint = PersistenceHint::Immediate;
     }
@@ -824,6 +846,16 @@ impl SigningDevice {
         operations
     }
 
+    pub fn onboarding_statuses(&self) -> Vec<OnboardingStatus> {
+        let mut statuses = self
+            .onboarding_statuses
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        statuses.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
+        statuses
+    }
+
     pub fn runtime_status(&self) -> RuntimeStatusSummary {
         let peers = self.peer_status();
         RuntimeStatusSummary {
@@ -832,6 +864,7 @@ impl SigningDevice {
             readiness: self.readiness_from_peers(&peers),
             peers,
             peer_permission_states: self.peer_permission_states(),
+            onboarding_statuses: self.onboarding_statuses(),
             pending_operations: self.pending_operations(),
         }
     }
@@ -848,6 +881,38 @@ impl SigningDevice {
                 effective_policy: self.effective_policy_for_peer(&peer),
             })
             .collect()
+    }
+
+    fn note_onboarding_status(
+        &mut self,
+        peer: &str,
+        stage: OnboardingStatusStage,
+        updated_at: u64,
+        error: Option<String>,
+    ) {
+        let normalized = peer.to_ascii_lowercase();
+        if !self.member_idx_by_pubkey.contains_key(&normalized) {
+            return;
+        }
+
+        if matches!(stage, OnboardingStatusStage::DeviceContactedHost)
+            && matches!(
+                self.onboarding_statuses.get(&normalized).map(|status| &status.stage),
+                Some(OnboardingStatusStage::HandshakeCompleted)
+            )
+        {
+            return;
+        }
+
+        self.onboarding_statuses.insert(
+            normalized.clone(),
+            OnboardingStatus {
+                pubkey: normalized,
+                stage,
+                updated_at,
+                error,
+            },
+        );
     }
 
     fn readiness_from_peers(&self, peers: &[PeerStatus]) -> RuntimeReadiness {
@@ -1649,6 +1714,12 @@ impl SigningDevice {
             }
             BridgePayload::OnboardRequest(wire) => {
                 if !self.inbound_allowed(&sender, "onboard") {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("inbound onboard denied by local policy".to_string()),
+                    );
                     return self.reject_request(
                         &sender,
                         envelope.request_id,
@@ -1669,26 +1740,62 @@ impl SigningDevice {
                     "received onboard request"
                 );
                 if request.version != 1 {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some(format!(
+                            "unsupported onboard request version {}",
+                            request.version
+                        )),
+                    );
                     return Err(SignerError::InvalidRequest(format!(
                         "unsupported onboard request version {}",
                         request.version
                     )));
                 }
                 if request.nonces.is_empty() {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("onboard bootstrap nonces missing".to_string()),
+                    );
                     return Err(SignerError::InvalidRequest(
                         "onboard bootstrap nonces missing".to_string(),
                     ));
                 }
+                self.note_onboarding_status(
+                    &sender,
+                    OnboardingStatusStage::DeviceContactedHost,
+                    now,
+                    None,
+                );
                 self.state
                     .nonce_pool
                     .store_incoming(sender_idx, request.nonces);
 
-                self.state
+                if let Err(error) = self
+                    .state
                     .nonce_pool
                     .generate_for_peer(sender_idx, NoncePoolConfig::default().pool_size)
-                    .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+                {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some(error.to_string()),
+                    );
+                    return Err(SignerError::InvalidRequest(error.to_string()));
+                }
                 let nonces = self.state.nonce_pool.outgoing_public_nonces(sender_idx);
                 if nonces.is_empty() {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("onboard bootstrap nonces unavailable".to_string()),
+                    );
                     return Err(SignerError::InvalidRequest(
                         "onboard bootstrap nonces unavailable".to_string(),
                     ));
@@ -1710,7 +1817,14 @@ impl SigningDevice {
                     group_member_count = self.group.members.len(),
                     "sending onboard response"
                 );
-                self.encrypt_for_peers(&[sender], &response)
+                let outbound = self.encrypt_for_peers(&[sender.clone()], &response)?;
+                self.note_onboarding_status(
+                    &sender,
+                    OnboardingStatusStage::HandshakeCompleted,
+                    now,
+                    None,
+                );
+                Ok(outbound)
             }
             BridgePayload::SignRequest(wire) => {
                 if !self.inbound_allowed(&sender, "sign") {
@@ -2973,6 +3087,54 @@ mod tests {
             .handle_inbound_request(unsupported_version, sender)
             .expect_err("unsupported version must fail");
         assert!(matches!(err, SignerError::InvalidRequest(_)));
+        assert_eq!(fixture.signer.onboarding_statuses().len(), 1);
+        let status = &fixture.signer.onboarding_statuses()[0];
+        assert_eq!(status.pubkey, fixture.signer.peers[0]);
+        assert_eq!(status.stage, OnboardingStatusStage::Failed);
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("unsupported onboard request version"))
+        );
+    }
+
+    #[test]
+    fn inbound_onboard_request_updates_runtime_onboarding_status() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+
+        let request = BridgeEnvelope {
+            request_id: "req-onboard-status".to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
+                version: 1,
+                nonces: vec![DerivedPublicNonceWire {
+                    binder_pn: hex::encode([7u8; 33]),
+                    hidden_pn: hex::encode([8u8; 33]),
+                    code: hex::encode([9u8; 32]),
+                }],
+            }),
+        };
+
+        let outbound = fixture
+            .signer
+            .handle_inbound_request(request, sender.clone())
+            .expect("valid onboard request should produce response");
+        assert_eq!(outbound.len(), 1);
+
+        let statuses = fixture.signer.onboarding_statuses();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].pubkey, sender);
+        assert_eq!(statuses[0].stage, OnboardingStatusStage::HandshakeCompleted);
+        assert!(statuses[0].error.is_none());
+
+        let runtime_status = fixture.signer.runtime_status();
+        assert_eq!(runtime_status.onboarding_statuses.len(), 1);
+        assert_eq!(
+            runtime_status.onboarding_statuses[0].stage,
+            OnboardingStatusStage::HandshakeCompleted
+        );
     }
 
     #[test]
