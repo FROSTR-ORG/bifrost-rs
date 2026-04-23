@@ -23,6 +23,7 @@ use k256::schnorr::SigningKey;
 use nostr::{Alphabet, Event, SingleLetterTag, TagKind};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
 
@@ -246,7 +247,7 @@ fn decrypt_content_from_peer(
     let conversation_key = hkdf_extract_sha256(b"nip44-v2", &shared_x)?;
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(&conversation_key, &nonce32)?;
     let expected_mac = hmac_aad(&hmac_key, &nonce32, ciphertext)?;
-    if !ct_eq_32(&expected_mac, &mac) {
+    if !bool::from(expected_mac.ct_eq(&mac)) {
         return Err(FrostUtilsError::DecryptionFailed);
     }
 
@@ -389,14 +390,6 @@ fn hmac_aad(
     let mut tag = [0u8; 32];
     tag.copy_from_slice(&out);
     Ok(tag)
-}
-
-fn ct_eq_32(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for idx in 0..32 {
-        diff |= left[idx] ^ right[idx];
-    }
-    diff == 0
 }
 
 #[cfg(test)]
@@ -602,5 +595,54 @@ mod tests {
         .expect("decode response")
         .expect("matching response");
         assert_eq!(decoded.group, response.group);
+    }
+
+    /// Flip a single bit in the MAC tag at four probed positions and confirm
+    /// each tampered payload is rejected with `DecryptionFailed`. Protects the
+    /// constant-time MAC compare.
+    #[test]
+    fn decrypt_content_from_peer_rejects_mac_mismatch_at_every_probed_position() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("bundle");
+        let alice = bundle.shares[0].clone();
+        let bob = bundle.shares[1].clone();
+        let alice_secret = SecretKey::from_slice(&alice.seckey).expect("alice secret");
+        let bob_secret = SecretKey::from_slice(&bob.seckey).expect("bob secret");
+        let alice_pk32 = hex::encode(
+            &alice_secret
+                .public_key()
+                .to_encoded_point(false)
+                .x()
+                .expect("x")[..],
+        );
+        let bob_pk32 = hex::encode(
+            &bob_secret
+                .public_key()
+                .to_encoded_point(false)
+                .x()
+                .expect("x")[..],
+        );
+
+        let payload =
+            encrypt_content_for_peer(alice.seckey, &bob_pk32, "mac-probe").expect("encrypt");
+        let bytes = STANDARD_NO_PAD
+            .decode(payload.as_bytes())
+            .expect("decode payload");
+        let mac_start = bytes.len() - 32;
+
+        let probes: &[(usize, u8)] = &[(0, 0x80), (16, 0x01), (31, 0x40), (0, 0x01)];
+        for &(offset, mask) in probes {
+            let mut tampered = bytes.clone();
+            tampered[mac_start + offset] ^= mask;
+            let encoded = STANDARD_NO_PAD.encode(&tampered);
+            let err = decrypt_content_from_peer(bob.seckey, &alice_pk32, &encoded).expect_err(
+                &format!("mac flip at offset {offset:#x} mask {mask:#x} must fail"),
+            );
+            assert!(matches!(err, FrostUtilsError::DecryptionFailed));
+        }
     }
 }

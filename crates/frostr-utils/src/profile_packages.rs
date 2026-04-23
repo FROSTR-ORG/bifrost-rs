@@ -17,6 +17,7 @@ use pbkdf2::pbkdf2_hmac_array;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use url::form_urlencoded::{Serializer, parse as parse_urlencoded};
 
 use bifrost_codec::wire::GroupPackageWire;
@@ -923,7 +924,7 @@ fn decrypt_nip44_compatible_payload(
     mac.copy_from_slice(&data[data.len() - 32..]);
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
     let expected_mac = hmac_aad(&hmac_key, &nonce32, ciphertext)?;
-    if expected_mac != mac {
+    if !bool::from(expected_mac.ct_eq(&mac)) {
         return Err(FrostUtilsError::DecryptionFailed);
     }
     let mut padded = ciphertext.to_vec();
@@ -1189,5 +1190,30 @@ mod tests {
         let encoded = encode_bfshare_package(&payload, "secret").expect("encode");
         let err = decode_bfshare_package(&encoded, "wrong").expect_err("wrong password must fail");
         matches!(err, FrostUtilsError::DecryptionFailed);
+    }
+
+    /// Flip a single bit in the MAC tag at four probed positions on a
+    /// profile-backup payload and confirm `decrypt_nip44_compatible_payload`
+    /// rejects every tampered variant. Guards the constant-time MAC compare.
+    #[test]
+    fn decrypt_nip44_compatible_payload_rejects_mac_mismatch_at_every_probed_position() {
+        let conversation_key = [0xABu8; 32];
+        let ciphertext = encrypt_nip44_compatible_payload(&conversation_key, "mac-probe-backup")
+            .expect("encrypt");
+        let bytes = STANDARD_NO_PAD
+            .decode(ciphertext.as_bytes())
+            .expect("decode payload");
+        let mac_start = bytes.len() - 32;
+
+        let probes: &[(usize, u8)] = &[(0, 0x80), (16, 0x01), (31, 0x40), (0, 0x01)];
+        for &(offset, mask) in probes {
+            let mut tampered = bytes.clone();
+            tampered[mac_start + offset] ^= mask;
+            let encoded = STANDARD_NO_PAD.encode(&tampered);
+            let err = decrypt_nip44_compatible_payload(&conversation_key, &encoded).expect_err(
+                &format!("mac flip at offset {offset:#x} mask {mask:#x} must fail"),
+            );
+            assert!(matches!(err, FrostUtilsError::DecryptionFailed));
+        }
     }
 }
