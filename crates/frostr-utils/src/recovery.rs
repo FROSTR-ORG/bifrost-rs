@@ -48,7 +48,7 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
         .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
     let signing_key = signing_key.into_even_y(None);
 
-    let derived_group_pk = verifying_key_to_group_pk(frost::VerifyingKey::from(&signing_key));
+    let derived_group_pk = verifying_key_to_group_pk(frost::VerifyingKey::from(&signing_key))?;
     if derived_group_pk != input.group.group_pk {
         return Err(FrostUtilsError::VerificationFailed(
             "recovered signing key does not match group public key".to_string(),
@@ -75,14 +75,19 @@ fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
     out
 }
 
-fn verifying_key_to_group_pk(verifying_key: frost::VerifyingKey) -> [u8; 32] {
+fn verifying_key_to_group_pk(verifying_key: frost::VerifyingKey) -> FrostUtilsResult<Bytes32> {
+    let serialized = verifying_key
+        .serialize()
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+    if serialized.len() != 33 {
+        return Err(FrostUtilsError::Crypto(format!(
+            "unexpected verifying key size: expected 33, got {}",
+            serialized.len()
+        )));
+    }
     let mut out = [0u8; 32];
-    out.copy_from_slice(
-        &verifying_key
-            .serialize()
-            .expect("secp256k1-tr verifying key serialization should succeed")[1..],
-    );
-    out
+    out.copy_from_slice(&serialized[1..]);
+    Ok(out)
 }
 
 #[cfg(test)]
