@@ -20,7 +20,7 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
     for share in input.shares.iter().take(input.group.threshold as usize) {
         let id = frost::Identifier::try_from(share.idx)
             .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
-        let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+        let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
             .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
         let member = input

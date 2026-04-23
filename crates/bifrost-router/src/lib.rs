@@ -662,7 +662,7 @@ mod tests {
             group.clone(),
             share.clone(),
             peers,
-            DeviceState::new(share.idx, share.seckey),
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("build signer")
@@ -1020,7 +1020,7 @@ mod tests {
                     peer.clone(),
                     encode_hex(&bundle.group.members[2].pubkey[1..]),
                 ],
-                DeviceState::new(share.idx, share.seckey),
+                DeviceState::new(share.idx, *share.seckey.expose_bytes()),
                 DeviceConfig {
                     ping_timeout_secs: 1,
                     ..DeviceConfig::default()

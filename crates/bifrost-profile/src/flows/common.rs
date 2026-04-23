@@ -142,7 +142,7 @@ pub(crate) fn resolve_profile_peers_and_overrides(
     value: serde_json::Value,
 ) -> Result<(Vec<String>, HashMap<String, PeerPolicyOverride>)> {
     let document = parse_policy_overrides_doc(value)?;
-    let local_pubkey = derive_member_pubkey_hex(share.seckey)?;
+    let local_pubkey = derive_member_pubkey_hex(*share.seckey.expose_bytes())?;
     let peer_keys = group
         .members
         .iter()
@@ -188,7 +188,7 @@ pub(crate) fn profile_to_package_payload(
         version: 1,
         device: BfProfileDevice {
             name: profile.label,
-            share_secret: hex::encode(share.seckey),
+            share_secret: hex::encode(share.seckey.expose_bytes()),
             manual_peer_policy_overrides,
             relays: relay_profile.relays,
         },

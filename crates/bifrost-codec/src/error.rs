@@ -15,10 +15,7 @@ pub enum CodecError {
     #[error("bridge envelope exceeds maximum size")]
     EnvelopeTooLarge,
     #[error("field `{field}` exceeds maximum size of {limit} bytes")]
-    FieldTooLarge {
-        field: &'static str,
-        limit: usize,
-    },
+    FieldTooLarge { field: &'static str, limit: usize },
 }
 
 impl From<serde_json::Error> for CodecError {

@@ -223,7 +223,7 @@ mod tests {
             group.clone(),
             share.clone(),
             peers.clone(),
-            DeviceState::new(share.idx, share.seckey),
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("build signer");

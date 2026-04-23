@@ -179,7 +179,8 @@ impl FilesystemProfileDomain {
         passphrase: &str,
         now_unix_secs: u64,
     ) -> Result<ImportedProfileArtifacts> {
-        let profile_id = derive_profile_id_for_share_secret(&hex::encode(share.seckey))?;
+        let profile_id =
+            derive_profile_id_for_share_secret(&hex::encode(share.seckey.expose_bytes()))?;
         self.ensure_profile_id_unused(&profile_id)?;
         let relay_profile_id = self.resolve_relay_profile_id(relay_profile)?;
         let group_ref = self.store_group_package(group)?;
@@ -223,7 +224,9 @@ impl FilesystemProfileDomain {
         let group = group_from_payload(payload)?;
         let share = SharePackage {
             idx: find_member_index_for_share_secret(&group, &payload.device.share_secret)?,
-            seckey: hex_to_bytes32(&payload.device.share_secret)?,
+            seckey: bifrost_core::secret::SharePrivateKey::new(hex_to_bytes32(
+                &payload.device.share_secret,
+            )?),
         };
         let share_raw = serde_json::to_string_pretty(&SharePackageWire::from(share))
             .context("serialize bfprofile share package")?;
@@ -260,7 +263,8 @@ impl FilesystemProfileDomain {
         encrypted_profile: EncryptedProfileRecord,
         now_unix_secs: u64,
     ) -> Result<ImportedProfileArtifacts> {
-        let profile_id = derive_profile_id_for_share_secret(&hex::encode(share.seckey))?;
+        let profile_id =
+            derive_profile_id_for_share_secret(&hex::encode(share.seckey.expose_bytes()))?;
         self.ensure_profile_id_unused(&profile_id)?;
         let group_ref = self.store_group_package(group)?;
         let profile = self.write_imported_profile(

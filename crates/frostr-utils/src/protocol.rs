@@ -424,7 +424,11 @@ mod tests {
         let share_a = bundle.shares[0].clone();
         let share_b = bundle.shares[1].clone();
 
-        let mut pool_a = NoncePool::new(share_a.idx, share_a.seckey, NoncePoolConfig::default());
+        let mut pool_a = NoncePool::new(
+            share_a.idx,
+            *share_a.seckey.expose_bytes(),
+            NoncePoolConfig::default(),
+        );
         pool_a.init_peer(share_b.idx);
         let nonce_a = pool_a
             .generate_for_peer(share_b.idx, 1)
@@ -434,7 +438,11 @@ mod tests {
             .take_outgoing_signing_nonces_many(share_b.idx, &[nonce_a.code])
             .expect("nonces a");
 
-        let mut pool_b = NoncePool::new(share_b.idx, share_b.seckey, NoncePoolConfig::default());
+        let mut pool_b = NoncePool::new(
+            share_b.idx,
+            *share_b.seckey.expose_bytes(),
+            NoncePoolConfig::default(),
+        );
         pool_b.init_peer(share_a.idx);
         let nonce_b = pool_b
             .generate_for_peer(share_a.idx, 1)
@@ -534,7 +542,8 @@ mod tests {
         .expect("bundle");
         let local_share = bundle.shares[0].clone();
         let inviter_share = bundle.shares[1].clone();
-        let inviter_secret = SecretKey::from_slice(&inviter_share.seckey).expect("inviter secret");
+        let inviter_secret =
+            SecretKey::from_slice(inviter_share.seckey.expose_bytes()).expect("inviter secret");
         let inviter_pubkey32 = hex::encode(
             &inviter_secret
                 .public_key()
@@ -551,7 +560,7 @@ mod tests {
             code: [9u8; 32],
         }];
         let event = build_onboard_request_event(
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             &inviter_pubkey32,
             20_000,
             &request_id,
@@ -559,9 +568,12 @@ mod tests {
             &bootstrap_nonces,
         )
         .expect("build request");
-        let plaintext =
-            decrypt_content_from_peer(inviter_share.seckey, &local_pubkey32, &event.content)
-                .expect("decrypt request");
+        let plaintext = decrypt_content_from_peer(
+            *inviter_share.seckey.expose_bytes(),
+            &local_pubkey32,
+            &event.content,
+        )
+        .expect("decrypt request");
         let envelope = decode_bridge_envelope(&plaintext).expect("decode request");
         assert_eq!(envelope.request_id, request_id);
         let response = OnboardResponse {
@@ -574,11 +586,14 @@ mod tests {
             payload: BridgePayload::OnboardResponse(OnboardResponseWire::from(response.clone())),
         })
         .expect("encode response");
-        let response_content =
-            encrypt_content_for_peer(inviter_share.seckey, &local_pubkey32, &response_plaintext)
-                .expect("encrypt response");
+        let response_content = encrypt_content_for_peer(
+            *inviter_share.seckey.expose_bytes(),
+            &local_pubkey32,
+            &response_plaintext,
+        )
+        .expect("encrypt response");
         let response_event = build_signed_event(
-            inviter_share.seckey,
+            *inviter_share.seckey.expose_bytes(),
             20_000,
             vec![vec!["p".to_string(), local_pubkey32.clone()]],
             response_content,
@@ -587,7 +602,7 @@ mod tests {
         .expect("build response");
         let decoded = decode_onboard_response_event(
             &response_event,
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             &inviter_pubkey32,
             &local_pubkey32,
             &request_id,
@@ -610,8 +625,9 @@ mod tests {
         .expect("bundle");
         let alice = bundle.shares[0].clone();
         let bob = bundle.shares[1].clone();
-        let alice_secret = SecretKey::from_slice(&alice.seckey).expect("alice secret");
-        let bob_secret = SecretKey::from_slice(&bob.seckey).expect("bob secret");
+        let alice_secret =
+            SecretKey::from_slice(alice.seckey.expose_bytes()).expect("alice secret");
+        let bob_secret = SecretKey::from_slice(bob.seckey.expose_bytes()).expect("bob secret");
         let alice_pk32 = hex::encode(
             &alice_secret
                 .public_key()
@@ -628,7 +644,8 @@ mod tests {
         );
 
         let payload =
-            encrypt_content_for_peer(alice.seckey, &bob_pk32, "mac-probe").expect("encrypt");
+            encrypt_content_for_peer(*alice.seckey.expose_bytes(), &bob_pk32, "mac-probe")
+                .expect("encrypt");
         let bytes = STANDARD_NO_PAD
             .decode(payload.as_bytes())
             .expect("decode payload");
@@ -639,9 +656,10 @@ mod tests {
             let mut tampered = bytes.clone();
             tampered[mac_start + offset] ^= mask;
             let encoded = STANDARD_NO_PAD.encode(&tampered);
-            let err = decrypt_content_from_peer(bob.seckey, &alice_pk32, &encoded).expect_err(
-                &format!("mac flip at offset {offset:#x} mask {mask:#x} must fail"),
-            );
+            let err = decrypt_content_from_peer(*bob.seckey.expose_bytes(), &alice_pk32, &encoded)
+                .expect_err(&format!(
+                    "mac flip at offset {offset:#x} mask {mask:#x} must fail"
+                ));
             assert!(matches!(err, FrostUtilsError::DecryptionFailed));
         }
     }

@@ -194,7 +194,11 @@ mod tests {
         .expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
-        let signer = build_signer(&group, &share, DeviceState::new(share.idx, share.seckey));
+        let signer = build_signer(
+            &group,
+            &share,
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
+        );
         let store_path = temp_path("live-state", "bin");
         let store = EncryptedFileStore::new(store_path.clone(), share.clone());
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
@@ -208,7 +212,7 @@ mod tests {
                 build_signer(
                     &group,
                     member_share,
-                    DeviceState::new(member_share.idx, member_share.seckey),
+                    DeviceState::new(member_share.idx, *member_share.seckey.expose_bytes()),
                 )
             })
             .collect::<Vec<_>>();

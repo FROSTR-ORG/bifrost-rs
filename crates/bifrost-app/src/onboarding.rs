@@ -118,7 +118,7 @@ where
     let inviter_member_idx = inviter_member_idx(&response.group, &peer_pubkey)?;
     let share = SharePackage {
         idx: local_member_idx,
-        seckey: share_secret,
+        seckey: bifrost_core::secret::SharePrivateKey::new(share_secret),
     };
     if response.nonces.is_empty() {
         bail!("onboard response is missing bootstrap nonces for inviter peer {peer_pubkey}");
@@ -389,7 +389,7 @@ mod tests {
             .iter()
             .find(|member| member.idx == 1)
             .expect("alice member");
-        let mut state = DeviceState::new(share.idx, share.seckey);
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         state.nonce_pool.store_incoming(
             1,
             vec![DerivedPublicNonce {
@@ -470,17 +470,17 @@ mod tests {
             bundle.group.clone(),
             inviter_share,
             peers,
-            DeviceState::new(2, bundle.shares[1].seckey),
+            DeviceState::new(2, *bundle.shares[1].seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("build inviter");
         let bootstrap_seed = generate_onboarding_bootstrap_seed(
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             NoncePoolConfig::default().pool_size,
         )
         .expect("bootstrap seed");
         let event = build_onboard_request_event(
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             &inviter_pubkey,
             DeviceConfig::default().event_kind,
             "request-1",

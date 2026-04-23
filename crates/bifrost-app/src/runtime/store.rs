@@ -23,7 +23,7 @@ const MAX_STATE_CIPHERTEXT_BYTES: usize = 4 * 1024 * 1024 + 1 + 12 + 16;
 impl EncryptedFileStore {
     pub fn new(path: PathBuf, share: SharePackage) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(share.seckey);
+        hasher.update(share.seckey.expose_bytes());
         hasher.update(b"bifrost-device-state");
         let key_bytes = hasher.finalize();
         let mut key = [0u8; 32];

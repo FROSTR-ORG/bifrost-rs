@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use bifrost_core::secret::SharePrivateKey;
 use bifrost_core::types::{
     DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, IndexedPublicNonceCommitment,
     MemberNonceCommitmentSet, MemberPackage, MemberPublicNonce, MethodPolicy, OnboardRequest,
@@ -272,9 +273,10 @@ impl TryFrom<SharePackageWire> for SharePackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: SharePackageWire) -> Result<Self, Self::Error> {
+        let seckey_bytes: [u8; 32] = hexbytes::decode(&value.seckey)?;
         Ok(Self {
             idx: value.idx,
-            seckey: hexbytes::decode(&value.seckey)?,
+            seckey: SharePrivateKey::new(seckey_bytes),
         })
     }
 }
@@ -283,7 +285,7 @@ impl From<SharePackage> for SharePackageWire {
     fn from(value: SharePackage) -> Self {
         Self {
             idx: value.idx,
-            seckey: hexbytes::encode(&value.seckey),
+            seckey: hexbytes::encode(value.seckey.expose_bytes()),
         }
     }
 }
@@ -656,7 +658,11 @@ impl From<PingPayload> for PingPayloadWire {
     fn from(value: PingPayload) -> Self {
         Self {
             version: value.version,
-            advertised_nonces: value.advertised_nonces.into_iter().map(Into::into).collect(),
+            advertised_nonces: value
+                .advertised_nonces
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             held_peer_nonce_codes: value
                 .held_peer_nonce_codes
                 .into_iter()

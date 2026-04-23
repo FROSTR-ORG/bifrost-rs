@@ -38,6 +38,6 @@ mod tests {
         }"#;
         let share = parse_share_package(share_json).expect("share parse");
         assert_eq!(share.idx, 1);
-        assert_eq!(share.seckey, [1u8; 32]);
+        assert_eq!(share.seckey.expose_bytes(), &[1u8; 32]);
     }
 }

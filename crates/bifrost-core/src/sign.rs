@@ -298,7 +298,7 @@ fn build_key_package(
 ) -> CoreResult<frost::keys::KeyPackage> {
     let identifier =
         frost::Identifier::try_from(share.idx).map_err(|e| CoreError::Frost(e.to_string()))?;
-    let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+    let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
         .map_err(|e| CoreError::Frost(e.to_string()))?;
 
     let member = group
@@ -363,7 +363,7 @@ mod tests {
             seckey.copy_from_slice(&key_package.signing_share().serialize());
             share_packages.push(SharePackage {
                 idx: id.serialize()[31] as u16,
-                seckey,
+                seckey: crate::secret::SharePrivateKey::new(seckey),
             });
         }
         members.sort_by_key(|m| m.idx);
@@ -416,7 +416,7 @@ mod tests {
             seckey.copy_from_slice(&sk_bytes);
             share_packages.push(SharePackage {
                 idx: id.serialize()[31] as u16,
-                seckey,
+                seckey: crate::secret::SharePrivateKey::new(seckey),
             });
         }
         members.sort_by_key(|m| m.idx);
@@ -439,7 +439,7 @@ mod tests {
         let mut nonces = Vec::new();
         let mut local_nonces = Vec::new();
         for share in &share_packages {
-            let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+            let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
                 .expect("signing share deserialize");
             let (n, c) = frost::round1::commit(&signing_share, &mut OsRng);
             nonces.push(crate::types::MemberNonceCommitmentSet {
@@ -543,8 +543,8 @@ mod tests {
     fn create_partial_sig_packages_batch_rejects_nonce_count_mismatch() {
         let (group, shares) = two_member_fixture();
         let share = &shares[0];
-        let signing_share =
-            frost::keys::SigningShare::deserialize(&share.seckey).expect("signing share");
+        let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
+            .expect("signing share");
         let (nonce_a, commitments_a) = frost::round1::commit(&signing_share, &mut OsRng);
         let (nonce_b, _) = frost::round1::commit(&signing_share, &mut OsRng);
 
@@ -605,7 +605,8 @@ mod tests {
             let mut member_nonces = Vec::with_capacity(shares.len());
             for (share_idx, share) in shares.iter().enumerate() {
                 let signing_share =
-                    frost::keys::SigningShare::deserialize(&share.seckey).expect("signing share");
+                    frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
+                        .expect("signing share");
                 let (nonces, commitments) = frost::round1::commit(&signing_share, &mut OsRng);
                 local_nonces_by_share[share_idx]
                     .push(nonces.serialize().expect("serialize signing nonces"));

@@ -108,7 +108,7 @@ pub fn export_profile_as_bfonboard(
     }
     let package = encode_bfonboard_package(
         &BfOnboardPayload {
-            share_secret: hex::encode(recipient_share.seckey),
+            share_secret: hex::encode(recipient_share.seckey.expose_bytes()),
             relays,
             peer_pk: derive_member_pubkey_hex(
                 crate::hex_to_bytes32(&payload.device.share_secret)

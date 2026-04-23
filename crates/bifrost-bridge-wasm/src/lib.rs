@@ -9,8 +9,7 @@ use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolic
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
     PeerNonceInventoryObservation, RuntimeStatusSummary, SigningDevice,
-    finalize_onboarding_bootstrap_seed,
-    generate_onboarding_bootstrap_seed,
+    finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
@@ -950,7 +949,7 @@ fn build_core(
     let signer = match state {
         Some(existing) => SigningDevice::new(group, share, peers, existing, device_cfg)?,
         None => {
-            let mut initial_state = DeviceState::new(share.idx, share.seckey);
+            let mut initial_state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
             seed_initial_peer_nonces(&mut initial_state, &group, &bootstrap.initial_peer_nonces)?;
             SigningDevice::new(group, share, peers, initial_state, device_cfg)?
         }
@@ -1093,7 +1092,9 @@ fn nonce_pool_snapshot_json(
         let idx = decode_member_index(&group, peer)?;
         let stats = state.nonce_pool.peer_stats(idx);
         let current_codes = state.nonce_pool.outgoing_public_nonce_codes(idx);
-        let current_code_set = current_codes.into_iter().collect::<std::collections::HashSet<_>>();
+        let current_code_set = current_codes
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let observed_count = state
             .remote_nonce_inventory_observations
             .get(peer)
@@ -1255,7 +1256,7 @@ mod tests {
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(local_share.idx, 3)
@@ -1300,7 +1301,7 @@ mod tests {
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(local_share.idx, 2)
@@ -1405,7 +1406,7 @@ mod tests {
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(local_share.idx, 10)
@@ -1464,7 +1465,7 @@ mod tests {
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(local_share.idx, 10)
@@ -1652,7 +1653,7 @@ mod tests {
         let group = bundle.group.clone();
         let share = bundle.shares[1].clone();
         let payload = BfOnboardPayload {
-            share_secret: hex::encode(share.seckey),
+            share_secret: hex::encode(share.seckey.expose_bytes()),
             relays: vec!["wss://relay.example".to_string()],
             peer_pk: hex::encode(&group.members[0].pubkey[1..]),
         };

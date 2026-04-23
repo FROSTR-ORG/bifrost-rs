@@ -49,7 +49,7 @@ pub fn verify_group_config(group: &GroupPackage) -> FrostUtilsResult<()> {
 pub fn verify_share(share: &SharePackage, group: &GroupPackage) -> FrostUtilsResult<()> {
     let identifier = frost::Identifier::try_from(share.idx)
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
-    let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+    let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
     let member = group
@@ -169,8 +169,15 @@ mod tests {
             count: 3,
         })
         .expect("create");
-        let mut tampered = bundle.shares[0].clone();
-        tampered.seckey[0] ^= 0x01;
+        let tampered_seckey = {
+            let mut bytes = *bundle.shares[0].seckey.expose_bytes();
+            bytes[0] ^= 0x01;
+            bifrost_core::secret::SharePrivateKey::new(bytes)
+        };
+        let tampered = SharePackage {
+            idx: bundle.shares[0].idx,
+            seckey: tampered_seckey,
+        };
         assert!(verify_share(&tampered, &bundle.group).is_err());
     }
 

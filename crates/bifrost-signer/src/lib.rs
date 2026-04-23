@@ -597,7 +597,7 @@ impl SigningDevice {
         peers: Vec<String>,
         config: DeviceConfig,
     ) -> Result<Self> {
-        let state = DeviceState::new(share.idx, share.seckey);
+        let state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         Self::new(group, share, peers, state, config)
     }
 
@@ -626,7 +626,7 @@ impl SigningDevice {
     }
 
     pub fn wipe_state(&mut self) {
-        self.state = DeviceState::new(self.share.idx, self.share.seckey);
+        self.state = DeviceState::new(self.share.idx, *self.share.seckey.expose_bytes());
         for peer in &self.peers {
             if let Some(idx) = self.member_idx_by_pubkey.get(peer).copied() {
                 self.state.nonce_pool.init_peer(idx);
@@ -897,7 +897,9 @@ impl SigningDevice {
 
         if matches!(stage, OnboardingStatusStage::DeviceContactedHost)
             && matches!(
-                self.onboarding_statuses.get(&normalized).map(|status| &status.stage),
+                self.onboarding_statuses
+                    .get(&normalized)
+                    .map(|status| &status.stage),
                 Some(OnboardingStatusStage::HandshakeCompleted)
             )
         {
@@ -1643,7 +1645,8 @@ impl SigningDevice {
 
     fn decrypt_event(&self, event: &Event, sender33: &str) -> Result<BridgeEnvelope> {
         let ciphertext = event_content(event)?;
-        let plaintext = decrypt_content_from_peer(self.share.seckey, sender33, &ciphertext)?;
+        let plaintext =
+            decrypt_content_from_peer(*self.share.seckey.expose_bytes(), sender33, &ciphertext)?;
         decode_bridge_envelope(&plaintext).map_err(|e| SignerError::InvalidRequest(e.to_string()))
     }
 
@@ -1657,9 +1660,15 @@ impl SigningDevice {
     fn encrypt_for_peer(&self, peer: &str, envelope: &BridgeEnvelope) -> Result<Event> {
         let plaintext = encode_bridge_envelope(envelope)
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
-        let content = encrypt_content_for_peer(self.share.seckey, peer, &plaintext)?;
+        let content =
+            encrypt_content_for_peer(*self.share.seckey.expose_bytes(), peer, &plaintext)?;
         let tags = vec![vec!["p".to_string(), peer.to_string()]];
-        build_signed_event(self.share.seckey, self.config.event_kind, tags, content)
+        build_signed_event(
+            *self.share.seckey.expose_bytes(),
+            self.config.event_kind,
+            tags,
+            content,
+        )
     }
 
     fn handle_inbound_request(
@@ -2270,7 +2279,8 @@ impl SigningDevice {
     }
 
     fn peer_needs_nonce_refill(&self, peer: &str, peer_idx: u16) -> bool {
-        self.normalized_remote_held_nonce_codes(peer, peer_idx).len()
+        self.normalized_remote_held_nonce_codes(peer, peer_idx)
+            .len()
             < self.state.nonce_pool.config().min_threshold
     }
 
@@ -2310,7 +2320,11 @@ impl SigningDevice {
         }
 
         let target_size = self.nonce_sync_target_size();
-        let current_available = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx).len();
+        let current_available = self
+            .state
+            .nonce_pool
+            .outgoing_public_nonce_codes(peer_idx)
+            .len();
         if current_available < target_size {
             self.state
                 .nonce_pool
@@ -2461,7 +2475,7 @@ mod tests {
             group.clone(),
             local_share.clone(),
             peers,
-            DeviceState::new(local_share.idx, local_share.seckey),
+            DeviceState::new(local_share.idx, *local_share.seckey.expose_bytes()),
             DeviceConfig {
                 peer_selection_strategy: strategy,
                 ..DeviceConfig::default()
@@ -2498,7 +2512,7 @@ mod tests {
             group.clone(),
             share.clone(),
             peers,
-            DeviceState::new(share.idx, share.seckey),
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("peer signer")
@@ -2510,8 +2524,12 @@ mod tests {
         event: &Event,
     ) -> BridgeEnvelope {
         let ciphertext = event_content(event).expect("event content");
-        let plaintext = decrypt_content_from_peer(local_share.seckey, sender_pubkey32, &ciphertext)
-            .expect("decrypt envelope");
+        let plaintext = decrypt_content_from_peer(
+            *local_share.seckey.expose_bytes(),
+            sender_pubkey32,
+            &ciphertext,
+        )
+        .expect("decrypt envelope");
         decode_bridge_envelope(&plaintext).expect("decode envelope")
     }
 
@@ -2548,7 +2566,7 @@ mod tests {
         sorted_peers.sort_unstable();
         let chosen_peer = sorted_peers[1].clone();
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &chosen_peer);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(fixture.local_share.idx, 10)
@@ -2592,7 +2610,7 @@ mod tests {
         sorted_peers.sort_unstable();
         let ready_peer = sorted_peers[1].clone();
         let ready_share = share_for_peer(&fixture.group, &fixture.shares, &ready_peer);
-        let mut peer_state = DeviceState::new(ready_share.idx, ready_share.seckey);
+        let mut peer_state = DeviceState::new(ready_share.idx, *ready_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(fixture.local_share.idx, 10)
@@ -2691,7 +2709,7 @@ mod tests {
             .insert(peer.clone(), now_unix_secs());
 
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(fixture.local_share.idx, 10)
@@ -2790,7 +2808,7 @@ mod tests {
             inviter.group.clone(),
             requester_share.clone(),
             requester_peers,
-            DeviceState::new(requester_share.idx, requester_share.seckey),
+            DeviceState::new(requester_share.idx, *requester_share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("requester signer");
@@ -2892,11 +2910,8 @@ mod tests {
             .outbound;
         assert_eq!(first_ping.len(), 1);
 
-        let decoded = decode_envelope_for_local(
-            &peer_share,
-            fixture.signer.local_pubkey32(),
-            &first_ping[0],
-        );
+        let decoded =
+            decode_envelope_for_local(&peer_share, fixture.signer.local_pubkey32(), &first_ping[0]);
         let BridgePayload::PingRequest(wire) = decoded.payload else {
             panic!("expected ping request");
         };
@@ -3029,14 +3044,14 @@ mod tests {
         };
         let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
         let content = super::crypto::encrypt_content_for_peer_with_nonce(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             &local_pubkey,
             &plaintext,
             [9u8; 32],
         )
         .expect("encrypt");
         let event = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), local_pubkey.clone()]],
             content,
@@ -3277,7 +3292,7 @@ mod tests {
         let peer = fixture.signer.peers[0].clone();
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
             .generate_for_peer(fixture.local_share.idx, 10)
@@ -3416,7 +3431,7 @@ mod tests {
         let local = fixture.signer.local_pubkey32().to_string();
 
         let event_ok = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), local.clone()]],
             "payload".to_string(),
@@ -3425,7 +3440,7 @@ mod tests {
         assert!(fixture.signer.has_exact_local_recipient_tag(&event_ok));
 
         let event_missing = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![],
             "payload".to_string(),
@@ -3434,7 +3449,7 @@ mod tests {
         assert!(!fixture.signer.has_exact_local_recipient_tag(&event_missing));
 
         let event_multi = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![
                 vec!["p".to_string(), local.clone()],
@@ -3446,7 +3461,7 @@ mod tests {
         assert!(!fixture.signer.has_exact_local_recipient_tag(&event_multi));
 
         let event_wrong = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), peer]],
             "payload".to_string(),
@@ -3725,7 +3740,7 @@ mod tests {
         let local = fixture.signer.local_pubkey32().to_string();
 
         let wrong_kind = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind + 1,
             vec![vec!["p".to_string(), local.clone()]],
             "payload".to_string(),
@@ -3740,7 +3755,7 @@ mod tests {
         );
 
         let wrong_recipient = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             signer.config.event_kind,
             vec![vec!["p".to_string(), peer.clone()]],
             "payload".to_string(),
@@ -3754,7 +3769,7 @@ mod tests {
         );
 
         let self_authored = build_signed_event(
-            signer.share.seckey,
+            *signer.share.seckey.expose_bytes(),
             signer.config.event_kind,
             vec![vec!["p".to_string(), local]],
             "payload".to_string(),

@@ -52,11 +52,25 @@ mod tests {
     fn share_package_roundtrip_json() {
         let share = SharePackage {
             idx: 7,
-            seckey: [4u8; 32],
+            seckey: bifrost_core::secret::SharePrivateKey::new([4u8; 32]),
         };
         let raw = encode_share_package_json(&share).expect("encode share");
         let decoded = decode_share_package_json(&raw).expect("decode share");
         assert_eq!(decoded, share);
+    }
+
+    #[test]
+    fn share_package_wire_rejects_short_seckey_hex() {
+        let raw = serde_json::json!({
+            "idx": 1,
+            "seckey": hex::encode([1u8; 31]),
+        })
+        .to_string();
+        let err = decode_share_package_json(&raw).expect_err("must reject short seckey");
+        assert!(matches!(
+            err,
+            crate::error::CodecError::InvalidLength { .. }
+        ));
     }
 
     #[test]

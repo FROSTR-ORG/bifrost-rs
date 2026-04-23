@@ -60,7 +60,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -94,7 +94,7 @@ async fn complete_onboarding_fixture() -> (BootstrapImportResult, GroupPackage, 
         .expect("inviter member");
 
     let package = BfOnboardPayload {
-        share_secret: hex::encode(local_share.seckey),
+        share_secret: hex::encode(local_share.seckey.expose_bytes()),
         relays: vec!["ws://mock-relay".to_string()],
         peer_pk: hex::encode(&inviter_peer.pubkey[1..]),
     };

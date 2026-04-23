@@ -211,7 +211,7 @@ fn load_or_init_signer_discards_volatile_state_after_dirty_restart_and_applies_p
     let now = 1_700_000_000;
     let peer = resolved.peers[0].clone();
 
-    let mut state = DeviceState::new(share.idx, share.seckey);
+    let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
     state.pending_operations.insert(
         "req-1".to_string(),
         PendingOperation {
@@ -247,7 +247,7 @@ fn load_or_init_signer_discards_volatile_state_after_dirty_restart_and_applies_p
 fn encrypted_store_roundtrip_and_state_health_report_clean_run() {
     let (resolved, _group, share) = base_config();
     let store = EncryptedFileStore::new(resolved.state_path.clone(), share.clone());
-    let mut state = DeviceState::new(share.idx, share.seckey);
+    let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
     state.request_seq = 42;
     store.save(&state).expect("save state");
 

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+
+use crate::secret::SharePrivateKey;
 
 pub type Bytes32 = [u8; 32];
 pub type Bytes33 = [u8; 33];
@@ -178,12 +179,17 @@ pub struct GroupPackage {
     pub members: Vec<MemberPackage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize)]
-#[zeroize(drop)]
+/// Member-local FROST signing share.
+///
+/// As of the 2026-04-22 remediation, this type intentionally does **not**
+/// derive `Serialize`/`Deserialize`. Every wire-crossing or persistence
+/// path must go through `SharePackageWire` (see `bifrost-codec::wire`).
+/// `seckey` is wrapped in `SharePrivateKey`, which zeroizes on drop,
+/// compares in constant time, and redacts in `Debug`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharePackage {
     pub idx: u16,
-    #[serde(with = "serde_fixed_array::bytes32")]
-    pub seckey: Bytes32,
+    pub seckey: SharePrivateKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -530,7 +536,7 @@ mod tests {
         };
         let share = SharePackage {
             idx: 2,
-            seckey: [4u8; 32],
+            seckey: SharePrivateKey::new([4u8; 32]),
         };
 
         assert_eq!(share.idx, 2);
@@ -550,14 +556,9 @@ mod tests {
 
     #[test]
     fn serde_round_trip_uses_fixed_array_helpers() {
-        let share = SharePackage {
-            idx: 7,
-            seckey: [11u8; 32],
-        };
-        let encoded = serde_json::to_string(&share).expect("encode share");
-        let decoded: SharePackage = serde_json::from_str(&encoded).expect("decode share");
-        assert_eq!(decoded, share);
-
+        // `SharePackage` intentionally no longer implements `Serialize`/
+        // `Deserialize`; share round-trip coverage moved into
+        // `bifrost-codec` (see `share_package_roundtrip_json`).
         let session = SignSessionTemplate {
             members: vec![1, 2],
             hashes: vec![[3u8; 32], [4u8; 32]],
@@ -572,13 +573,9 @@ mod tests {
 
     #[test]
     fn serde_rejects_invalid_fixed_array_lengths() {
-        let err = serde_json::from_value::<SharePackage>(json!({
-            "idx": 1,
-            "seckey": vec![1u8; 31],
-        }))
-        .expect_err("share package must reject short key");
-        assert!(err.to_string().contains("invalid fixed array length"));
-
+        // `SharePackage`-specific length rejection lives with the wire
+        // DTO in `bifrost-codec`; this test keeps coverage on the other
+        // fixed-array serde helper paths.
         let err = serde_json::from_value::<SignSessionTemplate>(json!({
             "members": [1, 2],
             "hashes": [vec![0u8; 32], vec![1u8; 31]],

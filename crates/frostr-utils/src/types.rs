@@ -8,7 +8,11 @@ pub struct CreateKeysetConfig {
     pub count: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Serde intentionally dropped: these types transitively contain
+// `SharePackage`, whose hard-cut lives strictly behind `SharePackageWire`.
+// Callers that need a wire form build an explicit DTO (see
+// `bifrost-bridge-wasm::RotateKeysetBundleInput`, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeysetBundle {
     pub group: GroupPackage,
     pub shares: Vec<SharePackage>,
@@ -21,27 +25,31 @@ pub struct KeysetVerificationReport {
     pub verified_shares: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotateKeysetRequest {
     pub shares: Vec<SharePackage>,
     pub threshold: u16,
     pub count: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotateKeysetResult {
     pub previous_group_id: Bytes32,
     pub next_group_id: Bytes32,
     pub next: KeysetBundle,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoverKeyInput {
     pub group: GroupPackage,
     pub shares: Vec<SharePackage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Holds reconstructed Nostr signing material. Not a wire-crossing type:
+// it is a short-lived return value from `recovery::recover_key` consumed
+// inside `frostr-utils::keyset`. Serde intentionally omitted; the inner
+// signing key bytes are wrapped in `RecoveredSigningKey` by A.4.d.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredKeyMaterial {
     pub signing_key32: Bytes32,
 }
