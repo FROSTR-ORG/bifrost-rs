@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use bifrost_core::secret::FileStoreKey;
 use bifrost_core::types::SharePackage;
 use bifrost_signer::{DeviceState, DeviceStore};
 use bincode::{DefaultOptions, Options};
@@ -14,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 pub struct EncryptedFileStore {
     path: PathBuf,
-    key: [u8; 32],
+    key: FileStoreKey,
 }
 
 const MAX_STATE_PLAINTEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -28,13 +29,16 @@ impl EncryptedFileStore {
         let key_bytes = hasher.finalize();
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
-        Self { path, key }
+        Self {
+            path,
+            key: FileStoreKey::new(key),
+        }
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let cipher = ChaCha20Poly1305::new((&self.key).into());
+        let cipher = ChaCha20Poly1305::new(self.key.expose_bytes().into());
         let ciphertext = cipher
             .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
             .map_err(|_| anyhow!("state encryption failure"))?;
@@ -58,7 +62,7 @@ impl EncryptedFileStore {
         nonce_bytes.copy_from_slice(&ciphertext[1..13]);
         let payload = &ciphertext[13..];
 
-        let cipher = ChaCha20Poly1305::new((&self.key).into());
+        let cipher = ChaCha20Poly1305::new(self.key.expose_bytes().into());
         cipher
             .decrypt(Nonce::from_slice(&nonce_bytes), payload)
             .map_err(|_| anyhow!("state decryption failure"))
