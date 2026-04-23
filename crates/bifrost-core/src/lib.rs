@@ -2,6 +2,7 @@ pub mod ecdh;
 pub mod error;
 pub mod group;
 pub mod nonce;
+pub mod secret;
 pub mod session;
 pub mod sighash;
 pub mod sign;
@@ -12,6 +13,9 @@ pub use ecdh::{combine_ecdh_packages, create_ecdh_package, local_pubkey_from_sha
 pub use error::{CoreError, CoreResult};
 pub use group::get_group_id;
 pub use nonce::NoncePool;
+pub use secret::{
+    EcdhSharedSecret, FileStoreKey, NoncePoolSecret, RecoveredSigningKey, SharePrivateKey,
+};
 pub use session::{create_session_package, get_session_id, verify_session_package};
 pub use sighash::{bind_sighash, message_sighash};
 pub use sign::{
