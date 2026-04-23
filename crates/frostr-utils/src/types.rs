@@ -1,3 +1,4 @@
+use bifrost_core::secret::RecoveredSigningKey;
 use bifrost_core::types::{Bytes32, GroupPackage, SharePackage};
 use serde::{Deserialize, Serialize};
 
@@ -48,8 +49,9 @@ pub struct RecoverKeyInput {
 // Holds reconstructed Nostr signing material. Not a wire-crossing type:
 // it is a short-lived return value from `recovery::recover_key` consumed
 // inside `frostr-utils::keyset`. Serde intentionally omitted; the inner
-// signing key bytes are wrapped in `RecoveredSigningKey` by A.4.d.
+// signing key bytes live inside `RecoveredSigningKey`, which zeroizes on
+// drop and redacts in `Debug`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredKeyMaterial {
-    pub signing_key32: Bytes32,
+    pub signing_key32: RecoveredSigningKey,
 }

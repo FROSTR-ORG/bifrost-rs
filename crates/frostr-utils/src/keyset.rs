@@ -45,7 +45,7 @@ pub fn rotate_keyset_dealer(
         shares: req.shares,
     })?;
 
-    let signing_key = frost::SigningKey::deserialize(&recovered.signing_key32)
+    let signing_key = frost::SigningKey::deserialize(recovered.signing_key32.expose_bytes())
         .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
         .into_even_y(None);
 
@@ -286,6 +286,9 @@ mod tests {
         })
         .expect("recover rotated");
 
-        assert_eq!(recovered.signing_key32, original.signing_key32);
+        assert_eq!(
+            recovered.signing_key32.expose_bytes(),
+            original.signing_key32.expose_bytes()
+        );
     }
 }

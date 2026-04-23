@@ -1,3 +1,4 @@
+use bifrost_core::secret::RecoveredSigningKey;
 use bifrost_core::types::Bytes32;
 use frost_secp256k1_tr_unofficial as frost;
 use frost_secp256k1_tr_unofficial::keys::EvenY;
@@ -65,7 +66,9 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
     let mut signing_key32 = Bytes32::default();
     signing_key32.copy_from_slice(&bytes);
 
-    Ok(RecoveredKeyMaterial { signing_key32 })
+    Ok(RecoveredKeyMaterial {
+        signing_key32: RecoveredSigningKey::new(signing_key32),
+    })
 }
 
 fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
@@ -110,7 +113,7 @@ mod tests {
             shares: bundle.shares.into_iter().take(2).collect(),
         };
         let recovered = recover_key(&input).expect("recover");
-        assert_ne!(recovered.signing_key32, [0u8; 32]);
+        assert_ne!(recovered.signing_key32.expose_bytes(), &[0u8; 32]);
     }
 
     #[test]
