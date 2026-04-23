@@ -16,6 +16,37 @@ const MAX_SIGN_BATCH_SIZE: usize = 100;
 const MAX_ECDH_BATCH_SIZE: usize = 100;
 const MAX_NONCE_PACKAGE: usize = 1000;
 
+/// Per-field string cap for identifier/label fields (`kind`,
+/// `group_name`, `code`, `message`).
+const MAX_IDENTIFIER_FIELD_BYTES: usize = 1024;
+
+/// Per-field string cap for the hex `content` field carried in sign
+/// sessions. 32 KiB covers any realistic event payload while staying
+/// well under the 64 KiB envelope ceiling.
+const MAX_CONTENT_FIELD_BYTES: usize = 32 * 1024;
+
+#[inline]
+fn check_identifier_field(field: &'static str, value: &str) -> crate::error::CodecResult<()> {
+    if value.len() > MAX_IDENTIFIER_FIELD_BYTES {
+        return Err(crate::error::CodecError::FieldTooLarge {
+            field,
+            limit: MAX_IDENTIFIER_FIELD_BYTES,
+        });
+    }
+    Ok(())
+}
+
+#[inline]
+fn check_content_field(field: &'static str, value: &str) -> crate::error::CodecResult<()> {
+    if value.len() > MAX_CONTENT_FIELD_BYTES {
+        return Err(crate::error::CodecError::FieldTooLarge {
+            field,
+            limit: MAX_CONTENT_FIELD_BYTES,
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberPackageWire {
     pub idx: u16,
@@ -176,6 +207,7 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: GroupPackageWire) -> Result<Self, Self::Error> {
+        check_identifier_field("group_name", &value.group_name)?;
         if value.group_name.trim().is_empty() {
             return Err(crate::error::CodecError::InvalidPayload(
                 "group name must be non-empty",
@@ -364,6 +396,10 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: SignSessionPackageWire) -> Result<Self, Self::Error> {
+        check_identifier_field("kind", &value.kind)?;
+        if let Some(content) = value.content.as_ref() {
+            check_content_field("content", content)?;
+        }
         if value.members.is_empty() {
             return Err(crate::error::CodecError::InvalidPayload(
                 "sign session members must not be empty",
