@@ -4,20 +4,17 @@ use aes_gcm::AesGcm;
 use aes_gcm::aead::{Aead, KeyInit, consts::U24, generic_array::GenericArray};
 use aes_gcm::aes::Aes256;
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bech32::primitives::checksum::Engine as ChecksumEngine;
 use bech32::primitives::decode::UncheckedHrpstring;
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 use bech32::{Checksum, Fe32};
-use chacha20::ChaCha20;
-use chacha20::cipher::{KeyIvInit, StreamCipher};
 use hmac::{Hmac, Mac};
 use nostr::{Event, EventBuilder, Keys, Kind, SecretKey, Timestamp};
 use pbkdf2::pbkdf2_hmac_array;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use url::form_urlencoded::{Serializer, parse as parse_urlencoded};
 
 use bifrost_codec::wire::GroupPackageWire;
@@ -869,173 +866,47 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> FrostUtilsResult<[u8; 32]> {
     Ok(out)
 }
 
-fn hkdf_expand_sha256(prk: &[u8], info: &[u8], len: usize) -> FrostUtilsResult<Vec<u8>> {
-    let mut okm = Vec::with_capacity(len);
-    let mut previous = Vec::<u8>::new();
-    let mut counter = 1u8;
-    while okm.len() < len {
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(prk)
-            .map_err(|e| FrostUtilsError::Crypto(format!("HKDF expand init failed: {e}")))?;
-        mac.update(&previous);
-        mac.update(info);
-        mac.update(&[counter]);
-        previous = mac.finalize().into_bytes().to_vec();
-        let remaining = len - okm.len();
-        okm.extend_from_slice(&previous[..remaining.min(previous.len())]);
-        counter = counter
-            .checked_add(1)
-            .ok_or_else(|| FrostUtilsError::Crypto("HKDF counter overflow".to_string()))?;
-    }
-    Ok(okm)
-}
-
 fn encrypt_nip44_compatible_payload(
     conversation_key: &[u8; 32],
     plaintext: &str,
 ) -> FrostUtilsResult<String> {
-    let nonce32 = random_nonce32();
-    encrypt_nip44_compatible_payload_with_nonce(conversation_key, &nonce32, plaintext)
+    let mut nonce32 = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce32);
+    bifrost_core::nip44::encrypt_under_conversation_key(conversation_key, &nonce32, plaintext)
+        .map_err(cipher_error)
 }
 
-// Exposed for KAT-freeze integration tests at
-// `tests/nip44_profile_packages_kat.rs` (A.5.pre, remediation-2026-04-22).
-// Do not call from production code — use `encrypt_nip44_compatible_payload`
-// (random-nonce wrapper) instead.
-#[doc(hidden)]
-pub fn encrypt_nip44_compatible_payload_with_nonce(
-    conversation_key: &[u8; 32],
-    nonce32: &[u8; 32],
-    plaintext: &str,
-) -> FrostUtilsResult<String> {
-    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, nonce32)?;
-    let mut padded = pad_message(plaintext)?;
-    let mut chacha = ChaCha20::new((&chacha_key).into(), (&chacha_nonce).into());
-    chacha.apply_keystream(&mut padded);
-    let mac = hmac_aad(&hmac_key, nonce32, &padded)?;
-    let mut encoded = Vec::with_capacity(1 + 32 + padded.len() + 32);
-    encoded.push(2u8);
-    encoded.extend_from_slice(nonce32);
-    encoded.extend_from_slice(&padded);
-    encoded.extend_from_slice(&mac);
-    Ok(STANDARD_NO_PAD.encode(encoded))
-}
-
-// Exposed for KAT-freeze integration tests at
-// `tests/nip44_profile_packages_kat.rs` (A.5.pre, remediation-2026-04-22).
-// Production callers continue to use the crate-private path via
-// `decrypt_profile_backup_content`.
-#[doc(hidden)]
-pub fn decrypt_nip44_compatible_payload(
+fn decrypt_nip44_compatible_payload(
     conversation_key: &[u8; 32],
     payload: &str,
 ) -> FrostUtilsResult<String> {
-    let data = STANDARD_NO_PAD
-        .decode(payload.as_bytes())
-        .map_err(|e| FrostUtilsError::Codec(format!("invalid backup base64: {e}")))?;
-    if data.len() < 99 || data[0] != 2 {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let mut nonce32 = [0u8; 32];
-    nonce32.copy_from_slice(&data[1..33]);
-    let ciphertext = &data[33..data.len() - 32];
-    let mut mac = [0u8; 32];
-    mac.copy_from_slice(&data[data.len() - 32..]);
-    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
-    let expected_mac = hmac_aad(&hmac_key, &nonce32, ciphertext)?;
-    if !bool::from(expected_mac.ct_eq(&mac)) {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let mut padded = ciphertext.to_vec();
-    let mut chacha = ChaCha20::new((&chacha_key).into(), (&chacha_nonce).into());
-    chacha.apply_keystream(&mut padded);
-    unpad_message(&padded)
+    bifrost_core::nip44::decrypt_under_conversation_key(conversation_key, payload)
+        .map_err(cipher_error)
 }
 
-fn random_nonce32() -> [u8; 32] {
-    let mut nonce = [0u8; 32];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
-}
-
-fn get_message_keys(
-    conversation_key: &[u8; 32],
-    nonce32: &[u8; 32],
-) -> FrostUtilsResult<([u8; 32], [u8; 12], [u8; 32])> {
-    let keys = hkdf_expand_sha256(conversation_key, nonce32, 76)?;
-    let mut chacha_key = [0u8; 32];
-    let mut chacha_nonce = [0u8; 12];
-    let mut hmac_key = [0u8; 32];
-    chacha_key.copy_from_slice(&keys[0..32]);
-    chacha_nonce.copy_from_slice(&keys[32..44]);
-    hmac_key.copy_from_slice(&keys[44..76]);
-    Ok((chacha_key, chacha_nonce, hmac_key))
-}
-
-fn calc_padded_len(unpadded_len: usize) -> FrostUtilsResult<usize> {
-    if unpadded_len == 0 {
-        return Err(FrostUtilsError::InvalidInput(
-            "invalid plaintext size".to_string(),
-        ));
+/// Map `bifrost_core::nip44::CipherError` onto the crate's native error
+/// type. Cipher-level failures collapse to `DecryptionFailed` to keep the
+/// pre-consolidation caller contract; structural / input errors surface
+/// as `Crypto` / `InvalidInput` so the underlying diagnostic is not lost.
+fn cipher_error(e: bifrost_core::nip44::CipherError) -> FrostUtilsError {
+    use bifrost_core::nip44::CipherError;
+    match e {
+        CipherError::InvalidVersion
+        | CipherError::PayloadTooShort
+        | CipherError::MacMismatch
+        | CipherError::BadUtf8 => FrostUtilsError::DecryptionFailed,
+        CipherError::BadBase64(msg) => {
+            FrostUtilsError::Codec(format!("invalid backup base64: {msg}"))
+        }
+        CipherError::BadLength(msg) => FrostUtilsError::InvalidInput(msg),
+        CipherError::Crypto(msg) => FrostUtilsError::Crypto(msg),
     }
-    if unpadded_len <= 32 {
-        return Ok(32);
-    }
-    let next_power = 1usize << ((usize::BITS - (unpadded_len - 1).leading_zeros()) as usize);
-    let chunk = if next_power <= 256 {
-        32
-    } else {
-        next_power / 8
-    };
-    Ok(chunk * (((unpadded_len - 1) / chunk) + 1))
-}
-
-fn pad_message(plaintext: &str) -> FrostUtilsResult<Vec<u8>> {
-    let unpadded = plaintext.as_bytes();
-    let len = unpadded.len();
-    if len == 0 || len > 0xffff {
-        return Err(FrostUtilsError::InvalidInput(
-            "invalid plaintext size: must be between 1 and 65535 bytes".to_string(),
-        ));
-    }
-    let padded_len = calc_padded_len(len)?;
-    let mut out = Vec::with_capacity(2 + padded_len);
-    out.extend_from_slice(&(len as u16).to_be_bytes());
-    out.extend_from_slice(unpadded);
-    out.resize(2 + padded_len, 0u8);
-    Ok(out)
-}
-
-fn unpad_message(padded: &[u8]) -> FrostUtilsResult<String> {
-    if padded.len() < 2 {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let unpadded_len = u16::from_be_bytes([padded[0], padded[1]]) as usize;
-    let expected_len = 2 + calc_padded_len(unpadded_len)?;
-    if unpadded_len == 0 || padded.len() != expected_len || padded.len() < 2 + unpadded_len {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let bytes = &padded[2..2 + unpadded_len];
-    String::from_utf8(bytes.to_vec()).map_err(|_| FrostUtilsError::DecryptionFailed)
-}
-
-fn hmac_aad(
-    hmac_key: &[u8; 32],
-    nonce32: &[u8; 32],
-    ciphertext: &[u8],
-) -> FrostUtilsResult<[u8; 32]> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("HMAC init failed: {e}")))?;
-    mac.update(nonce32);
-    mac.update(ciphertext);
-    let bytes = mac.finalize().into_bytes();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
 
     fn sample_profile() -> BfProfilePayload {
         let device = BfProfileDevice {

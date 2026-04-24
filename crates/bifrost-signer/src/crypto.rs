@@ -60,9 +60,7 @@ fn cipher_error(e: CipherError) -> SignerError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        decrypt_content_from_peer, encrypt_content_for_peer_with_nonce,
-    };
+    use super::{decrypt_content_from_peer, encrypt_content_for_peer_with_nonce};
     use crate::SignerError;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD_NO_PAD;

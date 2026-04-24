@@ -44,8 +44,8 @@ fn stack2_encrypt_with_fixed_nonce_matches_pinned_ciphertext() {
     // implementation against the fixed tuple above.
     const EXPECTED: &str = "AgsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCgUyUep4VmwGtprFe5zyHEAvlNEjuJhYSQH3vWNduZIysmxz60+FcHKo1iXXBkGJ2oLKmmldqSXxeKoRtdYR2+qz";
 
-    let actual = nip44::encrypt_for_peer(&local_seckey, &peer_xonly, &nonce32, plaintext)
-        .expect("encrypt");
+    let actual =
+        nip44::encrypt_for_peer(&local_seckey, &peer_xonly, &nonce32, plaintext).expect("encrypt");
     assert_eq!(
         actual, EXPECTED,
         "Stack 2 ciphertext drift — any change must re-pin this constant"
