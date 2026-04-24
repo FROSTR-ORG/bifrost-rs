@@ -164,14 +164,12 @@ impl Argon2Params {
     /// Crate-internal: callers that actually run Argon2id should go through
     /// `derive_profile_encryption_key_v2` so the algorithm/version pins stay
     /// in one place.
-    #[allow(dead_code)] // consumed by `kdf::derive_profile_encryption_key_v2`
     pub(crate) fn to_argon2_params(self) -> Params {
         Params::new(self.m_cost, self.t_cost, u32::from(self.p_cost), None)
             .expect("validated Argon2Params must translate to argon2::Params")
     }
 
     /// Build an `argon2::Argon2` engine pinned to Argon2id + v0x13.
-    #[allow(dead_code)] // consumed by `kdf::derive_profile_encryption_key_v2`
     pub(crate) fn to_argon2(self) -> Argon2<'static> {
         Argon2::new(Algorithm::Argon2id, Version::V0x13, self.to_argon2_params())
     }

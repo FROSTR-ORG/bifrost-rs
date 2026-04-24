@@ -2,6 +2,7 @@ mod aad;
 mod argon2_params;
 mod config;
 mod flows;
+mod kdf;
 mod models;
 mod native;
 mod packages;
@@ -29,6 +30,7 @@ pub use flows::{
 pub use flows::{
     preview_bfshare_recovery, publish_profile_backup, recover_profile_from_bfshare_value,
 };
+pub use kdf::{KDF_OUTPUT_LEN, KDF_SALT_LEN, derive_profile_encryption_key_v2};
 pub use models::{EncryptedProfileRecord, ProfileManifest, ProfilePreview, build_profile_manifest};
 pub use native::{
     FilesystemEncryptedProfileStore, FilesystemProfileDomain, FilesystemProfileManifestStore,
