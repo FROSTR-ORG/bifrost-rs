@@ -2,23 +2,37 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use argon2::Argon2;
 use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
 use bifrost_core::get_group_id;
 use bifrost_core::types::{GroupPackage, SharePackage};
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use rand_core::{OsRng, RngCore};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    ENCRYPTED_PROFILE_VERSION, EncryptedProfileRecord, ProfileManifest, ProfileManifestStore,
-    RelayProfile, RelayProfileStore, ShellConfig, build_policy_overrides_value,
-    build_profile_manifest, derive_profile_id_for_share_secret, empty_policy_overrides_value,
-    find_member_index_for_share_secret, group_from_payload, hex_to_bytes32,
+    ENCRYPTED_PROFILE_VERSION, EncryptedProfileRecord, KDF_ID_ARGON2ID, ProfileManifest,
+    ProfileManifestStore, RelayProfile, RelayProfileStore, ShellConfig,
+    aad::{AAD_SALT_LEN, build_aad_hostlocal},
+    argon2_params::Argon2Params,
+    build_policy_overrides_value, build_profile_manifest, derive_profile_id_for_share_secret,
+    empty_policy_overrides_value, find_member_index_for_share_secret, group_from_payload,
+    hex_to_bytes32,
+    kdf::{KDF_SALT_LEN, derive_profile_encryption_key_v2},
+    state_error::StateError,
     traits::EncryptedProfileStore,
 };
 use frostr_utils::BfProfilePayload;
+
+/// ChaCha20Poly1305 nonce size for the v2 envelope.
+const ENVELOPE_NONCE_LEN: usize = 12;
+
+/// ChaCha20Poly1305 tag size (Poly1305 MAC, appended to ciphertext by the AEAD).
+const ENVELOPE_TAG_LEN: usize = 16;
+
+/// Minimum v2 envelope length in bytes:
+/// `version(1) + kdf_id(1) + m_cost(4) + t_cost(4) + p_cost(1) + nonce(12) + tag(16)`.
+const ENVELOPE_MIN_LEN: usize = 1 + 1 + 4 + 4 + 1 + ENVELOPE_NONCE_LEN + ENVELOPE_TAG_LEN;
 
 pub fn load_shell_config_file(path: &Path) -> Result<ShellConfig> {
     if !path.exists() {
@@ -434,38 +448,75 @@ impl FilesystemEncryptedProfileStore {
         passphrase: &str,
         now_unix_secs: u64,
     ) -> Result<EncryptedProfileRecord> {
-        let mut salt = [0u8; 16];
-        let mut nonce = [0u8; 12];
+        self.store_encrypted_profile_with_params(
+            kind,
+            source,
+            payload,
+            passphrase,
+            now_unix_secs,
+            &Argon2Params::default(),
+        )
+    }
+
+    /// Variant that accepts an explicit `Argon2Params`. Callers that do not
+    /// need to override the defaults should use [`Self::store_encrypted_profile`].
+    pub fn store_encrypted_profile_with_params(
+        &self,
+        kind: &str,
+        source: &str,
+        payload: &str,
+        passphrase: &str,
+        now_unix_secs: u64,
+        params: &Argon2Params,
+    ) -> Result<EncryptedProfileRecord> {
+        let mut salt = [0u8; KDF_SALT_LEN];
+        let mut nonce = [0u8; ENVELOPE_NONCE_LEN];
         OsRng.fill_bytes(&mut salt);
         OsRng.fill_bytes(&mut nonce);
-        let key = derive_profile_encryption_key(passphrase, &salt)?;
+
+        let id = format!("encrypted-profile-{now_unix_secs}-{}", random_hex(4));
+        let record = EncryptedProfileRecord {
+            id: id.clone(),
+            kind: kind.to_string(),
+            source: source.to_string(),
+            ciphertext_path: self.ciphertext_path(&id).display().to_string(),
+            key_source: "passphrase".to_string(),
+            salt_hex: hex::encode(salt),
+            created_at: now_unix_secs,
+            updated_at: now_unix_secs,
+        };
+
+        let aad = build_aad_hostlocal(&record)
+            .map_err(|err| anyhow!("build encrypted profile AAD: {err}"))?;
+        let key = derive_profile_encryption_key_v2(passphrase.as_bytes(), &salt, params)
+            .map_err(|err| anyhow!("derive encrypted profile key: {err}"))?;
         let cipher = ChaCha20Poly1305::new((&key).into());
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), payload.as_bytes())
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: payload.as_bytes(),
+                    aad: &aad,
+                },
+            )
             .map_err(|_| anyhow!("encrypted profile encryption failure"))?;
-        let mut envelope = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
+
+        let mut envelope = Vec::with_capacity(ENVELOPE_MIN_LEN + ciphertext.len());
         envelope.push(ENCRYPTED_PROFILE_VERSION);
+        envelope.push(KDF_ID_ARGON2ID);
+        envelope.extend_from_slice(&params.m_cost().to_be_bytes());
+        envelope.extend_from_slice(&params.t_cost().to_be_bytes());
+        envelope.push(params.p_cost());
         envelope.extend_from_slice(&nonce);
         envelope.extend_from_slice(&ciphertext);
 
-        let id = format!("encrypted-profile-{now_unix_secs}-{}", random_hex(4));
-        let ciphertext_path = self.ciphertext_path(&id);
+        let ciphertext_path = PathBuf::from(&record.ciphertext_path);
         if let Some(parent) = ciphertext_path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
         fs::write(&ciphertext_path, envelope)
             .with_context(|| format!("write {}", ciphertext_path.display()))?;
 
-        let record = EncryptedProfileRecord {
-            id: id.clone(),
-            kind: kind.to_string(),
-            source: source.to_string(),
-            ciphertext_path: ciphertext_path.display().to_string(),
-            key_source: "passphrase".to_string(),
-            salt_hex: hex::encode(salt),
-            created_at: now_unix_secs,
-            updated_at: now_unix_secs,
-        };
         self.write_encrypted_profile(&record)?;
         Ok(record)
     }
@@ -475,21 +526,62 @@ impl FilesystemEncryptedProfileStore {
         record: &EncryptedProfileRecord,
         passphrase: &str,
     ) -> Result<String> {
-        let salt = hex::decode(&record.salt_hex).context("decode encrypted profile salt")?;
         let envelope = fs::read(&record.ciphertext_path)
             .with_context(|| format!("read {}", record.ciphertext_path))?;
-        if envelope.len() < 1 + 12 + 16 {
-            bail!("encrypted profile ciphertext is too short");
+
+        // Length check first — never index into a short/corrupt file.
+        if envelope.len() < ENVELOPE_MIN_LEN {
+            return Err(anyhow!(StateError::Truncated {
+                actual: envelope.len(),
+                minimum: ENVELOPE_MIN_LEN,
+            }));
         }
-        if envelope[0] != ENCRYPTED_PROFILE_VERSION {
-            bail!("unsupported encrypted profile version {}", envelope[0]);
+
+        // version byte
+        let version = envelope[0];
+        if version != ENCRYPTED_PROFILE_VERSION {
+            return Err(anyhow!(StateError::UnsupportedVersion(version)));
         }
-        let mut nonce = [0u8; 12];
-        nonce.copy_from_slice(&envelope[1..13]);
-        let key = derive_profile_encryption_key(passphrase, &salt)?;
+
+        // kdf_id byte
+        let kdf_id = envelope[1];
+        if kdf_id != KDF_ID_ARGON2ID {
+            return Err(anyhow!(StateError::UnsupportedKdf(kdf_id)));
+        }
+
+        // Argon2id parameters.
+        let m_cost = u32::from_be_bytes([envelope[2], envelope[3], envelope[4], envelope[5]]);
+        let t_cost = u32::from_be_bytes([envelope[6], envelope[7], envelope[8], envelope[9]]);
+        let p_cost = envelope[10];
+        let params = Argon2Params::new(m_cost, t_cost, p_cost)
+            .map_err(|err| anyhow!(StateError::from(err)))?;
+
+        // nonce
+        let mut nonce = [0u8; ENVELOPE_NONCE_LEN];
+        nonce.copy_from_slice(&envelope[11..11 + ENVELOPE_NONCE_LEN]);
+
+        // salt from sidecar metadata — must match the AAD salt exactly.
+        let salt_bytes = hex::decode(&record.salt_hex).context("decode encrypted profile salt")?;
+        if salt_bytes.len() != AAD_SALT_LEN {
+            return Err(anyhow!(StateError::InvalidMetadata {
+                reason: "salt_hex does not decode to 16 bytes",
+            }));
+        }
+        let mut salt = [0u8; KDF_SALT_LEN];
+        salt.copy_from_slice(&salt_bytes);
+
+        let aad = build_aad_hostlocal(record).map_err(|err| anyhow!(err))?;
+        let key = derive_profile_encryption_key_v2(passphrase.as_bytes(), &salt, &params)
+            .map_err(|err| anyhow!(err))?;
         let cipher = ChaCha20Poly1305::new((&key).into());
         let plaintext = cipher
-            .decrypt(Nonce::from_slice(&nonce), &envelope[13..])
+            .decrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &envelope[11 + ENVELOPE_NONCE_LEN..],
+                    aad: &aad,
+                },
+            )
             .map_err(|_| anyhow!("encrypted profile decryption failure"))?;
         String::from_utf8(plaintext).context("encrypted profile plaintext is not utf8")
     }
@@ -531,14 +623,6 @@ impl crate::EncryptedProfileStore for FilesystemEncryptedProfileStore {
     fn write_encrypted_profile(&self, record: &EncryptedProfileRecord) -> Result<()> {
         write_json(&self.metadata_path(&record.id), record)
     }
-}
-
-fn derive_profile_encryption_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
-    let mut key = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|error| anyhow!("derive profile encryption key: {error}"))?;
-    Ok(key)
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
