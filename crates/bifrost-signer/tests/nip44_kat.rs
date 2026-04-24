@@ -72,8 +72,8 @@ fn stack1_encrypt_with_fixed_nonce_matches_pinned_ciphertext() {
     // plaintext) tuple above.
     const EXPECTED: &str = "AhEiM0RVZneImaq7zN3u/wAQIDBAUGBwgJCgsMDQ4PABZ8K8mjjGm74/ln/n8hReOytGO3Wk5NvorJOZhSOES4CDZaApRQ3CU3da65KQVaNa2Y9wGYfMKvjxaFtWJTRL+/j3";
 
-    let actual = encrypt_content_for_peer_with_nonce(sk, &bob_xonly, plaintext, nonce32)
-        .expect("encrypt");
+    let actual =
+        encrypt_content_for_peer_with_nonce(sk, &bob_xonly, plaintext, nonce32).expect("encrypt");
     assert_eq!(
         actual, EXPECTED,
         "Stack 1 ciphertext drift — see test doc for re-capture procedure"

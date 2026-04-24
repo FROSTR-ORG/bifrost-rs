@@ -894,20 +894,38 @@ fn encrypt_nip44_compatible_payload(
     plaintext: &str,
 ) -> FrostUtilsResult<String> {
     let nonce32 = random_nonce32();
-    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
+    encrypt_nip44_compatible_payload_with_nonce(conversation_key, &nonce32, plaintext)
+}
+
+// Exposed for KAT-freeze integration tests at
+// `tests/nip44_profile_packages_kat.rs` (A.5.pre, remediation-2026-04-22).
+// Do not call from production code — use `encrypt_nip44_compatible_payload`
+// (random-nonce wrapper) instead.
+#[doc(hidden)]
+pub fn encrypt_nip44_compatible_payload_with_nonce(
+    conversation_key: &[u8; 32],
+    nonce32: &[u8; 32],
+    plaintext: &str,
+) -> FrostUtilsResult<String> {
+    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, nonce32)?;
     let mut padded = pad_message(plaintext)?;
     let mut chacha = ChaCha20::new((&chacha_key).into(), (&chacha_nonce).into());
     chacha.apply_keystream(&mut padded);
-    let mac = hmac_aad(&hmac_key, &nonce32, &padded)?;
+    let mac = hmac_aad(&hmac_key, nonce32, &padded)?;
     let mut encoded = Vec::with_capacity(1 + 32 + padded.len() + 32);
     encoded.push(2u8);
-    encoded.extend_from_slice(&nonce32);
+    encoded.extend_from_slice(nonce32);
     encoded.extend_from_slice(&padded);
     encoded.extend_from_slice(&mac);
     Ok(STANDARD_NO_PAD.encode(encoded))
 }
 
-fn decrypt_nip44_compatible_payload(
+// Exposed for KAT-freeze integration tests at
+// `tests/nip44_profile_packages_kat.rs` (A.5.pre, remediation-2026-04-22).
+// Production callers continue to use the crate-private path via
+// `decrypt_profile_backup_content`.
+#[doc(hidden)]
+pub fn decrypt_nip44_compatible_payload(
     conversation_key: &[u8; 32],
     payload: &str,
 ) -> FrostUtilsResult<String> {

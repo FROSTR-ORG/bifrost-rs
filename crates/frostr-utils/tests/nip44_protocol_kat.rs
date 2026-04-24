@@ -44,16 +44,15 @@ fn stack2_encrypt_with_fixed_nonce_matches_pinned_ciphertext() {
     // fixed tuple above.
     const EXPECTED: &str = "AgsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCgUyUep4VmwGtprFe5zyHEAvlNEjuJhYSQH3vWNduZIysmxz60+FcHKo1iXXBkGJ2oLKmmldqSXxeKoRtdYR2+qz";
 
-    let actual =
-        encrypt_content_for_peer_with_nonce(local_seckey, &peer_xonly, plaintext, nonce32)
-            .expect("encrypt");
+    let actual = encrypt_content_for_peer_with_nonce(local_seckey, &peer_xonly, plaintext, nonce32)
+        .expect("encrypt");
     assert_eq!(
         actual, EXPECTED,
         "Stack 2 ciphertext drift — any A.5.main change must re-pin this constant"
     );
 
     // Round-trip: peer decrypts using their seckey and the local x-only.
-    let recovered = decrypt_content_from_peer(peer_seckey, &local_xonly, &actual)
-        .expect("round trip decrypt");
+    let recovered =
+        decrypt_content_from_peer(peer_seckey, &local_xonly, &actual).expect("round trip decrypt");
     assert_eq!(recovered, plaintext);
 }
