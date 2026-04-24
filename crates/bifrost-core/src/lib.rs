@@ -1,6 +1,7 @@
 pub mod ecdh;
 pub mod error;
 pub mod group;
+pub mod nip44;
 pub mod nonce;
 pub mod secret;
 pub mod session;
