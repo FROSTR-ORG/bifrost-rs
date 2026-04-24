@@ -1,3 +1,4 @@
+mod argon2_params;
 mod config;
 mod flows;
 mod models;
@@ -7,6 +8,10 @@ mod paths;
 mod policy;
 mod traits;
 
+pub use argon2_params::{
+    ARGON2_MAX_M_COST, ARGON2_MIN_M_COST, ARGON2_MIN_P_COST, ARGON2_MIN_T_COST, Argon2Params,
+    ParamsError,
+};
 pub use config::{
     FallbackUnlockMode, KeyringPreference, RelayProfile, ShellConfig, validate_relay_profile,
 };
@@ -40,3 +45,15 @@ pub use policy::{
 pub use traits::{Clock, EncryptedProfileStore, ProfileManifestStore, RelayProfileStore};
 
 pub const ENCRYPTED_PROFILE_VERSION: u8 = 1;
+
+/// Host-local encrypted-profile envelope version 2.
+///
+/// PR6 defines the constant for crate-internal use by the v2 AAD builder and
+/// KDF helper. PR7 will flip `ENCRYPTED_PROFILE_VERSION` to this value and
+/// wire the writer/reader over.
+pub const ENCRYPTED_PROFILE_VERSION_V2: u8 = 2;
+
+/// `kdf_id` byte identifying Argon2id in the v2 envelope header. A future
+/// KDF family is signalled by bumping the envelope version, not by adding a
+/// new `kdf_id` to the v2 header.
+pub const KDF_ID_ARGON2ID: u8 = 1;
