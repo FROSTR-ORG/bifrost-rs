@@ -651,7 +651,9 @@ mod tests {
 
     #[test]
     fn constants_and_id_helpers_match_profile_package_contract() {
-        assert_eq!(bf_package_version(), 1);
+        // Bumped to 2 in Bucket B PR5 (portable-package v2 migration:
+        // Argon2id + XChaCha20Poly1305). Hard-cut; no v1 reader.
+        assert_eq!(bf_package_version(), 2);
         assert_eq!(bfshare_prefix(), "bfshare");
         assert_eq!(bfonboard_prefix(), "bfonboard");
         assert_eq!(bfprofile_prefix(), "bfprofile");

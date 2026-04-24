@@ -18,9 +18,7 @@ use bifrost_core::types::{
     GroupPackage, MethodPolicyOverride, PeerPolicyOverride, PolicyOverrideValue,
 };
 
-use crate::argon2_params::{
-    Argon2Params, PACKAGE_KDF_SALT_LEN, derive_package_encryption_key_v2,
-};
+use crate::argon2_params::{Argon2Params, PACKAGE_KDF_SALT_LEN, derive_package_encryption_key_v2};
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
 use crate::package_aad::build_aad_package;
 
@@ -720,8 +718,12 @@ fn decrypt_v2_envelope(
     if envelope.aead != AEAD_MARKER_XCHACHA20POLY1305 {
         return Err(FrostUtilsError::UnsupportedAead(envelope.aead.clone()));
     }
-    let params = Argon2Params::new(envelope.kdf_m_cost, envelope.kdf_t_cost, envelope.kdf_p_cost)
-        .map_err(FrostUtilsError::from)?;
+    let params = Argon2Params::new(
+        envelope.kdf_m_cost,
+        envelope.kdf_t_cost,
+        envelope.kdf_p_cost,
+    )
+    .map_err(FrostUtilsError::from)?;
     let salt_bytes = hex::decode(&envelope.salt_hex)
         .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} salt: {e}")))?;
     if salt_bytes.len() != PACKAGE_KDF_SALT_LEN {

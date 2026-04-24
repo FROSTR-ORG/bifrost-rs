@@ -70,8 +70,7 @@ fn sample_profile_payload() -> BfProfilePayload {
 /// Bech32m-decode a package back to its raw bytes (envelope JSON for share/
 /// onboard, and `profile_id_hex || envelope_json` for profile).
 fn bech32m_decode(pkg: &str) -> (String, Vec<u8>) {
-    let (hrp, data) =
-        bech32::decode(pkg).unwrap_or_else(|e| panic!("bech32m decode failed: {e}"));
+    let (hrp, data) = bech32::decode(pkg).unwrap_or_else(|e| panic!("bech32m decode failed: {e}"));
     (hrp.to_string(), data)
 }
 
@@ -92,8 +91,7 @@ fn bech32m_encode(hrp: &str, payload: &[u8]) -> String {
 #[test]
 fn decode_rejects_wrong_password() {
     let encoded = encode_bfshare_package(&sample_share_payload(), "correct").expect("encode");
-    let err =
-        decode_bfshare_package(&encoded, "wrong").expect_err("wrong password must fail");
+    let err = decode_bfshare_package(&encoded, "wrong").expect_err("wrong password must fail");
     assert!(
         matches!(err, FrostUtilsError::DecryptionFailed),
         "expected DecryptionFailed, got {err:?}"
@@ -116,8 +114,7 @@ fn decode_rejects_corrupted_ciphertext_byte_flip() {
 
     let mutated_bytes = serde_json::to_vec(&envelope).expect("ser");
     let mutated_pkg = bech32m_encode("bfshare", &mutated_bytes);
-    let err = decode_bfshare_package(&mutated_pkg, "secret")
-        .expect_err("byte-flip must fail");
+    let err = decode_bfshare_package(&mutated_pkg, "secret").expect_err("byte-flip must fail");
     assert!(
         matches!(err, FrostUtilsError::DecryptionFailed),
         "expected DecryptionFailed, got {err:?}"
@@ -132,8 +129,7 @@ fn decode_rejects_unsupported_version() {
     envelope["version"] = Value::from(1u8);
     let mutated = serde_json::to_vec(&envelope).expect("ser");
     let mutated_pkg = bech32m_encode(&hrp, &mutated);
-    let err =
-        decode_bfshare_package(&mutated_pkg, "secret").expect_err("v1 envelope must reject");
+    let err = decode_bfshare_package(&mutated_pkg, "secret").expect_err("v1 envelope must reject");
     assert!(
         matches!(err, FrostUtilsError::UnsupportedVersion(1)),
         "expected UnsupportedVersion(1), got {err:?}"
@@ -148,8 +144,8 @@ fn decode_rejects_unsupported_kdf() {
     envelope["kdf"] = Value::String("pbkdf2".to_string());
     let mutated = serde_json::to_vec(&envelope).expect("ser");
     let mutated_pkg = bech32m_encode(&hrp, &mutated);
-    let err = decode_bfshare_package(&mutated_pkg, "secret")
-        .expect_err("pbkdf2 marker must reject");
+    let err =
+        decode_bfshare_package(&mutated_pkg, "secret").expect_err("pbkdf2 marker must reject");
     match err {
         FrostUtilsError::UnsupportedKdf(ref s) => assert_eq!(s, "pbkdf2"),
         _ => panic!("expected UnsupportedKdf(pbkdf2), got {err:?}"),
@@ -183,8 +179,8 @@ fn decode_rejects_hrp_swap() {
     // bfprofile decode also expects a leading 64-byte profile id prefix; the
     // inner JSON does not carry one, so the decoder will fail at the structural
     // parse OR the MAC check. Either way it must reject.
-    let err = decode_bfprofile_package(&swapped, "secret")
-        .expect_err("HRP swap must fail to decode");
+    let err =
+        decode_bfprofile_package(&swapped, "secret").expect_err("HRP swap must fail to decode");
     assert!(
         !matches!(err, FrostUtilsError::DecryptionFailed)
             || matches!(err, FrostUtilsError::DecryptionFailed),
@@ -200,8 +196,8 @@ fn decode_rejects_params_below_floor() {
     envelope["kdf_m_cost"] = Value::from(ARGON2_MIN_M_COST - 1);
     let mutated = serde_json::to_vec(&envelope).expect("ser");
     let mutated_pkg = bech32m_encode(&hrp, &mutated);
-    let err = decode_bfshare_package(&mutated_pkg, "secret")
-        .expect_err("below-floor m_cost must reject");
+    let err =
+        decode_bfshare_package(&mutated_pkg, "secret").expect_err("below-floor m_cost must reject");
     assert!(
         matches!(err, FrostUtilsError::UnsupportedParams { .. }),
         "expected UnsupportedParams, got {err:?}"
@@ -272,8 +268,8 @@ fn aad_rejects_interior_nul_in_outer_id() {
 #[test]
 fn aad_includes_outer_id_only_for_bfprofile() {
     let salt = [0u8; 16];
-    let aad_share = build_aad_package(BF_PACKAGE_VERSION, PREFIX_BFSHARE, &salt, None)
-        .expect("bfshare aad");
+    let aad_share =
+        build_aad_package(BF_PACKAGE_VERSION, PREFIX_BFSHARE, &salt, None).expect("bfshare aad");
     let aad_onboard = build_aad_package(BF_PACKAGE_VERSION, PREFIX_BFONBOARD, &salt, None)
         .expect("bfonboard aad");
     let aad_profile = build_aad_package(

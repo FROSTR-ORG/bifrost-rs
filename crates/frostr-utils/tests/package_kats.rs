@@ -83,15 +83,12 @@ fn bech32m_wrap(hrp: &str, payload: &[u8]) -> String {
 }
 
 const KAT_PASSWORD: &str = "kat-password-v2";
-const KAT_SHARE_SECRET: &str =
-    "1111111111111111111111111111111111111111111111111111111111111111";
-const KAT_PEER_PK: &str =
-    "2222222222222222222222222222222222222222222222222222222222222222";
+const KAT_SHARE_SECRET: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const KAT_PEER_PK: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 /// Computed from `derive_profile_id_from_share_secret(KAT_SHARE_SECRET)` and
 /// pinned here to keep the bfprofile KAT free of runtime dependencies on the
 /// derivation function. The pin is checked at test-time.
-const KAT_PROFILE_ID: &str =
-    "a62c6e300a1d759cafa27aabf212d2d7675c1e1eadfa48448e1406744fbe3830";
+const KAT_PROFILE_ID: &str = "a62c6e300a1d759cafa27aabf212d2d7675c1e1eadfa48448e1406744fbe3830";
 
 /// 16-byte fixed salt, all 0xAB.
 const KAT_SALT: [u8; PACKAGE_KDF_SALT_LEN] = [0xABu8; PACKAGE_KDF_SALT_LEN];

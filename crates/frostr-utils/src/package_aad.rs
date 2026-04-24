@@ -115,8 +115,8 @@ mod tests {
 
     #[test]
     fn aad_rejects_interior_nul_in_hrp() {
-        let err = build_aad_package(2, "bfsh\0are", &salt(), None)
-            .expect_err("interior nul rejects");
+        let err =
+            build_aad_package(2, "bfsh\0are", &salt(), None).expect_err("interior nul rejects");
         assert!(matches!(err, FrostUtilsError::InvalidMetadata(_)));
     }
 
