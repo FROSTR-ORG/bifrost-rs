@@ -6,6 +6,7 @@ mod native;
 mod packages;
 mod paths;
 mod policy;
+mod state_error;
 mod traits;
 
 pub use argon2_params::{
@@ -42,6 +43,7 @@ pub use policy::{
     PolicyOverrideEntry, PolicyOverridesDocument, empty_policy_overrides_document,
     empty_policy_overrides_value, parse_policy_overrides_doc,
 };
+pub use state_error::StateError;
 pub use traits::{Clock, EncryptedProfileStore, ProfileManifestStore, RelayProfileStore};
 
 pub const ENCRYPTED_PROFILE_VERSION: u8 = 1;
