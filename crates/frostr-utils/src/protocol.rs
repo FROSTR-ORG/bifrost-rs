@@ -205,6 +205,19 @@ fn encrypt_content_for_peer(
 ) -> FrostUtilsResult<String> {
     let mut nonce32 = [0u8; 32];
     OsRng.fill_bytes(&mut nonce32);
+    encrypt_content_for_peer_with_nonce(seckey, peer_pubkey32, plaintext, nonce32)
+}
+
+// Exposed for KAT-freeze integration tests at
+// `tests/nip44_protocol_kat.rs` (A.5.pre, remediation-2026-04-22). Do not
+// call from production code — use `encrypt_content_for_peer` instead.
+#[doc(hidden)]
+pub fn encrypt_content_for_peer_with_nonce(
+    seckey: [u8; 32],
+    peer_pubkey32: &str,
+    plaintext: &str,
+    nonce32: [u8; 32],
+) -> FrostUtilsResult<String> {
     let shared_x = event_shared_x(seckey, peer_pubkey32)?;
     let conversation_key = hkdf_extract_sha256(b"nip44-v2", &shared_x)?;
     let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(&conversation_key, &nonce32)?;
@@ -222,7 +235,12 @@ fn encrypt_content_for_peer(
     Ok(STANDARD_NO_PAD.encode(encoded))
 }
 
-fn decrypt_content_from_peer(
+// Exposed for KAT-freeze integration tests at
+// `tests/nip44_protocol_kat.rs` (A.5.pre, remediation-2026-04-22).
+// Production callers use the crate-private `decrypt_content_from_peer`
+// path via the surrounding onboarding helpers.
+#[doc(hidden)]
+pub fn decrypt_content_from_peer(
     seckey: [u8; 32],
     peer_pubkey32: &str,
     payload: &str,
