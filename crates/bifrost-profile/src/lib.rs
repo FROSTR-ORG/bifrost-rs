@@ -50,13 +50,17 @@ pub use policy::{
 pub use state_error::StateError;
 pub use traits::{Clock, EncryptedProfileStore, ProfileManifestStore, RelayProfileStore};
 
-pub const ENCRYPTED_PROFILE_VERSION: u8 = 1;
-
-/// Host-local encrypted-profile envelope version 2.
+/// Host-local encrypted-profile envelope version written by the writer and
+/// required by the reader.
 ///
-/// PR6 defines the constant for crate-internal use by the v2 AAD builder and
-/// KDF helper. PR7 will flip `ENCRYPTED_PROFILE_VERSION` to this value and
-/// wire the writer/reader over.
+/// Bucket B B.1 (PR7, 2026-04-22 remediation track) flipped this from 1 to 2.
+/// v1 envelopes are not readable by this crate — operators must re-onboard.
+pub const ENCRYPTED_PROFILE_VERSION: u8 = 2;
+
+/// Alias kept for call sites that want to signal the v2-specific envelope
+/// shape explicitly. The crate-internal AAD builder uses this alias so the
+/// version byte in the AAD stays pinned to `2` even if `ENCRYPTED_PROFILE_VERSION`
+/// is later bumped to v3 (which would need a sibling AAD helper).
 pub const ENCRYPTED_PROFILE_VERSION_V2: u8 = 2;
 
 /// `kdf_id` byte identifying Argon2id in the v2 envelope header. A future
