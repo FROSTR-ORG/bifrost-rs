@@ -21,7 +21,10 @@ pub(crate) fn encrypt_content_for_peer(
     encrypt_content_for_peer_with_nonce(seckey, peer_pubkey32, plaintext, nonce32)
 }
 
-pub(crate) fn encrypt_content_for_peer_with_nonce(
+// Exposed for KAT-freeze integration tests in `tests/nip44_kat.rs`
+// (A.5.pre, remediation-2026-04-22). Do not call from production code.
+#[doc(hidden)]
+pub fn encrypt_content_for_peer_with_nonce(
     seckey: [u8; 32],
     peer_pubkey32: &str,
     plaintext: &str,
@@ -45,7 +48,11 @@ pub(crate) fn encrypt_content_for_peer_with_nonce(
     Ok(STANDARD_NO_PAD.encode(encoded))
 }
 
-pub(crate) fn decrypt_content_from_peer(
+// Exposed for KAT-freeze integration tests in `tests/nip44_kat.rs`
+// (A.5.pre, remediation-2026-04-22). Production callers route through the
+// `crypto` module; this `pub` is used only by the crate's integration tests.
+#[doc(hidden)]
+pub fn decrypt_content_from_peer(
     seckey: [u8; 32],
     peer_pubkey32: &str,
     payload: &str,
@@ -232,21 +239,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use k256::elliptic_curve::sec1::ToEncodedPoint;
 
-    #[test]
-    fn decrypts_js_generated_nip44_payload() {
-        let local_seckey =
-            hex::decode("579689f6508912ed1fc14b656426a1669b1e15510e33304b2c9e62248bd9299e")
-                .expect("hex seckey");
-        let mut sk = [0u8; 32];
-        sk.copy_from_slice(&local_seckey);
-
-        let peer_pubkey32 = "c8d330c2d4cc93bd48e2d865beef3b86c45d80326e53d0f897df055816651dbd";
-        let payload = "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHVjH09L8c2jhZOTvj0AILSiZ+7cwhoXDehgU1ieJdokoDSRlLk23Sveljn8K8WcJ/4wPFfu19mxGKiht58B8eQf0C/agzO4RGabcZqH0XwSTBBY07UklU6qnJ06V3ij5NjWXU+XreZRV0Bc/e52u/h6SO4tKELe2OFsh3H6sCjdlNgattHxKHfiO5QQPj+VpjGeXVk1PyThUPsCVVJTjK+IIWedUFXd2cXuPBcT6RzrYtKjnrG7W9KsgqCyaWRneaGAbAbD0G/N8k8lrq6tl8aPmLPyoin4V12s4cwk6+Zd94Sw";
-        let plaintext = decrypt_content_from_peer(sk, peer_pubkey32, payload).expect("decrypt");
-        assert!(plaintext.contains("\"request_id\":\"vec-1\""));
-        assert!(plaintext.contains("\"type\":\"OnboardRequest\""));
-        assert!(plaintext.contains("\"idx\":2"));
-    }
+    // The JS-generated NIP-44 cross-implementation KAT was migrated to
+    // `tests/nip44_kat.rs::stack1_decrypts_js_generated_nip44_payload` as
+    // part of A.5.pre (remediation-2026-04-22) so that all three NIP-44
+    // stacks' KATs live in crate-local integration tests.
 
     #[test]
     fn encrypt_round_trip_with_fixed_nonce_is_stable_and_decryptable() {

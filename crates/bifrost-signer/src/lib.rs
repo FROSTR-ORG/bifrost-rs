@@ -30,6 +30,14 @@ mod event_io;
 mod util;
 use crypto::{decrypt_content_from_peer, encrypt_content_for_peer};
 pub use error::{Result, SignerError};
+
+/// Test-only re-exports used by the KAT-freeze integration test in
+/// `tests/nip44_kat.rs` (A.5.pre, remediation-2026-04-22). Not a stable
+/// public API; production callers MUST use the private `crypto` module.
+#[doc(hidden)]
+pub mod __kat_exports {
+    pub use super::crypto::{decrypt_content_from_peer, encrypt_content_for_peer_with_nonce};
+}
 use event_io::{build_signed_event, event_content, event_kind, event_pubkey_xonly};
 use util::{
     decode_32, decode_member_index, decode_member_pubkey, decode_pubkey32, is_valid_pubkey32_hex,
