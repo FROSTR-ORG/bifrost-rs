@@ -20,8 +20,6 @@ chacha20poly1305.workspace = true
 argon2 = "0.5"
 zeroize.workspace = true
 hex.workspace = true
-aes-gcm = "0.10"
-pbkdf2 = "0.12"
 url = "2"
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
