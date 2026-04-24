@@ -396,6 +396,7 @@ fn hmac_aad(
 mod tests {
     use bifrost_core::nonce::NoncePool;
     use bifrost_core::nonce::NoncePoolConfig;
+    use bifrost_core::secret::NoncePoolSecret;
     use bifrost_core::types::{
         IndexedPublicNonceCommitment, MemberNonceCommitmentSet, SignSessionTemplate,
     };
@@ -424,28 +425,23 @@ mod tests {
         let share_a = bundle.shares[0].clone();
         let share_b = bundle.shares[1].clone();
 
-        let mut pool_a = NoncePool::new(
-            share_a.idx,
-            *share_a.seckey.expose_bytes(),
-            NoncePoolConfig::default(),
-        );
+        let seckey_a = NoncePoolSecret::new(*share_a.seckey.expose_bytes());
+        let seckey_b = NoncePoolSecret::new(*share_b.seckey.expose_bytes());
+
+        let mut pool_a = NoncePool::new(share_a.idx, NoncePoolConfig::default());
         pool_a.init_peer(share_b.idx);
         let nonce_a = pool_a
-            .generate_for_peer(share_b.idx, 1)
+            .generate_for_peer(share_b.idx, 1, &seckey_a)
             .expect("nonce a")
             .remove(0);
         let nonces_a = pool_a
             .take_outgoing_signing_nonces_many(share_b.idx, &[nonce_a.code])
             .expect("nonces a");
 
-        let mut pool_b = NoncePool::new(
-            share_b.idx,
-            *share_b.seckey.expose_bytes(),
-            NoncePoolConfig::default(),
-        );
+        let mut pool_b = NoncePool::new(share_b.idx, NoncePoolConfig::default());
         pool_b.init_peer(share_a.idx);
         let nonce_b = pool_b
-            .generate_for_peer(share_a.idx, 1)
+            .generate_for_peer(share_a.idx, 1, &seckey_b)
             .expect("nonce b")
             .remove(0);
         let nonces_b = pool_b
