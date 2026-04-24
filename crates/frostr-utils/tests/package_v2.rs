@@ -179,13 +179,8 @@ fn decode_rejects_hrp_swap() {
     // bfprofile decode also expects a leading 64-byte profile id prefix; the
     // inner JSON does not carry one, so the decoder will fail at the structural
     // parse OR the MAC check. Either way it must reject.
-    let err =
+    let _err =
         decode_bfprofile_package(&swapped, "secret").expect_err("HRP swap must fail to decode");
-    assert!(
-        !matches!(err, FrostUtilsError::DecryptionFailed)
-            || matches!(err, FrostUtilsError::DecryptionFailed),
-        "decoded with swapped HRP unexpectedly: {err:?}"
-    );
 }
 
 #[test]
