@@ -3976,4 +3976,145 @@ mod tests {
         );
     }
 
+    #[test]
+    fn device_state_v5_rejected_with_unsupported_version_error() {
+        // Hard-cut boundary: any state blob written under VERSION = 5 must
+        // surface as `SignerError::UnsupportedVersion` rather than being
+        // silently accepted or falling through to `StateCorrupted`.
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("keyset");
+        let share = bundle.shares[0].clone();
+        let state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        let mut persisted = DeviceStatePersisted::from(&state);
+        persisted.version = 5;
+
+        let v5_state = DeviceState::from_persisted(
+            DeviceSecrets::new(*bundle.shares[0].seckey.expose_bytes()),
+            persisted,
+        );
+        let err = match SigningDevice::new(
+            bundle.group,
+            share,
+            Vec::new(),
+            v5_state,
+            DeviceConfig::default(),
+        ) {
+            Ok(_) => panic!("v5 state must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, SignerError::UnsupportedVersion(5)));
+    }
+
+    #[test]
+    fn device_state_round_trip_through_persisted_dto_preserves_non_cache_fields() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.request_seq = 99;
+        state.last_active = 1_700_000_000;
+        state.peer_last_seen.insert("peer-a".into(), 1_699_999_999);
+        state.replay_cache.insert("some-request".into(), 42);
+        state.pending_operations.insert(
+            "req-1".into(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: "req-1".into(),
+                started_at: 1,
+                timeout_at: 2,
+                target_peers: vec!["peer-a".into()],
+                threshold: 1,
+                collected_responses: Vec::new(),
+                context: PendingOpContext::PingRequest,
+            },
+        );
+
+        let encoded =
+            serde_json::to_string(&DeviceStatePersisted::from(&state)).expect("serialize");
+        let decoded: DeviceStatePersisted = serde_json::from_str(&encoded).expect("deserialize");
+        let restored =
+            DeviceState::from_persisted(DeviceSecrets::new(*share.seckey.expose_bytes()), decoded);
+
+        assert_eq!(restored.version, DeviceState::VERSION);
+        assert_eq!(restored.request_seq, 99);
+        assert_eq!(restored.last_active, 1_700_000_000);
+        assert_eq!(
+            restored.peer_last_seen.get("peer-a").copied(),
+            Some(1_699_999_999)
+        );
+        assert_eq!(restored.replay_cache.get("some-request").copied(), Some(42));
+        assert!(restored.pending_operations.contains_key("req-1"));
+    }
+
+    #[test]
+    fn device_state_restore_starts_ecdh_cache_empty() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.secrets.ecdh_cache.insert(
+            "deadbeef".into(),
+            EcdhCacheEntryLive {
+                key_hex: "deadbeef".into(),
+                shared_secret: EcdhSharedSecret::new([0x11; 32]),
+                stored_at: 1,
+                last_accessed_at: 1,
+            },
+        );
+        state.secrets.ecdh_cache_order.push_back("deadbeef".into());
+
+        // Round-trip through the persisted DTO — ecdh cache is not encoded.
+        let encoded =
+            serde_json::to_string(&DeviceStatePersisted::from(&state)).expect("serialize");
+        let decoded: DeviceStatePersisted = serde_json::from_str(&encoded).expect("deserialize");
+        let restored =
+            DeviceState::from_persisted(DeviceSecrets::new(*share.seckey.expose_bytes()), decoded);
+        assert!(restored.secrets.ecdh_cache.is_empty());
+        assert!(restored.secrets.ecdh_cache_order.is_empty());
+    }
+
+    #[test]
+    fn device_state_debug_does_not_leak_secret_bytes() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.secrets.ecdh_cache.insert(
+            "ffffffff".into(),
+            EcdhCacheEntryLive {
+                key_hex: "ffffffff".into(),
+                shared_secret: EcdhSharedSecret::new([0xAB; 32]),
+                stored_at: 1,
+                last_accessed_at: 1,
+            },
+        );
+
+        let rendered = format!("{:?}", state);
+        // Any run of 32 or more hex digits is suspicious: that is the
+        // minimum length of a leaked 16-byte secret in hex.
+        for window in rendered.as_bytes().windows(32) {
+            let hex_run = window.iter().all(|byte| byte.is_ascii_hexdigit());
+            assert!(
+                !hex_run,
+                "debug output contains a 32-char hex run: {}",
+                rendered,
+            );
+        }
+    }
 }
