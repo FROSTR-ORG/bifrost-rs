@@ -1,3 +1,4 @@
+mod aad;
 mod argon2_params;
 mod config;
 mod flows;
@@ -9,6 +10,7 @@ mod policy;
 mod state_error;
 mod traits;
 
+pub use aad::{AAD_DOMAIN_SEPARATOR, AAD_SALT_LEN, build_aad_hostlocal};
 pub use argon2_params::{
     ARGON2_MAX_M_COST, ARGON2_MIN_M_COST, ARGON2_MIN_P_COST, ARGON2_MIN_T_COST, Argon2Params,
     ParamsError,
