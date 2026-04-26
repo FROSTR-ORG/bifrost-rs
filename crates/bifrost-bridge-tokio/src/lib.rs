@@ -6,8 +6,8 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bifrost_core::types::{DerivedPublicNonce, GroupPackage, PeerPolicyOverride};
 use bifrost_router::{
-    BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore,
-    InboundEventDisposition, RequestPhase, RouterPort,
+    BridgeCommand as RouterCommand, BridgeConfig as RouterConfig, BridgeCore, RequestPhase,
+    RouterPort,
 };
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, DeviceStatus,
@@ -338,17 +338,10 @@ impl Bridge {
                         match inbound {
                             Ok(event) => {
                                 let event_id = event.id.to_hex();
-                                match core.enqueue_inbound_event(event) {
-                                    InboundEventDisposition::Queued => {
-                                        info!(event_id = %event_id, "relay event received");
-                                    }
-                                    InboundEventDisposition::Ignored => {
-                                        // Shared relay subscriptions can replay duplicates or
-                                        // deliver events that are not addressed to this device.
-                                    }
-                                    InboundEventDisposition::DroppedOverflow => {
-                                        warn!("inbound queue full; dropped relay event");
-                                    }
+                                if core.enqueue_inbound_event(event) {
+                                    warn!("inbound queue full; dropped relay event");
+                                } else {
+                                    info!(event_id = %event_id, "relay event received");
                                 }
                             }
                             Err(err) => {

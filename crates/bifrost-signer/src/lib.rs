@@ -439,7 +439,6 @@ pub struct SignerEffects {
     pub outbound: Vec<Event>,
     pub completions: Vec<CompletedOperation>,
     pub failures: Vec<OperationFailure>,
-    pub activities: Vec<SignerActivity>,
     pub latest_request_id: Option<String>,
     pub persistence_hint: PersistenceHint,
 }
@@ -479,19 +478,6 @@ pub struct OperationFailure {
     pub failed_peer: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SignerActivity {
-    pub request_id: String,
-    pub op_type: PendingOpType,
-    pub peer: String,
-    pub action: SignerActivityAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignerActivityAction {
-    ResponseSent,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EcdhCacheEntry {
     pub key_hex: String,
@@ -519,7 +505,6 @@ pub struct SigningDevice {
     device_id: DeviceId,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
-    activities: VecDeque<SignerActivity>,
     latest_request_id: Option<String>,
     runtime_persistence_hint: PersistenceHint,
 }
@@ -580,7 +565,6 @@ impl SigningDevice {
             device_id,
             completions: VecDeque::new(),
             failures: VecDeque::new(),
-            activities: VecDeque::new(),
             latest_request_id: None,
             runtime_persistence_hint: PersistenceHint::None,
         })
@@ -630,7 +614,6 @@ impl SigningDevice {
         self.state.nonce_pool.init_peer(self.share.idx);
         self.completions.clear();
         self.failures.clear();
-        self.activities.clear();
         self.latest_request_id = None;
         self.runtime_persistence_hint = PersistenceHint::Immediate;
     }
@@ -1412,7 +1395,6 @@ impl SigningDevice {
         }
         effects.completions.extend(self.take_completions());
         effects.failures.extend(self.take_failures());
-        effects.activities.extend(self.take_activities());
         Ok(effects)
     }
 
@@ -1422,10 +1404,6 @@ impl SigningDevice {
 
     pub fn take_failures(&mut self) -> Vec<OperationFailure> {
         self.failures.drain(..).collect()
-    }
-
-    pub fn take_activities(&mut self) -> Vec<SignerActivity> {
-        self.activities.drain(..).collect()
     }
 
     pub fn fail_request(
@@ -1803,16 +1781,7 @@ impl SigningDevice {
                     sent_at: now,
                     payload: BridgePayload::SignResponse(PartialSigPackageWire::from(partial)),
                 };
-                let request_id = response.request_id.clone();
-                let peer = sender.clone();
-                let outbound = self.encrypt_for_peers(&[sender], &response)?;
-                self.activities.push_back(SignerActivity {
-                    request_id,
-                    op_type: PendingOpType::Sign,
-                    peer,
-                    action: SignerActivityAction::ResponseSent,
-                });
-                Ok(outbound)
+                self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::EcdhRequest(wire) => {
                 if !self.inbound_allowed(&sender, "ecdh") {
@@ -1856,15 +1825,9 @@ impl SigningDevice {
             }
             BridgePayload::OnboardResponse(_)
             | BridgePayload::SignResponse(_)
-            | BridgePayload::EcdhResponse(_) => {
-                debug!(
-                    device_id = %self.device_id,
-                    sender = %sender,
-                    request_id = %envelope.request_id,
-                    "ignoring stale response without matching pending request"
-                );
-                Ok(Vec::new())
-            }
+            | BridgePayload::EcdhResponse(_) => Err(SignerError::InvalidRequest(
+                "response payload without pending request".to_string(),
+            )),
         }
     }
 
@@ -2193,8 +2156,7 @@ impl SigningDevice {
     }
 
     fn peer_needs_nonce_refill(&self, peer: &str, peer_idx: u16) -> bool {
-        self.normalized_remote_held_nonce_codes(peer, peer_idx)
-            .len()
+        self.normalized_remote_held_nonce_codes(peer, peer_idx).len()
             < self.state.nonce_pool.config().min_threshold
     }
 
@@ -2234,11 +2196,7 @@ impl SigningDevice {
         }
 
         let target_size = self.nonce_sync_target_size();
-        let current_available = self
-            .state
-            .nonce_pool
-            .outgoing_public_nonce_codes(peer_idx)
-            .len();
+        let current_available = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx).len();
         if current_available < target_size {
             self.state
                 .nonce_pool
@@ -2562,59 +2520,6 @@ mod tests {
     }
 
     #[test]
-    fn inbound_sign_request_records_response_activity_without_completion() {
-        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
-        let peer = fixture.signer.peers[0].clone();
-        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
-        let generated = peer_state
-            .nonce_pool
-            .generate_for_peer(fixture.local_share.idx, 10)
-            .expect("generate peer nonces");
-        fixture
-            .signer
-            .state
-            .nonce_pool
-            .store_incoming(peer_share.idx, generated);
-
-        let outbound = fixture
-            .signer
-            .apply(SignerInput::BeginSign {
-                message: [0x55; 32],
-            })
-            .expect("begin sign")
-            .outbound;
-        assert_eq!(outbound.len(), 1);
-        let request_id = fixture
-            .signer
-            .latest_request_id()
-            .expect("latest request id");
-
-        let mut peer_signer = SigningDevice::new(
-            fixture.group.clone(),
-            peer_share,
-            vec![fixture.signer.local_pubkey32().to_string()],
-            peer_state,
-            DeviceConfig::default(),
-        )
-        .expect("peer signer");
-        let effects = peer_signer
-            .apply(SignerInput::ProcessEvent {
-                event: outbound[0].clone(),
-            })
-            .expect("process sign request");
-
-        assert_eq!(effects.outbound.len(), 1);
-        assert!(effects.completions.is_empty());
-        assert_eq!(effects.activities.len(), 1);
-        let activity = &effects.activities[0];
-        assert_eq!(activity.request_id, request_id);
-        assert!(matches!(activity.op_type, PendingOpType::Sign));
-        assert_eq!(activity.peer, fixture.signer.local_pubkey32());
-        assert_eq!(activity.action, SignerActivityAction::ResponseSent);
-    }
-
-    #[test]
     fn update_config_applies_safe_subset() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
 
@@ -2873,8 +2778,11 @@ mod tests {
             .outbound;
         assert_eq!(first_ping.len(), 1);
 
-        let decoded =
-            decode_envelope_for_local(&peer_share, fixture.signer.local_pubkey32(), &first_ping[0]);
+        let decoded = decode_envelope_for_local(
+            &peer_share,
+            fixture.signer.local_pubkey32(),
+            &first_ping[0],
+        );
         let BridgePayload::PingRequest(wire) = decoded.payload else {
             panic!("expected ping request");
         };
@@ -3068,7 +2976,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_inbound_response_without_pending_request_ignores_orphan_payloads() {
+    fn handle_inbound_response_without_pending_request_rejects_non_ping_payloads() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
         let sender = fixture.signer.peers[0].clone();
         let response = BridgeEnvelope {
@@ -3079,12 +2987,11 @@ mod tests {
                 nonces: vec![],
             })),
         };
-        let outbound = fixture
+        let err = fixture
             .signer
             .handle_inbound_request(response, sender)
-            .expect("orphan response ignored");
-        assert!(outbound.is_empty());
-        assert!(fixture.signer.take_failures().is_empty());
+            .expect_err("orphan response must fail");
+        assert!(matches!(err, SignerError::InvalidRequest(_)));
     }
 
     #[test]

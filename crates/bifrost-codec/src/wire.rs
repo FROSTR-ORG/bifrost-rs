@@ -620,11 +620,7 @@ impl From<PingPayload> for PingPayloadWire {
     fn from(value: PingPayload) -> Self {
         Self {
             version: value.version,
-            advertised_nonces: value
-                .advertised_nonces
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            advertised_nonces: value.advertised_nonces.into_iter().map(Into::into).collect(),
             held_peer_nonce_codes: value
                 .held_peer_nonce_codes
                 .into_iter()

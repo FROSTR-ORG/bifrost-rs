@@ -7,10 +7,7 @@ pub mod types;
 pub mod verify;
 
 pub use errors::{FrostUtilsError, FrostUtilsResult};
-pub use keyset::{
-    create_keyset, create_keyset_from_signing_key, normalize_signing_key_even_y,
-    rotate_keyset_dealer,
-};
+pub use keyset::{create_keyset, rotate_keyset_dealer};
 pub use profile_packages::{
     BF_PACKAGE_IV_BYTES, BF_PACKAGE_PBKDF2_ITERATIONS, BF_PACKAGE_SALT_BYTES, BF_PACKAGE_VERSION,
     BfManualPeerPolicyOverride, BfMethodPolicyOverride, BfOnboardPayload, BfPeerPolicyOverride,
@@ -32,7 +29,7 @@ pub use protocol::{
 };
 pub use recovery::recover_key;
 pub use types::{
-    CreateKeysetConfig, CreateKeysetFromSigningKeyConfig, KeysetBundle, KeysetVerificationReport,
-    RecoverKeyInput, RecoveredKeyMaterial, RotateKeysetRequest, RotateKeysetResult,
+    CreateKeysetConfig, KeysetBundle, KeysetVerificationReport, RecoverKeyInput,
+    RecoveredKeyMaterial, RotateKeysetRequest, RotateKeysetResult,
 };
 pub use verify::{verify_group_config, verify_keyset, verify_share};

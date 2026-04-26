@@ -47,7 +47,9 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn profile_manifest_store(paths: &ProfilePaths) -> bifrost_profile::FilesystemProfileManifestStore {
+fn profile_manifest_store(
+    paths: &ProfilePaths,
+) -> bifrost_profile::FilesystemProfileManifestStore {
     bifrost_profile::FilesystemProfileManifestStore::new(&paths.profiles_dir)
 }
 
@@ -78,11 +80,12 @@ fn load_share_payload_with_passphrase(
     profile: &ProfileManifest,
     passphrase: Option<String>,
 ) -> Result<String> {
-    if let Ok(record) = bifrost_profile::FilesystemEncryptedProfileStore::new(
-        &paths.encrypted_profiles_dir,
-        &paths.encrypted_profiles_dir,
-    )
-    .read_encrypted_profile(&profile.encrypted_profile_ref)
+    if let Ok(record) =
+        bifrost_profile::FilesystemEncryptedProfileStore::new(
+            &paths.encrypted_profiles_dir,
+            &paths.encrypted_profiles_dir,
+        )
+        .read_encrypted_profile(&profile.encrypted_profile_ref)
     {
         let passphrase = passphrase
             .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
@@ -221,10 +224,8 @@ pub fn resolve_profile_runtime(
     let group_raw = fs::read_to_string(&profile.group_ref)
         .with_context(|| format!("read {}", profile.group_ref))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, None)?;
-    let group =
-        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
-    let share =
-        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
     let (peers, manual_policy_overrides) =
         resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
             .context("resolve peer policy overrides")?;
@@ -258,10 +259,8 @@ pub fn resolve_profile_runtime_for_passphrase(
     let group_raw = fs::read_to_string(&profile.group_ref)
         .with_context(|| format!("read {}", profile.group_ref))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, passphrase)?;
-    let group =
-        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
-    let share =
-        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
     let (peers, manual_policy_overrides) =
         resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
             .context("resolve peer policy overrides")?;
@@ -433,9 +432,7 @@ pub async fn import_profile_from_onboarding_value(
     paths.ensure()?;
     let password = onboarding_password
         .or_else(|| std::env::var("IGLOO_SHELL_ONBOARDING_PASSWORD").ok())
-        .ok_or_else(|| {
-            anyhow!("onboarding package password not provided; set IGLOO_SHELL_ONBOARDING_PASSWORD")
-        })?;
+        .ok_or_else(|| anyhow!("onboarding package password not provided; set IGLOO_SHELL_ONBOARDING_PASSWORD"))?;
     let decoded = decode_bfonboard_package(package_raw, password.as_str())
         .context("decode bfonboard package")?;
     let completion = complete_onboarding_package(decoded, Duration::from_secs(30)).await?;
@@ -447,10 +444,7 @@ pub async fn import_profile_from_onboarding_value(
     )?;
     finalize_connected_onboarding_import(
         paths,
-        ConnectedOnboardingImport {
-            preview,
-            completion,
-        },
+        ConnectedOnboardingImport { preview, completion },
         label,
         relay_profile,
         passphrase,
@@ -470,10 +464,7 @@ pub async fn connect_onboarding_package_preview(
         "bfonboard",
         Some(completion.peer_pubkey.clone()),
     )?;
-    Ok(ConnectedOnboardingImport {
-        preview,
-        completion,
-    })
+    Ok(ConnectedOnboardingImport { preview, completion })
 }
 
 pub fn finalize_connected_onboarding_import(
@@ -493,19 +484,20 @@ pub fn finalize_connected_onboarding_import(
     let share_raw =
         serde_json::to_string_pretty(&SharePackageWire::from(connection.completion.share.clone()))
             .context("serialize onboarded share package")?;
-    let share_record = bifrost_profile::FilesystemEncryptedProfileStore::new(
-        &paths.encrypted_profiles_dir,
-        &paths.encrypted_profiles_dir,
-    )
-    .store_encrypted_profile(
-        "share_package",
-        "bfonboard_import",
-        &share_raw,
-        &passphrase
-            .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
-            .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?,
-        now_unix_secs(),
-    )?;
+    let share_record =
+        bifrost_profile::FilesystemEncryptedProfileStore::new(
+            &paths.encrypted_profiles_dir,
+            &paths.encrypted_profiles_dir,
+        )
+        .store_encrypted_profile(
+            "share_package",
+            "bfonboard_import",
+            &share_raw,
+            &passphrase
+                .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
+                .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?,
+            now_unix_secs(),
+        )?;
 
     let imported = profile_domain(paths).finalize_onboarding_import(
         &connection.completion.group,
@@ -519,27 +511,23 @@ pub fn finalize_connected_onboarding_import(
     let encrypted_profile = imported.encrypted_profile;
     fs::create_dir_all(paths.profile_state_dir(&profile.id))
         .with_context(|| format!("create {}", paths.profile_state_dir(&profile.id).display()))?;
-    let diagnostics = match persist_validated_onboarding_state(
-        Path::new(&profile.state_path),
-        &connection.completion,
-    ) {
-        Ok(report) => report,
-        Err(error) => {
-            let _ = fs::remove_file(&profile.group_ref);
-            let _ = bifrost_profile::remove_encrypted_profile(paths, &encrypted_profile.id);
-            let _ = fs::remove_dir_all(paths.profile_state_dir(&profile.id));
-            return Err(error);
-        }
-    };
+    let diagnostics =
+        match persist_validated_onboarding_state(Path::new(&profile.state_path), &connection.completion) {
+            Ok(report) => report,
+            Err(error) => {
+                let _ = fs::remove_file(&profile.group_ref);
+                let _ = bifrost_profile::remove_encrypted_profile(paths, &encrypted_profile.id);
+                let _ = fs::remove_dir_all(paths.profile_state_dir(&profile.id));
+                return Err(error);
+            }
+        };
     profile_manifest_store(paths).write_profile(&profile)?;
     profile_domain(paths).touch_last_used_profile(&profile.id)?;
 
     Ok(ProfileImportResult::ProfileCreated {
         profile,
         encrypted_profile,
-        diagnostics: Some(
-            serde_json::to_value(diagnostics).context("serialize onboarding diagnostics")?,
-        ),
+        diagnostics: Some(serde_json::to_value(diagnostics).context("serialize onboarding diagnostics")?),
         warnings: Vec::new(),
     })
 }
@@ -559,21 +547,17 @@ pub async fn apply_rotation_update_from_bfonboard_value(
         let share_raw = load_share_payload_with_passphrase(paths, &target, passphrase.clone())?;
         let group_raw = fs::read_to_string(&target.group_ref)
             .with_context(|| format!("read {}", target.group_ref))?;
-        let group = bifrost_codec::parse_group_package(&group_raw)
-            .context("parse profile group package")?;
-        let share = bifrost_codec::parse_share_package(&share_raw)
-            .context("parse profile share package")?;
+        let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+        let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
         let (_peers, manual_policy_overrides) =
             resolve_profile_peers_and_overrides(&group, &share, target.policy_overrides.clone())
                 .context("resolve peer policy overrides")?;
         let manual_peer_policy_overrides = manual_policy_overrides
             .iter()
-            .map(
-                |(pubkey, policy_override)| frostr_utils::BfManualPeerPolicyOverride {
-                    pubkey: pubkey.clone(),
-                    policy: frostr_utils::core_peer_policy_override_to_bf(policy_override),
-                },
-            )
+            .map(|(pubkey, policy_override)| frostr_utils::BfManualPeerPolicyOverride {
+                pubkey: pubkey.clone(),
+                policy: frostr_utils::core_peer_policy_override_to_bf(policy_override),
+            })
             .collect::<Vec<_>>();
         BfProfilePayload {
             profile_id: target.id.clone(),
@@ -597,9 +581,7 @@ pub async fn apply_rotation_update_from_bfonboard_value(
             manual_peer_policy_overrides: Vec::new(),
             relays: connection.completion.relays.clone(),
         },
-        group_package: bifrost_codec::wire::GroupPackageWire::from(
-            connection.completion.group.clone(),
-        ),
+        group_package: bifrost_codec::wire::GroupPackageWire::from(connection.completion.group.clone()),
     };
 
     finalize_rotation_update_import(
