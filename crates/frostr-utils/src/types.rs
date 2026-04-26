@@ -9,6 +9,14 @@ pub struct CreateKeysetConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateKeysetFromSigningKeyConfig {
+    pub group_name: String,
+    pub threshold: u16,
+    pub count: u16,
+    pub signing_key32: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeysetBundle {
     pub group: GroupPackage,
     pub shares: Vec<SharePackage>,

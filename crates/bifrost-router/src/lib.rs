@@ -6,8 +6,8 @@ use bifrost_core::types::PeerPolicyOverride;
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, DeviceStatus,
     OperationFailure, OperationFailureCode, PeerPermissionState, PeerStatus, PendingOpType,
-    PersistenceHint, RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary, SignerEffects,
-    SignerInput, SigningDevice,
+    PersistenceHint, RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary, SignerActivity,
+    SignerEffects, SignerInput, SigningDevice,
 };
 use nostr::{Event, Filter};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,17 @@ pub enum RequestPhase {
     Completed,
     Failed,
     Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboundEventDisposition {
+    /// The event is addressed to this runtime and was queued for processing.
+    Queued,
+    /// The event is duplicate, not addressed to this runtime, or otherwise benign.
+    Ignored,
+    /// The event was routable but could not be queued under the configured policy.
+    DroppedOverflow,
 }
 
 pub const DEFAULT_EXPIRE_TICK_MS: u64 = 1_000;
@@ -102,6 +113,7 @@ pub struct BridgeCore {
     seen_inbound_order: VecDeque<String>,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
+    activities: VecDeque<SignerActivity>,
     request_phases: HashMap<String, RequestPhase>,
     last_expire_at_ms: u64,
     persistence_hint: PersistenceHint,
@@ -111,11 +123,12 @@ pub trait RouterPort {
     type Error;
 
     fn submit_command(&mut self, cmd: BridgeCommand) -> std::result::Result<String, Self::Error>;
-    fn enqueue_inbound_event(&mut self, event: Event) -> bool;
+    fn enqueue_inbound_event(&mut self, event: Event) -> InboundEventDisposition;
     fn tick(&mut self, now_unix_ms: u64);
     fn drain_outbound_packets(&mut self) -> Vec<OutboundEvent>;
     fn drain_completions(&mut self) -> Vec<CompletedOperation>;
     fn drain_failures(&mut self) -> Vec<OperationFailure>;
+    fn drain_activities(&mut self) -> Vec<SignerActivity>;
     fn fail_request(
         &mut self,
         request_id: String,
@@ -142,6 +155,7 @@ impl BridgeCore {
             seen_inbound_order: VecDeque::new(),
             completions: VecDeque::new(),
             failures: VecDeque::new(),
+            activities: VecDeque::new(),
             request_phases: HashMap::new(),
             last_expire_at_ms: 0,
             persistence_hint: PersistenceHint::None,
@@ -215,14 +229,14 @@ impl BridgeCore {
         }
     }
 
-    pub fn enqueue_inbound_event(&mut self, event: Event) -> bool {
+    pub fn enqueue_inbound_event(&mut self, event: Event) -> InboundEventDisposition {
         if !self.is_event_routable(&event) {
-            return false;
+            return InboundEventDisposition::Ignored;
         }
 
         let event_id = event.id.to_hex();
         if self.seen_inbound_ids.contains(&event_id) {
-            return false;
+            return InboundEventDisposition::Ignored;
         }
 
         self.seen_inbound_ids.insert(event_id.clone());
@@ -235,15 +249,15 @@ impl BridgeCore {
 
         if self.inbound_queue.len() < self.config.inbound_queue_capacity {
             self.inbound_queue.push_back(event);
-            return false;
+            return InboundEventDisposition::Queued;
         }
 
         match self.config.inbound_overflow_policy {
-            QueueOverflowPolicy::Fail => true,
+            QueueOverflowPolicy::Fail => InboundEventDisposition::DroppedOverflow,
             QueueOverflowPolicy::DropOldest => {
                 let _ = self.inbound_queue.pop_front();
                 self.inbound_queue.push_back(event);
-                false
+                InboundEventDisposition::Queued
             }
         }
     }
@@ -314,6 +328,7 @@ impl BridgeCore {
         self.seen_inbound_order.clear();
         self.completions.clear();
         self.failures.clear();
+        self.activities.clear();
         self.request_phases.clear();
         self.last_expire_at_ms = 0;
         self.persistence_hint = PersistenceHint::Immediate;
@@ -384,6 +399,10 @@ impl BridgeCore {
 
     pub fn drain_failures(&mut self) -> Vec<OperationFailure> {
         self.failures.drain(..).collect()
+    }
+
+    pub fn drain_activities(&mut self) -> Vec<SignerActivity> {
+        self.activities.drain(..).collect()
     }
 
     pub fn request_phase(&self, request_id: &str) -> Option<RequestPhase> {
@@ -489,6 +508,10 @@ impl BridgeCore {
                 .insert(failure.request_id.clone(), RequestPhase::Failed);
             self.failures.push_back(failure);
         }
+
+        for activity in effects.activities {
+            self.activities.push_back(activity);
+        }
     }
 
     fn enqueue_outbound(&mut self, outbound: QueuedOutbound) -> Option<String> {
@@ -550,7 +573,7 @@ impl RouterPort for BridgeCore {
         BridgeCore::submit_command(self, cmd)
     }
 
-    fn enqueue_inbound_event(&mut self, event: Event) -> bool {
+    fn enqueue_inbound_event(&mut self, event: Event) -> InboundEventDisposition {
         BridgeCore::enqueue_inbound_event(self, event)
     }
 
@@ -568,6 +591,10 @@ impl RouterPort for BridgeCore {
 
     fn drain_failures(&mut self) -> Vec<OperationFailure> {
         BridgeCore::drain_failures(self)
+    }
+
+    fn drain_activities(&mut self) -> Vec<SignerActivity> {
+        BridgeCore::drain_activities(self)
     }
 
     fn fail_request(
@@ -643,7 +670,7 @@ fn pending_type_for_command(command: &BridgeCommand) -> PendingOpType {
 mod tests {
     use super::*;
     use bifrost_core::types::{GroupPackage, SharePackage};
-    use bifrost_signer::{DeviceConfig, DeviceState, SigningDevice};
+    use bifrost_signer::{DeviceConfig, DeviceState, SignerActivityAction, SigningDevice};
     use frostr_utils::{CreateKeysetConfig, create_keyset};
     use nostr::{Alphabet, Event, SingleLetterTag, TagKind};
 
@@ -810,6 +837,72 @@ mod tests {
     }
 
     #[test]
+    fn inbound_sign_response_activity_drains_without_responder_completion() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let alice_share = bundle.shares[0].clone();
+        let bob_share = bundle.shares[1].clone();
+        let alice_pubkey = encode_hex(&bundle.group.members[0].pubkey[1..]);
+        let bob_pubkey = encode_hex(&bundle.group.members[1].pubkey[1..]);
+
+        let mut alice_state = DeviceState::new(alice_share.idx, alice_share.seckey);
+        let mut bob_state = DeviceState::new(bob_share.idx, bob_share.seckey);
+        let bob_nonces = bob_state
+            .nonce_pool
+            .generate_for_peer(alice_share.idx, 10)
+            .expect("generate bob nonces");
+        alice_state
+            .nonce_pool
+            .store_incoming(bob_share.idx, bob_nonces);
+
+        let alice_signer = SigningDevice::new(
+            bundle.group.clone(),
+            alice_share,
+            vec![bob_pubkey.clone()],
+            alice_state,
+            DeviceConfig::default(),
+        )
+        .expect("alice signer");
+        let bob_signer = SigningDevice::new(
+            bundle.group.clone(),
+            bob_share,
+            vec![alice_pubkey.clone()],
+            bob_state,
+            DeviceConfig::default(),
+        )
+        .expect("bob signer");
+        let mut alice = BridgeCore::new(alice_signer, BridgeConfig::default()).expect("alice core");
+        let mut bob = BridgeCore::new(bob_signer, BridgeConfig::default()).expect("bob core");
+
+        let request_id = alice
+            .submit_command(BridgeCommand::Sign {
+                message: [0x77; 32],
+            })
+            .expect("submit sign");
+        let outbound = alice.drain_outbound_packets();
+        assert_eq!(outbound.len(), 1);
+
+        assert_eq!(
+            bob.enqueue_inbound_event(outbound[0].event.clone()),
+            InboundEventDisposition::Queued,
+        );
+        bob.tick(1_700_000_000_000);
+
+        assert!(bob.drain_completions().is_empty());
+        let activities = bob.drain_activities();
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].request_id, request_id);
+        assert!(matches!(activities[0].op_type, PendingOpType::Sign));
+        assert_eq!(activities[0].peer, alice_pubkey);
+        assert_eq!(activities[0].action, SignerActivityAction::ResponseSent);
+        assert_eq!(bob.drain_outbound_packets().len(), 1);
+    }
+
+    #[test]
     fn wipe_state_resets_request_phases_and_persistence_hint() {
         let bundle = create_keyset(CreateKeysetConfig {
             group_name: "Test Group".to_string(),
@@ -873,8 +966,14 @@ mod tests {
         )
         .expect("bridge core");
 
-        assert!(!core.enqueue_inbound_event(event_a));
-        assert!(core.enqueue_inbound_event(event_b));
+        assert_eq!(
+            core.enqueue_inbound_event(event_a),
+            InboundEventDisposition::Queued,
+        );
+        assert_eq!(
+            core.enqueue_inbound_event(event_b),
+            InboundEventDisposition::DroppedOverflow,
+        );
         core.tick(1_700_000_000_000);
 
         let outbound = core.drain_outbound_packets();
@@ -918,8 +1017,14 @@ mod tests {
         )
         .expect("bridge core");
 
-        assert!(!core.enqueue_inbound_event(event_a));
-        assert!(!core.enqueue_inbound_event(event_b));
+        assert_eq!(
+            core.enqueue_inbound_event(event_a),
+            InboundEventDisposition::Queued,
+        );
+        assert_eq!(
+            core.enqueue_inbound_event(event_b),
+            InboundEventDisposition::Queued,
+        );
         core.tick(1_700_000_000_000);
 
         let outbound = core.drain_outbound_packets();
@@ -962,13 +1067,88 @@ mod tests {
         )
         .expect("bridge core");
 
-        assert!(!core.enqueue_inbound_event(event_a.clone()));
-        assert!(!core.enqueue_inbound_event(event_b));
-        assert!(!core.enqueue_inbound_event(event_a));
+        assert_eq!(
+            core.enqueue_inbound_event(event_a.clone()),
+            InboundEventDisposition::Queued,
+        );
+        assert_eq!(
+            core.enqueue_inbound_event(event_b),
+            InboundEventDisposition::Queued,
+        );
+        assert_eq!(
+            core.enqueue_inbound_event(event_a),
+            InboundEventDisposition::Queued,
+        );
         core.tick(1_700_000_000_000);
 
         let outbound = core.drain_outbound_packets();
         assert_eq!(outbound.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_inbound_event_is_ignored_without_queueing_again() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let local_pubkey = encode_hex(
+            &bundle
+                .group
+                .members
+                .iter()
+                .find(|member| member.idx == share.idx)
+                .expect("local member")
+                .pubkey[1..],
+        );
+        let peer = bundle.shares[1].clone();
+        let event = ping_request_event(&bundle.group, &peer, &local_pubkey);
+
+        let mut core =
+            BridgeCore::new(build_signer(&bundle.group, &share), BridgeConfig::default())
+                .expect("bridge core");
+
+        assert_eq!(
+            core.enqueue_inbound_event(event.clone()),
+            InboundEventDisposition::Queued,
+        );
+        assert_eq!(
+            core.enqueue_inbound_event(event),
+            InboundEventDisposition::Ignored,
+        );
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert_eq!(outbound.len(), 1);
+    }
+
+    #[test]
+    fn non_routable_inbound_event_is_ignored_without_queueing() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let share = bundle.shares[0].clone();
+        let wrong_recipient_pubkey = encode_hex(&bundle.group.members[2].pubkey[1..]);
+        let peer = bundle.shares[1].clone();
+        let event = ping_request_event(&bundle.group, &peer, &wrong_recipient_pubkey);
+
+        let mut core =
+            BridgeCore::new(build_signer(&bundle.group, &share), BridgeConfig::default())
+                .expect("bridge core");
+
+        assert_eq!(
+            core.enqueue_inbound_event(event),
+            InboundEventDisposition::Ignored,
+        );
+        core.tick(1_700_000_000_000);
+
+        let outbound = core.drain_outbound_packets();
+        assert!(outbound.is_empty());
     }
 
     #[test]

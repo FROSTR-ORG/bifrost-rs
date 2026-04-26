@@ -1,5 +1,5 @@
 use bifrost_core::get_group_id;
-use bifrost_core::types::{GroupPackage, MemberPackage, SharePackage};
+use bifrost_core::types::{Bytes32, GroupPackage, MemberPackage, SharePackage};
 use frost_secp256k1_tr_unofficial as frost;
 use frost_secp256k1_tr_unofficial::keys::EvenY;
 use rand_core::OsRng;
@@ -7,7 +7,8 @@ use rand_core::OsRng;
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
 use crate::recovery::recover_key;
 use crate::types::{
-    CreateKeysetConfig, KeysetBundle, RecoverKeyInput, RotateKeysetRequest, RotateKeysetResult,
+    CreateKeysetConfig, CreateKeysetFromSigningKeyConfig, KeysetBundle, RecoverKeyInput,
+    RotateKeysetRequest, RotateKeysetResult,
 };
 use crate::verify::verify_keyset;
 
@@ -30,6 +31,25 @@ pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundl
     )
 }
 
+pub fn normalize_signing_key_even_y(signing_key32: Bytes32) -> FrostUtilsResult<Bytes32> {
+    let signing_key = frost::SigningKey::deserialize(&signing_key32)
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+        .into_even_y(None);
+    signing_key_to_bytes(signing_key)
+}
+
+pub fn create_keyset_from_signing_key(
+    config: CreateKeysetFromSigningKeyConfig,
+) -> FrostUtilsResult<KeysetBundle> {
+    validate_keyset_shape(config.threshold, config.count)?;
+    split_signing_key(
+        config.group_name,
+        config.threshold,
+        config.count,
+        config.signing_key32,
+    )
+}
+
 pub fn rotate_keyset_dealer(
     current_group: &GroupPackage,
     req: RotateKeysetRequest,
@@ -44,24 +64,11 @@ pub fn rotate_keyset_dealer(
         shares: req.shares,
     })?;
 
-    let signing_key = frost::SigningKey::deserialize(&recovered.signing_key32)
-        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
-        .into_even_y(None);
-
-    let (shares, public_key_package) = frost::keys::split(
-        &signing_key,
-        req.count,
-        req.threshold,
-        frost::keys::IdentifierList::Default,
-        &mut OsRng,
-    )
-    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
-
-    let next = build_keyset_bundle(
+    let next = split_signing_key(
         current_group.group_name.clone(),
         req.threshold,
-        shares,
-        public_key_package,
+        req.count,
+        recovered.signing_key32,
     )?;
 
     if next.group.group_pk != current_group.group_pk {
@@ -92,6 +99,40 @@ fn validate_keyset_shape(threshold: u16, count: u16) -> FrostUtilsResult<()> {
         ));
     }
     Ok(())
+}
+
+fn split_signing_key(
+    group_name: String,
+    threshold: u16,
+    count: u16,
+    signing_key32: Bytes32,
+) -> FrostUtilsResult<KeysetBundle> {
+    let signing_key = frost::SigningKey::deserialize(&signing_key32)
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+        .into_even_y(None);
+
+    let (shares, public_key_package) = frost::keys::split(
+        &signing_key,
+        count,
+        threshold,
+        frost::keys::IdentifierList::Default,
+        &mut OsRng,
+    )
+    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+
+    build_keyset_bundle(group_name, threshold, shares, public_key_package)
+}
+
+fn signing_key_to_bytes(signing_key: frost::SigningKey) -> FrostUtilsResult<Bytes32> {
+    let serialized = signing_key.serialize();
+    if serialized.len() != 32 {
+        return Err(FrostUtilsError::Crypto(
+            "serialized signing key is not 32 bytes".to_string(),
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&serialized);
+    Ok(bytes)
 }
 
 fn build_keyset_bundle(
@@ -163,7 +204,7 @@ fn build_keyset_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CreateKeysetConfig;
+    use crate::types::{CreateKeysetConfig, CreateKeysetFromSigningKeyConfig};
     use crate::{recover_key, verify_share};
 
     #[test]
@@ -176,6 +217,51 @@ mod tests {
         .expect("create");
         assert_eq!(bundle.group.members.len(), 3);
         assert_eq!(bundle.shares.len(), 3);
+    }
+
+    #[test]
+    fn create_keyset_from_signing_key_recovers_the_normalized_key() {
+        let generated = nostr::SecretKey::generate();
+        let signing_key32 = generated.to_secret_bytes();
+        let expected = normalize_signing_key_even_y(signing_key32).expect("normalize");
+        let bundle = create_keyset_from_signing_key(CreateKeysetFromSigningKeyConfig {
+            group_name: "Known Key Group".to_string(),
+            threshold: 2,
+            count: 3,
+            signing_key32,
+        })
+        .expect("create from signing key");
+
+        let recovered = recover_key(&RecoverKeyInput {
+            group: bundle.group,
+            shares: bundle.shares[..2].to_vec(),
+        })
+        .expect("recover");
+
+        assert_eq!(recovered.signing_key32, expected);
+    }
+
+    #[test]
+    fn create_keyset_from_signing_key_rejects_invalid_shapes_and_keys() {
+        let signing_key32 = nostr::SecretKey::generate().to_secret_bytes();
+        assert!(
+            create_keyset_from_signing_key(CreateKeysetFromSigningKeyConfig {
+                group_name: "Bad Shape".to_string(),
+                threshold: 1,
+                count: 2,
+                signing_key32,
+            })
+            .is_err()
+        );
+        assert!(
+            create_keyset_from_signing_key(CreateKeysetFromSigningKeyConfig {
+                group_name: "Zero Key".to_string(),
+                threshold: 2,
+                count: 2,
+                signing_key32: [0u8; 32],
+            })
+            .is_err()
+        );
     }
 
     #[test]

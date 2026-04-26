@@ -5,25 +5,29 @@ use bifrost_codec::{
 };
 use bifrost_core::types::{GroupPackage, PeerPolicyOverride, PolicyOverrideValue};
 use bifrost_core::{get_group_id, nonce::NoncePoolConfig};
-use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
+use bifrost_router::{
+    BridgeCommand, BridgeConfig, BridgeCore, InboundEventDisposition, QueueOverflowPolicy,
+};
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
-    PeerNonceInventoryObservation, RuntimeStatusSummary, SigningDevice,
-    finalize_onboarding_bootstrap_seed,
-    generate_onboarding_bootstrap_seed,
+    PeerNonceInventoryObservation, RuntimeStatusSummary, SignerActivity, SignerActivityAction,
+    SigningDevice, finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
-    EncryptedProfileBackup, PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE,
-    PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair, RotateKeysetRequest,
+    CreateKeysetFromSigningKeyConfig, EncryptedProfileBackup, FrostUtilsError, PREFIX_BFONBOARD,
+    PREFIX_BFPROFILE, PREFIX_BFSHARE, PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN,
+    ProfilePackagePair, RecoverKeyInput, RotateKeysetRequest,
     build_onboard_request_event as rust_build_onboard_request_event,
     build_profile_backup_event as rust_build_profile_backup_event,
     create_encrypted_profile_backup as rust_create_encrypted_profile_backup,
     create_keyset as rust_create_keyset,
+    create_keyset_from_signing_key as rust_create_keyset_from_signing_key,
     create_profile_package_pair as rust_create_profile_package_pair,
     decode_bfonboard_package as rust_decode_bfonboard_package,
     decode_bfprofile_package as rust_decode_bfprofile_package,
     decode_bfshare_package as rust_decode_bfshare_package,
+    decode_onboard_response_event as rust_decode_onboard_response_event,
     decrypt_profile_backup_content as rust_decrypt_profile_backup_content,
     derive_profile_backup_conversation_key as rust_derive_profile_backup_conversation_key,
     derive_profile_id_from_share_pubkey as rust_derive_profile_id_from_share_pubkey,
@@ -33,11 +37,12 @@ use frostr_utils::{
     encode_bfshare_package as rust_encode_bfshare_package,
     encrypt_profile_backup_content as rust_encrypt_profile_backup_content,
     generate_opaque_request_id as rust_generate_opaque_request_id,
-    parse_profile_backup_event as rust_parse_profile_backup_event,
+    normalize_signing_key_even_y as rust_normalize_signing_key_even_y,
+    parse_profile_backup_event as rust_parse_profile_backup_event, recover_key as rust_recover_key,
     rotate_keyset_dealer as rust_rotate_keyset_dealer,
 };
 use k256::elliptic_curve::sec1::ToEncodedPoint;
-use nostr::Event;
+use nostr::{Event, SecretKey, ToBech32};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -201,6 +206,7 @@ enum RuntimeEventKind {
     StatusChanged,
     CommandQueued,
     InboundAccepted,
+    PeerActivity,
     ConfigUpdated,
     PolicyUpdated,
     StateWiped,
@@ -210,6 +216,22 @@ enum RuntimeEventKind {
 struct RuntimeEvent {
     kind: RuntimeEventKind,
     status: RuntimeStatusSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity: Option<RuntimePeerActivity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimePeerActivity {
+    request_id: String,
+    op_type: PendingOpTypeJson,
+    peer: String,
+    action: RuntimePeerActivityAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RuntimePeerActivityAction {
+    ResponseSent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +245,32 @@ struct RotateKeysetBundleInput {
     shares: Vec<SharePackageWire>,
     threshold: u16,
     count: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CreateKeysetFromNsecInput {
+    nsec: String,
+    group_name: String,
+    threshold: u16,
+    count: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecoverNsecInput {
+    group: GroupPackageWire,
+    shares: Vec<SharePackageWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeneratedNsecExport {
+    nsec: String,
+    signing_key_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecoverNsecExport {
+    nsec: String,
+    signing_key_hex: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +296,28 @@ struct OnboardingRequestBundleExport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct OnboardingResponseExport {
+    group: GroupPackageWire,
+    nonces: Vec<DerivedPublicNonceWire>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StructuredBridgeError {
+    code: &'static str,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StructuredBridgeResult<T>
+where
+    T: Serialize,
+{
+    ok: bool,
+    value: Option<T>,
+    error: Option<StructuredBridgeError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum PendingOpTypeJson {
     Sign,
@@ -273,7 +343,7 @@ struct OperationFailureJson {
     failed_peer: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum CompletedOperationJson {
     Sign {
         request_id: String,
@@ -396,12 +466,16 @@ impl WasmBridgeRuntime {
             .state
             .as_mut()
             .ok_or_else(|| to_host_error("runtime not initialized"))?;
-        let dropped = state.core.enqueue_inbound_event(event);
-        if dropped {
-            return Err(to_host_error("inbound queue overflow"));
+        match state.core.enqueue_inbound_event(event) {
+            InboundEventDisposition::Queued => {
+                queue_runtime_status_event(state, RuntimeEventKind::InboundAccepted)
+                    .map_err(|e| to_host_error(e.to_string()))?;
+            }
+            InboundEventDisposition::Ignored => {}
+            InboundEventDisposition::DroppedOverflow => {
+                return Err(to_host_error("inbound queue overflow"));
+            }
         }
-        queue_runtime_status_event(state, RuntimeEventKind::InboundAccepted)
-            .map_err(|e| to_host_error(e.to_string()))?;
         Ok(())
     }
 
@@ -411,6 +485,7 @@ impl WasmBridgeRuntime {
             .as_mut()
             .ok_or_else(|| to_host_error("runtime not initialized"))?;
         state.core.tick(now_unix_ms);
+        queue_runtime_peer_activity_events(state).map_err(|e| to_host_error(e.to_string()))?;
         queue_runtime_status_event(state, RuntimeEventKind::StatusChanged)
             .map_err(|e| to_host_error(e.to_string()))?;
         Ok(())
@@ -660,6 +735,11 @@ pub fn profile_backup_key_domain() -> String {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn default_event_kind() -> u64 {
+    DeviceConfig::default().event_kind
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn encode_bfshare_package(payload_json: String, password: String) -> HostResult<String> {
     let payload: BfSharePayload =
         serde_json::from_str(&payload_json).map_err(|e| to_host_error(e.to_string()))?;
@@ -674,6 +754,11 @@ pub fn decode_bfshare_package(package_text: String, password: String) -> HostRes
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn decode_bfshare_package_result(package_text: String, password: String) -> HostResult<String> {
+    serialize_structured_result(rust_decode_bfshare_package(&package_text, &password))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn encode_bfonboard_package(payload_json: String, password: String) -> HostResult<String> {
     let payload: BfOnboardPayload =
         serde_json::from_str(&payload_json).map_err(|e| to_host_error(e.to_string()))?;
@@ -685,6 +770,14 @@ pub fn decode_bfonboard_package(package_text: String, password: String) -> HostR
     let payload = rust_decode_bfonboard_package(&package_text, &password)
         .map_err(|e| to_host_error(e.to_string()))?;
     serde_json::to_string(&payload).map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn decode_bfonboard_package_result(
+    package_text: String,
+    password: String,
+) -> HostResult<String> {
+    serialize_structured_result(rust_decode_bfonboard_package(&package_text, &password))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -718,6 +811,34 @@ pub fn create_onboarding_request_bundle(
         event_json: serde_json::to_string(&event).map_err(|e| to_host_error(e.to_string()))?,
     };
     serde_json::to_string(&bundle).map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn decode_onboarding_response_event_result(
+    event_json: String,
+    share_secret: String,
+    expected_peer_pubkey32_hex: String,
+    expected_local_pubkey32_hex: String,
+    request_id: String,
+) -> HostResult<String> {
+    let decoded = (|| {
+        let event: Event =
+            serde_json::from_str(&event_json).map_err(|e| FrostUtilsError::Codec(e.to_string()))?;
+        let share = decode_hex32(&share_secret)
+            .map_err(|e| FrostUtilsError::InvalidInput(e.to_string()))?;
+        let response = rust_decode_onboard_response_event(
+            &event,
+            share,
+            &expected_peer_pubkey32_hex,
+            &expected_local_pubkey32_hex,
+            &request_id,
+        )?;
+        Ok(response.map(|response| OnboardingResponseExport {
+            group: GroupPackageWire::from(response.group),
+            nonces: response.nonces.into_iter().map(Into::into).collect(),
+        }))
+    })();
+    serialize_structured_result(decoded)
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -787,6 +908,14 @@ pub fn decode_bfprofile_package(package_text: String, password: String) -> HostR
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn decode_bfprofile_package_result(
+    package_text: String,
+    password: String,
+) -> HostResult<String> {
+    serialize_structured_result(rust_decode_bfprofile_package(&package_text, &password))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn derive_profile_id_from_share_secret(share_secret: String) -> HostResult<String> {
     rust_derive_profile_id_from_share_secret(&share_secret)
         .map_err(|e| to_host_error(e.to_string()))
@@ -807,11 +936,7 @@ pub fn create_profile_package_pair(payload_json: String, password: String) -> Ho
     serde_json::to_string(&pair).map_err(|e| to_host_error(e.to_string()))
 }
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn create_keyset_bundle(config_json: String) -> HostResult<String> {
-    let config: CreateKeysetConfig =
-        serde_json::from_str(&config_json).map_err(|e| to_host_error(e.to_string()))?;
-    let bundle = rust_create_keyset(config).map_err(|e| to_host_error(e.to_string()))?;
+fn export_keyset_bundle(bundle: frostr_utils::KeysetBundle) -> HostResult<String> {
     let exported = KeysetBundleExport {
         group: GroupPackageWire::from(bundle.group),
         shares: bundle
@@ -821,6 +946,57 @@ pub fn create_keyset_bundle(config_json: String) -> HostResult<String> {
             .collect(),
     };
     serde_json::to_string(&exported).map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn create_keyset_bundle(config_json: String) -> HostResult<String> {
+    let config: CreateKeysetConfig =
+        serde_json::from_str(&config_json).map_err(|e| to_host_error(e.to_string()))?;
+    let bundle = rust_create_keyset(config).map_err(|e| to_host_error(e.to_string()))?;
+    export_keyset_bundle(bundle)
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn generate_nsec() -> HostResult<String> {
+    let generated = SecretKey::generate();
+    let signing_key32 = rust_normalize_signing_key_even_y(generated.to_secret_bytes())
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let secret = SecretKey::from_slice(&signing_key32).map_err(|e| to_host_error(e.to_string()))?;
+    let nsec = secret
+        .to_bech32()
+        .map_err(|e| to_host_error(e.to_string()))?;
+    serde_json::to_string(&GeneratedNsecExport {
+        nsec,
+        signing_key_hex: hex::encode(signing_key32),
+    })
+    .map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn create_keyset_bundle_from_nsec(input_json: String) -> HostResult<String> {
+    let input: CreateKeysetFromNsecInput =
+        serde_json::from_str(&input_json).map_err(|e| to_host_error(e.to_string()))?;
+    let trimmed_nsec = input.nsec.trim();
+    if !trimmed_nsec.starts_with("nsec1") {
+        return Err(to_host_error("nsec must use NIP-19 nsec encoding"));
+    }
+    let secret = SecretKey::parse(trimmed_nsec).map_err(|e| to_host_error(e.to_string()))?;
+    let signing_key32 = secret.to_secret_bytes();
+    let normalized_signing_key32 = rust_normalize_signing_key_even_y(signing_key32)
+        .map_err(|e| to_host_error(e.to_string()))?;
+    if normalized_signing_key32 != signing_key32 {
+        return Err(to_host_error(
+            "nsec is not canonical for the even-y Bifrost group key",
+        ));
+    }
+    let bundle = rust_create_keyset_from_signing_key(CreateKeysetFromSigningKeyConfig {
+        group_name: input.group_name,
+        threshold: input.threshold,
+        count: input.count,
+        signing_key32,
+    })
+    .map_err(|e| to_host_error(e.to_string()))?;
+    export_keyset_bundle(bundle)
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -867,6 +1043,51 @@ pub fn rotate_keyset_bundle(input_json: String) -> HostResult<String> {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn recover_nsec_from_shares(input_json: String) -> HostResult<String> {
+    let input: RecoverNsecInput =
+        serde_json::from_str(&input_json).map_err(|e| to_host_error(e.to_string()))?;
+    if input.shares.len() < input.group.threshold as usize {
+        return Err(to_host_error("insufficient shares for threshold"));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for share in &input.shares {
+        if !seen.insert(share.idx) {
+            return Err(to_host_error(format!("duplicate share idx {}", share.idx)));
+        }
+    }
+
+    let group: GroupPackage = input
+        .group
+        .try_into()
+        .map_err(|e: CodecError| to_host_error(e.to_string()))?;
+    let shares = input
+        .shares
+        .into_iter()
+        .map(|share| {
+            share
+                .try_into()
+                .map_err(|e: CodecError| anyhow!(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let recovered = rust_recover_key(&RecoverKeyInput { group, shares })
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let signing_key_hex = hex::encode(recovered.signing_key32);
+    let secret = SecretKey::from_slice(&recovered.signing_key32)
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let nsec = secret
+        .to_bech32()
+        .map_err(|e| to_host_error(e.to_string()))?;
+
+    serde_json::to_string(&RecoverNsecExport {
+        nsec,
+        signing_key_hex,
+    })
+    .map_err(|e| to_host_error(e.to_string()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn derive_group_id(group_json: String) -> HostResult<String> {
     let group_wire: GroupPackageWire =
         serde_json::from_str(&group_json).map_err(|e| to_host_error(e.to_string()))?;
@@ -875,6 +1096,17 @@ pub fn derive_group_id(group_json: String) -> HostResult<String> {
         .map_err(|e: CodecError| to_host_error(e.to_string()))?;
     let group_id = get_group_id(&group).map_err(|e| to_host_error(e.to_string()))?;
     Ok(hex::encode(group_id))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn resolve_share_index(group_json: String, share_secret: String) -> HostResult<u16> {
+    let group_wire: GroupPackageWire =
+        serde_json::from_str(&group_json).map_err(|e| to_host_error(e.to_string()))?;
+    let group: GroupPackage = group_wire
+        .try_into()
+        .map_err(|e: CodecError| to_host_error(e.to_string()))?;
+    let share = decode_hex32(&share_secret).map_err(|e| to_host_error(e.to_string()))?;
+    local_member_index(&group, share).map_err(|e| to_host_error(e.to_string()))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -1093,7 +1325,9 @@ fn nonce_pool_snapshot_json(
         let idx = decode_member_index(&group, peer)?;
         let stats = state.nonce_pool.peer_stats(idx);
         let current_codes = state.nonce_pool.outgoing_public_nonce_codes(idx);
-        let current_code_set = current_codes.into_iter().collect::<std::collections::HashSet<_>>();
+        let current_code_set = current_codes
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let observed_count = state
             .remote_nonce_inventory_observations
             .get(peer)
@@ -1182,7 +1416,27 @@ fn queue_runtime_status_event(state: &mut RuntimeState, kind: RuntimeEventKind) 
     }
 
     state.last_runtime_status_json = Some(status_json);
-    state.runtime_events.push(RuntimeEvent { kind, status });
+    state.runtime_events.push(RuntimeEvent {
+        kind,
+        status,
+        activity: None,
+    });
+    Ok(())
+}
+
+fn queue_runtime_peer_activity_events(state: &mut RuntimeState) -> Result<()> {
+    let activities = state.core.drain_activities();
+    if activities.is_empty() {
+        return Ok(());
+    }
+    let status = state.core.runtime_status();
+    for activity in activities {
+        state.runtime_events.push(RuntimeEvent {
+            kind: RuntimeEventKind::PeerActivity,
+            status: status.clone(),
+            activity: Some(RuntimePeerActivity::from(activity)),
+        });
+    }
     Ok(())
 }
 
@@ -1195,6 +1449,43 @@ fn decode_fixed_hex<const N: usize>(value: &str, field: &str) -> Result<[u8; N]>
     let mut out = [0u8; N];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn structured_error_from_frostr(error: FrostUtilsError) -> StructuredBridgeError {
+    let code = match &error {
+        FrostUtilsError::DecryptionFailed | FrostUtilsError::PassphraseRequired => "wrong_password",
+        FrostUtilsError::Codec(_) => "malformed_package",
+        FrostUtilsError::WrongPackageMode(_) => "wrong_package_mode",
+        FrostUtilsError::UnsupportedFormat(_) => "unsupported_package",
+        FrostUtilsError::InvalidInput(_) => "invalid_payload",
+        FrostUtilsError::VerificationFailed(_) => "verification_failed",
+        FrostUtilsError::Crypto(_) => "crypto_failed",
+    };
+    StructuredBridgeError {
+        code,
+        message: error.to_string(),
+    }
+}
+
+fn serialize_structured_result<T>(
+    result: std::result::Result<T, FrostUtilsError>,
+) -> HostResult<String>
+where
+    T: Serialize,
+{
+    let output = match result {
+        Ok(value) => StructuredBridgeResult {
+            ok: true,
+            value: Some(value),
+            error: None,
+        },
+        Err(error) => StructuredBridgeResult {
+            ok: false,
+            value: None,
+            error: Some(structured_error_from_frostr(error)),
+        },
+    };
+    serde_json::to_string(&output).map_err(|e| to_host_error(e.to_string()))
 }
 
 #[cfg(test)]
@@ -1225,6 +1516,111 @@ mod tests {
             peers,
             initial_peer_nonces: Vec::new(),
         }
+    }
+
+    #[test]
+    fn generate_nsec_returns_distinct_nip19_keys() {
+        let first_json = generate_nsec().expect("generate first");
+        let second_json = generate_nsec().expect("generate second");
+        let first: GeneratedNsecExport = serde_json::from_str(&first_json).expect("first json");
+        let second: GeneratedNsecExport = serde_json::from_str(&second_json).expect("second json");
+
+        assert!(first.nsec.starts_with("nsec1"));
+        assert_eq!(first.signing_key_hex.len(), 64);
+        assert_ne!(first.nsec, second.nsec);
+        assert_ne!(first.signing_key_hex, second.signing_key_hex);
+    }
+
+    #[test]
+    fn create_keyset_bundle_from_generated_nsec_recovers_the_same_nsec() {
+        let generated_json = generate_nsec().expect("generate");
+        let generated: GeneratedNsecExport =
+            serde_json::from_str(&generated_json).expect("generated json");
+        let keyset_json = create_keyset_bundle_from_nsec(
+            serde_json::json!({
+                "nsec": generated.nsec,
+                "group_name": "Generated NSEC Group",
+                "threshold": 2,
+                "count": 3
+            })
+            .to_string(),
+        )
+        .expect("create from nsec");
+        let keyset: KeysetBundleExport = serde_json::from_str(&keyset_json).expect("keyset json");
+        let recovered_json = recover_nsec_from_shares(
+            serde_json::json!({
+                "group": keyset.group,
+                "shares": keyset.shares[..2].to_vec()
+            })
+            .to_string(),
+        )
+        .expect("recover");
+        let recovered: RecoverNsecExport =
+            serde_json::from_str(&recovered_json).expect("recovered json");
+
+        assert_eq!(recovered.nsec, generated.nsec);
+        assert_eq!(recovered.signing_key_hex, generated.signing_key_hex);
+    }
+
+    #[test]
+    fn create_keyset_bundle_from_nsec_rejects_invalid_input() {
+        assert!(
+            create_keyset_bundle_from_nsec(
+                serde_json::json!({
+                    "nsec": "not-a-valid-nsec",
+                    "group_name": "Invalid",
+                    "threshold": 2,
+                    "count": 2
+                })
+                .to_string()
+            )
+            .is_err()
+        );
+
+        let generated_json = generate_nsec().expect("generate");
+        let generated: GeneratedNsecExport =
+            serde_json::from_str(&generated_json).expect("generated json");
+        assert!(
+            create_keyset_bundle_from_nsec(
+                serde_json::json!({
+                    "nsec": generated.nsec,
+                    "group_name": "Invalid Shape",
+                    "threshold": 3,
+                    "count": 2
+                })
+                .to_string()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn create_keyset_bundle_from_nsec_rejects_noncanonical_nsec() {
+        let noncanonical_nsec = (0..100)
+            .find_map(|_| {
+                let secret = SecretKey::generate();
+                let signing_key32 = secret.to_secret_bytes();
+                let normalized = rust_normalize_signing_key_even_y(signing_key32).ok()?;
+                if normalized == signing_key32 {
+                    None
+                } else {
+                    secret.to_bech32().ok()
+                }
+            })
+            .expect("expected an odd-y nsec within 100 generated keys");
+
+        assert!(
+            create_keyset_bundle_from_nsec(
+                serde_json::json!({
+                    "nsec": noncanonical_nsec,
+                    "group_name": "Noncanonical",
+                    "threshold": 2,
+                    "count": 2
+                })
+                .to_string()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1673,6 +2069,64 @@ mod tests {
     }
 
     #[test]
+    fn structured_package_result_helpers_return_stable_error_codes() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let group = bundle.group.clone();
+        let share = bundle.shares[1].clone();
+        let payload = BfOnboardPayload {
+            share_secret: hex::encode(share.seckey),
+            relays: vec!["wss://relay.example".to_string()],
+            peer_pk: hex::encode(&group.members[0].pubkey[1..]),
+        };
+        let encoded =
+            encode_bfonboard_package(&payload, "password123").expect("encode onboarding package");
+
+        let wrong_password: serde_json::Value = serde_json::from_str(
+            &decode_bfonboard_package_result(encoded, "wrongpass".to_string())
+                .expect("structured wrong password"),
+        )
+        .expect("wrong password json");
+        assert_eq!(wrong_password["ok"], false);
+        assert_eq!(wrong_password["error"]["code"], "wrong_password");
+
+        let malformed: serde_json::Value = serde_json::from_str(
+            &decode_bfonboard_package_result(
+                "not-a-package".to_string(),
+                "password123".to_string(),
+            )
+            .expect("structured malformed package"),
+        )
+        .expect("malformed json");
+        assert_eq!(malformed["ok"], false);
+        assert!(matches!(
+            malformed["error"]["code"].as_str(),
+            Some("malformed_package" | "unsupported_package" | "invalid_payload")
+        ));
+
+        let share_payload = BfSharePayload {
+            share_secret: hex::encode(bundle.shares[0].seckey),
+            relays: vec!["wss://relay.example".to_string()],
+        };
+        let share_package = encode_bfshare_package(
+            serde_json::to_string(&share_payload).unwrap(),
+            "password123".to_string(),
+        )
+        .expect("encode share package");
+        let wrong_mode: serde_json::Value = serde_json::from_str(
+            &decode_bfonboard_package_result(share_package, "password123".to_string())
+                .expect("structured wrong mode"),
+        )
+        .expect("wrong mode json");
+        assert_eq!(wrong_mode["ok"], false);
+        assert_eq!(wrong_mode["error"]["code"], "wrong_package_mode");
+    }
+
+    #[test]
     fn refresh_all_peers_policy_updates_and_runtime_events_round_trip() {
         let bundle = create_keyset(CreateKeysetConfig {
             group_name: "Test Group".to_string(),
@@ -2048,6 +2502,228 @@ mod tests {
     }
 
     #[test]
+    fn inbound_sign_response_activity_drains_as_peer_activity_event() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
+        let bob_bootstrap = bootstrap_for_bundle(&bundle, 1);
+        let bob_peer = alice_bootstrap.peers[0].clone();
+        let alice_peer = bob_bootstrap.peers[0].clone();
+        let now = 1_700_000_000_000u64;
+
+        let mut alice = WasmBridgeRuntime::new();
+        alice
+            .init_runtime(
+                "{}".to_string(),
+                serde_json::to_string(&alice_bootstrap).expect("alice bootstrap"),
+            )
+            .expect("init alice");
+
+        let mut bob = WasmBridgeRuntime::new();
+        bob.init_runtime(
+            "{}".to_string(),
+            serde_json::to_string(&bob_bootstrap).expect("bob bootstrap"),
+        )
+        .expect("init bob");
+
+        alice
+            .handle_command(
+                serde_json::json!({
+                    "type": "ping",
+                    "peer_pubkey32_hex": bob_peer,
+                })
+                .to_string(),
+            )
+            .expect("queue ping");
+        alice.tick(now).expect("tick alice ping");
+        let ping: Vec<Event> =
+            serde_json::from_str(&alice.drain_outbound_events().expect("alice ping"))
+                .expect("decode alice ping");
+        bob.handle_inbound_event(serde_json::to_string(&ping[0]).expect("encode ping"))
+            .expect("bob handle ping");
+        bob.tick(now + 1).expect("tick bob ping response");
+        let ping_response: Vec<Event> =
+            serde_json::from_str(&bob.drain_outbound_events().expect("bob ping response"))
+                .expect("decode bob ping response");
+        alice
+            .handle_inbound_event(serde_json::to_string(&ping_response[0]).expect("encode reply"))
+            .expect("alice handle ping response");
+        alice.tick(now + 2).expect("tick alice ping completion");
+        let _: Vec<CompletedOperationJson> =
+            serde_json::from_str(&alice.drain_completions().expect("drain ping completion"))
+                .expect("decode ping completion");
+        let _: Vec<RuntimeEvent> =
+            serde_json::from_str(&bob.drain_runtime_events().expect("clear bob events"))
+                .expect("decode bob events");
+
+        alice
+            .handle_command(
+                serde_json::json!({
+                    "type": "sign",
+                    "message_hex_32": "77".repeat(32),
+                })
+                .to_string(),
+            )
+            .expect("queue sign");
+        alice.tick(now + 3).expect("tick alice sign");
+        let sign_requests: Vec<Event> =
+            serde_json::from_str(&alice.drain_outbound_events().expect("alice sign outbound"))
+                .expect("decode alice sign outbound");
+        assert_eq!(sign_requests.len(), 1);
+
+        bob.handle_inbound_event(
+            serde_json::to_string(&sign_requests[0]).expect("encode sign request"),
+        )
+        .expect("bob handle sign request");
+        bob.tick(now + 4).expect("tick bob sign response");
+
+        let bob_completions: Vec<CompletedOperationJson> =
+            serde_json::from_str(&bob.drain_completions().expect("bob completions"))
+                .expect("decode bob completions");
+        assert!(bob_completions.is_empty());
+        let events: Vec<RuntimeEvent> =
+            serde_json::from_str(&bob.drain_runtime_events().expect("bob runtime events"))
+                .expect("decode bob runtime events");
+        let activity = events
+            .iter()
+            .find(|event| event.kind == RuntimeEventKind::PeerActivity)
+            .and_then(|event| event.activity.as_ref())
+            .expect("peer activity");
+        assert_eq!(activity.op_type, PendingOpTypeJson::Sign);
+        assert_eq!(activity.peer, alice_peer);
+        assert_eq!(activity.action, RuntimePeerActivityAction::ResponseSent);
+        assert!(!activity.request_id.is_empty());
+    }
+
+    #[test]
+    fn duplicate_inbound_event_does_not_emit_second_inbound_accepted() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 2,
+        })
+        .expect("create keyset");
+        let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
+        let bob_bootstrap = bootstrap_for_bundle(&bundle, 1);
+        let bob_peer = alice_bootstrap.peers[0].clone();
+        let now = 1_700_000_000_000u64;
+
+        let mut alice = WasmBridgeRuntime::new();
+        alice
+            .init_runtime(
+                "{}".to_string(),
+                serde_json::to_string(&alice_bootstrap).expect("alice bootstrap"),
+            )
+            .expect("init alice");
+
+        let mut bob = WasmBridgeRuntime::new();
+        bob.init_runtime(
+            "{}".to_string(),
+            serde_json::to_string(&bob_bootstrap).expect("bob bootstrap"),
+        )
+        .expect("init bob");
+
+        alice
+            .handle_command(
+                serde_json::json!({
+                    "type": "ping",
+                    "peer_pubkey32_hex": bob_peer,
+                })
+                .to_string(),
+            )
+            .expect("queue ping");
+        alice.tick(now).expect("tick alice command");
+
+        let outbound: Vec<Event> =
+            serde_json::from_str(&alice.drain_outbound_events().expect("alice outbound"))
+                .expect("decode alice outbound");
+        assert_eq!(outbound.len(), 1);
+        let inbound_json = serde_json::to_string(&outbound[0]).expect("encode inbound event");
+
+        bob.handle_inbound_event(inbound_json.clone())
+            .expect("first inbound accepted");
+        bob.handle_inbound_event(inbound_json)
+            .expect("duplicate inbound ignored");
+
+        let events: Vec<RuntimeEvent> =
+            serde_json::from_str(&bob.drain_runtime_events().expect("bob runtime events"))
+                .expect("decode bob runtime events");
+        let inbound_accepted_count = events
+            .iter()
+            .filter(|event| event.kind == RuntimeEventKind::InboundAccepted)
+            .count();
+        assert_eq!(inbound_accepted_count, 1);
+    }
+
+    #[test]
+    fn non_routable_inbound_event_does_not_emit_inbound_accepted() {
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Test Group".to_string(),
+            threshold: 2,
+            count: 3,
+        })
+        .expect("create keyset");
+        let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
+        let charlie_bootstrap = bootstrap_for_bundle(&bundle, 2);
+        let bob_peer = alice_bootstrap.peers[0].clone();
+        let now = 1_700_000_000_000u64;
+
+        let mut alice = WasmBridgeRuntime::new();
+        alice
+            .init_runtime(
+                "{}".to_string(),
+                serde_json::to_string(&alice_bootstrap).expect("alice bootstrap"),
+            )
+            .expect("init alice");
+
+        let mut charlie = WasmBridgeRuntime::new();
+        charlie
+            .init_runtime(
+                "{}".to_string(),
+                serde_json::to_string(&charlie_bootstrap).expect("charlie bootstrap"),
+            )
+            .expect("init charlie");
+
+        alice
+            .handle_command(
+                serde_json::json!({
+                    "type": "ping",
+                    "peer_pubkey32_hex": bob_peer,
+                })
+                .to_string(),
+            )
+            .expect("queue ping");
+        alice.tick(now).expect("tick alice command");
+
+        let outbound: Vec<Event> =
+            serde_json::from_str(&alice.drain_outbound_events().expect("alice outbound"))
+                .expect("decode alice outbound");
+        assert_eq!(outbound.len(), 1);
+
+        charlie
+            .handle_inbound_event(
+                serde_json::to_string(&outbound[0]).expect("encode inbound event"),
+            )
+            .expect("wrong-recipient inbound ignored");
+
+        let events: Vec<RuntimeEvent> = serde_json::from_str(
+            &charlie
+                .drain_runtime_events()
+                .expect("charlie runtime events"),
+        )
+        .expect("decode charlie runtime events");
+        assert!(
+            events
+                .iter()
+                .all(|event| event.kind != RuntimeEventKind::InboundAccepted)
+        );
+    }
+
+    #[test]
     fn timeout_flow_surfaces_failures_through_runtime_wrapper() {
         let bundle = create_keyset(CreateKeysetConfig {
             group_name: "Test Group".to_string(),
@@ -2113,6 +2789,25 @@ impl From<bifrost_signer::PendingOpType> for PendingOpTypeJson {
             bifrost_signer::PendingOpType::Ecdh => PendingOpTypeJson::Ecdh,
             bifrost_signer::PendingOpType::Ping => PendingOpTypeJson::Ping,
             bifrost_signer::PendingOpType::Onboard => PendingOpTypeJson::Onboard,
+        }
+    }
+}
+
+impl From<SignerActivityAction> for RuntimePeerActivityAction {
+    fn from(value: SignerActivityAction) -> Self {
+        match value {
+            SignerActivityAction::ResponseSent => RuntimePeerActivityAction::ResponseSent,
+        }
+    }
+}
+
+impl From<SignerActivity> for RuntimePeerActivity {
+    fn from(value: SignerActivity) -> Self {
+        Self {
+            request_id: value.request_id,
+            op_type: value.op_type.into(),
+            peer: value.peer,
+            action: value.action.into(),
         }
     }
 }
