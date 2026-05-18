@@ -10,6 +10,8 @@ use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use rand_core::{OsRng, RngCore};
 use serde::{Serialize, de::DeserializeOwned};
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
     ENCRYPTED_PROFILE_VERSION, EncryptedProfileRecord, KDF_ID_ARGON2ID, ProfileManifest,
     ProfileManifestStore, RelayProfile, RelayProfileStore, ShellConfig,
@@ -325,6 +327,10 @@ impl FilesystemProfileDomain {
         policy_overrides: serde_json::Value,
     ) -> Result<ProfileManifest> {
         let state_dir = self.state_profiles_dir.join(profile_id);
+        #[cfg(unix)]
+        ensure_dir_restricted(&state_dir, 0o700)
+            .with_context(|| format!("create {}", state_dir.display()))?;
+        #[cfg(not(unix))]
         fs::create_dir_all(&state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
         let mut profile = build_profile_manifest(
@@ -512,9 +518,21 @@ impl FilesystemEncryptedProfileStore {
 
         let ciphertext_path = PathBuf::from(&record.ciphertext_path);
         if let Some(parent) = ciphertext_path.parent() {
+            #[cfg(unix)]
+            ensure_dir_restricted(parent, 0o700)
+                .with_context(|| format!("create {}", parent.display()))?;
+            #[cfg(not(unix))]
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
-        fs::write(&ciphertext_path, envelope)
+        // Bucket C C.1/C.2: ciphertext envelope is the canonical secret-bearing
+        // file in the profile tree. Atomic write + 0o600 perms on Unix so an
+        // interrupted write never leaves a partial envelope on disk and the
+        // file is never group/other-readable, even under a relaxed umask.
+        #[cfg(unix)]
+        write_restricted_bytes_atomic(&ciphertext_path, &envelope, 0o600)
+            .with_context(|| format!("write {}", ciphertext_path.display()))?;
+        #[cfg(not(unix))]
+        fs::write(&ciphertext_path, &envelope)
             .with_context(|| format!("write {}", ciphertext_path.display()))?;
 
         self.write_encrypted_profile(&record)?;
@@ -632,10 +650,26 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
 
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
+        #[cfg(unix)]
+        ensure_dir_restricted(parent, 0o700)
+            .with_context(|| format!("create {}", parent.display()))?;
+        #[cfg(not(unix))]
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let raw = serde_json::to_string_pretty(value).context("serialize json")?;
-    fs::write(path, raw).with_context(|| format!("write {}", path.display()))
+    // Bucket C C.1/C.2: every JSON manifest in the profile tree
+    // (shell config, relay profile list, profile manifest, encrypted-profile
+    // metadata sidecar) is potentially secret-adjacent and must survive a
+    // crash mid-write. Atomic write + 0o600 on Unix.
+    #[cfg(unix)]
+    {
+        write_restricted_bytes_atomic(path, raw.as_bytes(), 0o600)
+            .with_context(|| format!("write {}", path.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, raw).with_context(|| format!("write {}", path.display()))
+    }
 }
 
 fn random_hex(bytes_len: usize) -> String {

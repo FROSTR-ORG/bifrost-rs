@@ -9,6 +9,8 @@ use frostr_utils::{
     BfManualPeerPolicyOverride, BfProfileDevice, BfProfilePayload, core_peer_policy_override_to_bf,
 };
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
     EncryptedProfileRecord, FilesystemEncryptedProfileStore, FilesystemProfileDomain,
     FilesystemProfileManifestStore, FilesystemRelayProfileStore, PolicyOverridesDocument,
@@ -199,8 +201,21 @@ pub(crate) fn profile_to_package_payload(
 pub(crate) fn write_package_output(out_path: Option<&Path>, package: &str) -> Result<()> {
     if let Some(path) = out_path {
         if let Some(parent) = path.parent() {
+            #[cfg(unix)]
+            ensure_dir_restricted(parent, 0o700)
+                .with_context(|| format!("create {}", parent.display()))?;
+            #[cfg(not(unix))]
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
+        // Bucket C C.1/C.2: bfprofile / bfshare / bfonboard packages hold the
+        // share's encrypted secret material plus the operator-chosen package
+        // password's KDF params. The package is itself encrypted, but a
+        // 0o600 perm bit on the on-disk artifact avoids unnecessary
+        // mode leakage when the operator hands the file off to another host.
+        #[cfg(unix)]
+        write_restricted_bytes_atomic(path, package.as_bytes(), 0o600)
+            .with_context(|| format!("write {}", path.display()))?;
+        #[cfg(not(unix))]
         fs::write(path, package).with_context(|| format!("write {}", path.display()))?;
     }
     Ok(())

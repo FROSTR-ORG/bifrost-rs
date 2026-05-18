@@ -8,6 +8,8 @@ use frostr_utils::{
     encode_bfshare_package,
 };
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
     ProfileManifestStore, ProfilePaths, derive_member_pubkey_hex, load_shell_config_file,
     save_shell_config_file,
@@ -26,6 +28,10 @@ pub fn export_profile(
     passphrase: Option<String>,
 ) -> Result<ProfileExportResult> {
     paths.ensure()?;
+    #[cfg(unix)]
+    ensure_dir_restricted(out_dir, 0o700)
+        .with_context(|| format!("create {}", out_dir.display()))?;
+    #[cfg(not(unix))]
     fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
     let group_path = out_dir.join("group.json");
@@ -34,6 +40,13 @@ pub fn export_profile(
     fs::copy(&profile.group_ref, &group_path)
         .with_context(|| format!("copy {} -> {}", profile.group_ref, group_path.display()))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, passphrase)?;
+    // Bucket C C.1/C.2: the raw share JSON is the plaintext FROST share for
+    // this member -- the single most secret-bearing file in the profile
+    // tree. Atomic write + 0o600 on Unix.
+    #[cfg(unix)]
+    write_restricted_bytes_atomic(&share_path, share_raw.as_bytes(), 0o600)
+        .with_context(|| format!("write {}", share_path.display()))?;
+    #[cfg(not(unix))]
     fs::write(&share_path, share_raw).with_context(|| format!("write {}", share_path.display()))?;
 
     Ok(ProfileExportResult {
