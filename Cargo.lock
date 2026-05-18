@@ -312,6 +312,7 @@ dependencies = [
  "futures-util",
  "hex",
  "k256",
+ "libc",
  "nostr",
  "rand_core 0.6.4",
  "serde",

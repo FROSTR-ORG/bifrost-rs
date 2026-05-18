@@ -28,3 +28,6 @@ bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 frostr-utils = { path = "../frostr-utils" }
 argon2 = "0.5"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

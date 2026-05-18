@@ -216,4 +216,57 @@ mod tests {
             );
         }
     }
+
+    /// Defense-in-depth check: even with a fully relaxed umask (`0o000`), the
+    /// helpers must produce a `0o600` file via the explicit `chmod` step.
+    /// Proves we are not relying on the operator's umask for hygiene.
+    ///
+    /// `umask(2)` is process-global, so this test runs serially via a static
+    /// mutex against any other umask-touching test in the binary. We restore
+    /// the previous umask before returning even on assertion failure.
+    #[test]
+    fn fs_guard_survives_relaxed_umask() {
+        use std::sync::Mutex;
+        static UMASK_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let scratch = tempdir().expect("tempdir");
+        let target = scratch.path().join("relaxed-umask.bin");
+
+        // SAFETY: `libc::umask` is process-global; the static mutex serializes
+        // calls. We restore the previous value before the test returns.
+        let prev = unsafe { libc::umask(0o000) };
+        let result = write_restricted_bytes_atomic(&target, b"hardened", 0o600);
+        unsafe { libc::umask(prev) };
+
+        result.expect("atomic write under relaxed umask");
+        assert_eq!(
+            mode_bits(&target),
+            0o600,
+            "explicit chmod must produce 0o600 even with umask=0o000"
+        );
+    }
+
+    /// After a successful atomic write the only entry under `parent` should be
+    /// the target file itself; `tempfile::persist` must not leave the staged
+    /// tempfile behind on success.
+    #[test]
+    fn atomic_write_leaves_no_temp_residue() {
+        let scratch = tempdir().expect("tempdir");
+        let target = scratch.path().join("only-me.bin");
+
+        write_restricted_bytes_atomic(&target, b"singleton", 0o600).expect("atomic write");
+
+        let entries: Vec<_> = fs::read_dir(scratch.path())
+            .expect("read parent")
+            .map(|e| e.expect("entry").path())
+            .collect();
+
+        assert_eq!(
+            entries.len(),
+            1,
+            "expected exactly one entry in parent, got {entries:?}"
+        );
+        assert_eq!(entries[0], target, "only entry should be the target file");
+    }
 }
