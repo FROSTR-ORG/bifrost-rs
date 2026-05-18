@@ -1,7 +1,9 @@
-use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
+
+#[cfg(unix)]
+use crate::fs_guard::ensure_dir_restricted;
 
 #[derive(Debug, Clone)]
 pub struct ProfilePaths {
@@ -57,6 +59,14 @@ impl ProfilePaths {
         }
     }
 
+    /// Idempotently create every profile-tree directory with `0o700` perms on
+    /// Unix. Bucket C C.1 routes every secret-bearing directory creation
+    /// through [`crate::fs_guard::ensure_dir_restricted`] so the dirs are
+    /// readable only by the owning UID even under a relaxed umask.
+    ///
+    /// On non-Unix targets we fall back to plain `create_dir_all`; the daemon
+    /// runtime is `#[cfg(unix)]`-only and these helpers are only consumed by
+    /// the Unix profile-store path in practice.
     pub fn ensure(&self) -> Result<()> {
         for dir in [
             &self.config_dir,
@@ -69,7 +79,11 @@ impl ProfilePaths {
             &self.state_profiles_dir,
             &self.rotations_dir,
         ] {
-            fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            #[cfg(unix)]
+            ensure_dir_restricted(dir, 0o700)
+                .with_context(|| format!("create {}", dir.display()))?;
+            #[cfg(not(unix))]
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         }
         Ok(())
     }
