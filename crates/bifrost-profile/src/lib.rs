@@ -2,6 +2,8 @@ mod aad;
 mod argon2_params;
 mod config;
 mod flows;
+#[cfg(unix)]
+pub mod fs_guard;
 mod kdf;
 mod models;
 mod native;
