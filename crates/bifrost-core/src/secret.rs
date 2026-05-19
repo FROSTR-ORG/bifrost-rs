@@ -32,12 +32,17 @@
 //!   for the rare host call sites that genuinely need a second owned copy
 //!   (e.g. fanning a passphrase out to both a KDF and a verifier in one
 //!   pass). Every such call is grep-able.
+//! - [`DaemonToken`]: no `Clone` derive. Exposes an explicit `clone_secret()`
+//!   for the same reason — the daemon retains the canonical token while
+//!   handing a copy to whatever transport binding presents it to clients.
 //!
 //! Any new `Clone` impl must add a line here explaining why.
 
 use core::fmt;
 
+use rand_core::CryptoRngCore;
 use subtle::ConstantTimeEq;
+use thiserror::Error;
 use zeroize::ZeroizeOnDrop;
 
 /// FROST signing share held by this host.
@@ -149,9 +154,99 @@ impl fmt::Debug for Passphrase {
     }
 }
 
+/// Error type returned by [`DaemonToken::from_hex`].
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum TokenError {
+    /// The provided hex string was not exactly 64 characters long.
+    #[error("daemon token must be 64 hex characters")]
+    InvalidLength,
+    /// The provided hex string contained a non-hex character.
+    #[error("daemon token contains non-hex character {0:?}")]
+    InvalidHex(char),
+}
+
+/// 32-byte random authentication token used by the local control-socket
+/// daemon to gate access from co-located clients.
+///
+/// Equality is constant-time via [`subtle::ConstantTimeEq`] over the
+/// underlying bytes. The token never appears in `Debug` output.
+#[derive(ZeroizeOnDrop)]
+pub struct DaemonToken {
+    bytes: [u8; 32],
+}
+
+impl DaemonToken {
+    /// Generate a fresh random token using the supplied
+    /// cryptographically-secure RNG.
+    #[inline]
+    pub fn new_random<R: CryptoRngCore + ?Sized>(rng: &mut R) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        Self { bytes }
+    }
+
+    /// Parse a 64-character hex string into a `DaemonToken`. Accepts upper-
+    /// or lower-case hex; the canonical wire form is lowercase.
+    pub fn from_hex(s: &str) -> Result<Self, TokenError> {
+        if s.len() != 64 {
+            return Err(TokenError::InvalidLength);
+        }
+        if let Some(ch) = s.chars().find(|c| !c.is_ascii_hexdigit()) {
+            return Err(TokenError::InvalidHex(ch));
+        }
+        let raw = hex::decode(s).map_err(|_| TokenError::InvalidLength)?;
+        if raw.len() != 32 {
+            return Err(TokenError::InvalidLength);
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&raw);
+        Ok(Self { bytes })
+    }
+
+    /// Encode the token as a lowercase 64-character hex string.
+    ///
+    /// The returned `String` is owned — callers should be conscious that it
+    /// is a copy of secret material outside the `ZeroizeOnDrop` guarantee.
+    /// Prefer `expose_bytes()` where the consuming API can take bytes.
+    #[inline]
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.bytes)
+    }
+
+    /// Borrow the underlying 32-byte token. Named to make call sites
+    /// searchable in audits (`rg 'expose_bytes'`).
+    #[inline]
+    pub fn expose_bytes(&self) -> &[u8; 32] {
+        &self.bytes
+    }
+
+    /// Explicitly clone the wrapped token. There is no `Clone` derive on
+    /// purpose — every call site that needs a second owned copy must
+    /// surface here so an auditor can find it.
+    #[inline]
+    pub fn clone_secret(&self) -> Self {
+        Self { bytes: self.bytes }
+    }
+}
+
+impl PartialEq for DaemonToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes.ct_eq(&other.bytes).into()
+    }
+}
+
+impl Eq for DaemonToken {}
+
+impl fmt::Debug for DaemonToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DaemonToken(<redacted>)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_core::OsRng;
 
     #[test]
     fn debug_redacts_contents() {
@@ -204,5 +299,90 @@ mod tests {
         let p = Passphrase::new("x".into());
         let q = p.clone_secret();
         assert_eq!(p.expose_secret(), q.expose_secret());
+    }
+
+    #[test]
+    fn daemon_token_debug_is_redacted() {
+        let token = DaemonToken {
+            bytes: [0xABu8; 32],
+        };
+        let rendered = format!("{:?}", token);
+        let hex_form = hex::encode(token.expose_bytes());
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains(&hex_form));
+        assert!(!rendered.contains("ab"));
+    }
+
+    #[test]
+    fn daemon_token_from_hex_round_trip() {
+        let h: String = "00ff".repeat(16);
+        assert_eq!(h.len(), 64);
+        let t = DaemonToken::from_hex(&h).expect("valid hex");
+        assert_eq!(t.to_hex(), h.to_lowercase());
+    }
+
+    #[test]
+    fn daemon_token_from_hex_accepts_mixed_case() {
+        let h_upper: String = "AABB".repeat(16);
+        let h_lower = h_upper.to_lowercase();
+        let t = DaemonToken::from_hex(&h_upper).expect("uppercase hex is valid");
+        assert_eq!(t.to_hex(), h_lower);
+    }
+
+    #[test]
+    fn daemon_token_from_hex_rejects_wrong_length() {
+        let short = "ab".repeat(31) + "a"; // 63 chars
+        assert_eq!(short.len(), 63);
+        assert_eq!(
+            DaemonToken::from_hex(&short),
+            Err(TokenError::InvalidLength)
+        );
+
+        let long = "ab".repeat(32) + "a"; // 65 chars
+        assert_eq!(long.len(), 65);
+        assert_eq!(DaemonToken::from_hex(&long), Err(TokenError::InvalidLength));
+    }
+
+    #[test]
+    fn daemon_token_from_hex_rejects_non_hex() {
+        let mut s: String = "ab".repeat(32);
+        // Replace one char with 'g' so length stays at 64.
+        s.replace_range(0..1, "g");
+        assert_eq!(s.len(), 64);
+        assert_eq!(DaemonToken::from_hex(&s), Err(TokenError::InvalidHex('g')));
+    }
+
+    #[test]
+    fn daemon_token_clone_secret_round_trips() {
+        let t = DaemonToken {
+            bytes: [0x11u8; 32],
+        };
+        let u = t.clone_secret();
+        assert_eq!(t, u);
+        assert_eq!(t.expose_bytes(), u.expose_bytes());
+    }
+
+    #[test]
+    fn daemon_token_partialeq_via_subtle() {
+        let a = DaemonToken {
+            bytes: [0x33u8; 32],
+        };
+        let b = DaemonToken {
+            bytes: [0x33u8; 32],
+        };
+        assert_eq!(a, b);
+
+        let mut differ = [0x33u8; 32];
+        differ[31] = 0x34;
+        let c = DaemonToken { bytes: differ };
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn daemon_token_new_random_is_distinct() {
+        let mut rng = OsRng;
+        let a = DaemonToken::new_random(&mut rng);
+        let b = DaemonToken::new_random(&mut rng);
+        assert_ne!(a, b);
     }
 }
