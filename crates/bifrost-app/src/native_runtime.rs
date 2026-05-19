@@ -18,7 +18,7 @@ use serde_json::Value;
 use sha2::Digest;
 use tokio::time::Duration;
 
-use crate::host::{DaemonClient, DaemonTransportConfig, ShutdownPayload};
+use crate::host::{DaemonClient, DaemonTransportConfig, ShutdownPayload, UnlockSession};
 use crate::onboarding::{
     BootstrapImportResult, complete_onboarding_package, persist_validated_onboarding_state,
 };
@@ -289,6 +289,88 @@ pub fn resolve_profile_runtime_for_passphrase(
             manual_policy_overrides,
             options,
         },
+    ))
+}
+
+/// Variant of [`resolve_profile_runtime_for_passphrase`] that consumes the
+/// `Passphrase` to construct an [`UnlockSession`] (Bucket C C.6) and uses the
+/// session's cached key to decrypt the profile envelope.
+///
+/// Returns the resolved config alongside the session — the daemon caller
+/// should hold the session for the process's lifetime so subsequent
+/// profile-envelope decrypts (e.g. for Wipe / Rotate / rekey flows) reuse the
+/// cached [`bifrost_core::secret::FileStoreKey`] instead of re-running
+/// Argon2id (which costs ~400-600 ms per call with default params).
+///
+/// For profiles whose `encrypted_profile_ref` points to a legacy plaintext
+/// file (no `EncryptedProfileRecord` sidecar exists), no `UnlockSession` is
+/// constructed and the function returns `Ok((profile, config, None))`. The
+/// caller can pattern-match on the `Option<UnlockSession>` to detect this
+/// legacy path.
+pub fn resolve_profile_runtime_with_unlock_session(
+    paths: &ProfilePaths,
+    profile_id: &str,
+    passphrase: Option<Passphrase>,
+) -> Result<(ProfileManifest, ResolvedAppConfig, Option<UnlockSession>)> {
+    let profile = profile_manifest_store(paths).read_profile(profile_id)?;
+    let relay_profile = read_relay_profile(paths, &profile.relay_profile)?;
+    let group_raw = fs::read_to_string(&profile.group_ref)
+        .with_context(|| format!("read {}", profile.group_ref))?;
+
+    // Try to read the encrypted-profile sidecar; if present, build an
+    // UnlockSession and decrypt via the cached key. If absent, fall back to
+    // the legacy plaintext path.
+    let encrypted_store = bifrost_profile::FilesystemEncryptedProfileStore::new(
+        &paths.encrypted_profiles_dir,
+        &paths.encrypted_profiles_dir,
+    );
+    let (share_raw, unlock_session) = match encrypted_store
+        .read_encrypted_profile(&profile.encrypted_profile_ref)
+    {
+        Ok(record) => {
+            let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
+            // `UnlockSession::new` consumes the passphrase (zeroized on drop)
+            // and validates the derived key against the supplied record.
+            let session = UnlockSession::new(passphrase, profile_id.to_string(), &record)
+                .map_err(|err| anyhow!(err.to_string()))?;
+            // Use the session's cached key for the actual decrypt — this is
+            // the hot path for any subsequent re-decrypt the caller triggers.
+            let share_raw = session
+                .decrypt_profile(&record)
+                .map_err(|err| anyhow!(err.to_string()))?;
+            (share_raw, Some(session))
+        }
+        Err(_) => {
+            let share_raw = fs::read_to_string(&profile.encrypted_profile_ref)
+                .with_context(|| format!("read {}", profile.encrypted_profile_ref))?;
+            (share_raw, None)
+        }
+    };
+
+    let group =
+        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share =
+        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    let (peers, manual_policy_overrides) =
+        resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
+            .context("resolve peer policy overrides")?;
+    let options: AppOptions = if profile.runtime_options.is_null() {
+        AppOptions::default()
+    } else {
+        serde_json::from_value(profile.runtime_options.clone()).context("parse runtime options")?
+    };
+    Ok((
+        profile.clone(),
+        ResolvedAppConfig {
+            group,
+            share,
+            state_path: PathBuf::from(&profile.state_path),
+            relays: relay_profile.relays,
+            peers,
+            manual_policy_overrides,
+            options,
+        },
+        unlock_session,
     ))
 }
 

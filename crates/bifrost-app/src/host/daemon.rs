@@ -14,6 +14,7 @@ use crate::runtime::{
 use super::handlers::{execute_control_payload, persist_if_needed};
 use super::protocol::{ControlRequest, ControlResponse};
 use super::types::{DaemonTransportConfig, bridge_config};
+use super::unlock::UnlockSession;
 
 /// Failure modes for [`read_passphrase_from_stdin`].
 ///
@@ -66,6 +67,29 @@ pub async fn run_resolved_daemon(
     config: ResolvedAppConfig,
     transport: DaemonTransportConfig,
 ) -> Result<()> {
+    run_resolved_daemon_with_session(config, transport, None).await
+}
+
+/// Variant of [`run_resolved_daemon`] that holds a [`UnlockSession`] for the
+/// daemon process's lifetime.
+///
+/// Bucket C C.6: the session caches the [`bifrost_core::secret::FileStoreKey`]
+/// derived from the operator passphrase at startup, so any subsequent
+/// profile-envelope re-decrypts (e.g. for Wipe / Rotate flows) skip the
+/// Argon2id KDF. The session is dropped (zeroized) when this function
+/// returns.
+///
+/// The session is held but not actively consumed inside the existing daemon
+/// hot paths (Sign / Ecdh / Status) — those operate on the already-loaded
+/// share material. Callers wiring follow-on rekey / rotate flows into the
+/// control loop should hand them a `&UnlockSession` reference to keep the
+/// KDF off the hot path.
+#[cfg(unix)]
+pub async fn run_resolved_daemon_with_session(
+    config: ResolvedAppConfig,
+    transport: DaemonTransportConfig,
+    unlock_session: Option<UnlockSession>,
+) -> Result<()> {
     // C.4: harden file-creation permissions for the entire daemon lifetime.
     // We deliberately discard the previous umask — the daemon should not
     // inherit a relaxed umask from its caller, and any file it writes
@@ -78,6 +102,13 @@ pub async fn run_resolved_daemon(
     unsafe {
         libc::umask(0o077);
     }
+
+    // C.6: bind the session for the daemon's lifetime. Held without further
+    // use today — the existing Sign / Ecdh / Status hot paths operate on the
+    // already-loaded share material. Follow-on PRs that thread Wipe /
+    // Rotate / rekey flows through here should accept this binding so the
+    // cached FileStoreKey skips the ~400-600 ms Argon2id derivation.
+    let _unlock_session = unlock_session;
 
     let state_path = config.state_path.clone();
     let _lock = DeviceLock::acquire_exclusive(&state_path)?;

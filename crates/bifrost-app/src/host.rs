@@ -26,9 +26,14 @@ mod logging;
 mod protocol;
 #[path = "host/types.rs"]
 mod types;
+#[path = "host/unlock.rs"]
+mod unlock;
 
 pub use client::DaemonClient;
-pub use daemon::{DaemonStartupError, read_passphrase_from_stdin, run_resolved_daemon};
+pub use daemon::{
+    DaemonStartupError, read_passphrase_from_stdin, run_resolved_daemon,
+    run_resolved_daemon_with_session,
+};
 pub use handlers::{execute_command, run_command};
 pub use logging::{default_log_filter, init_tracing};
 pub use protocol::{ControlCommand, ControlRequest, ControlResponse};
@@ -38,6 +43,7 @@ pub use types::{
     RuntimeMetadataPayload, RuntimeStatusPayload, ShutdownPayload, SignPayload, UpdatedPayload,
     WipedPayload,
 };
+pub use unlock::{UnlockError, UnlockSession};
 
 #[cfg(test)]
 pub(crate) use daemon::handle_control_stream;
