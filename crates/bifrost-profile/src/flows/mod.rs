@@ -7,6 +7,7 @@ mod imports;
 #[cfg(feature = "native-relay")]
 mod recovery;
 mod rotation;
+mod rotation_intent;
 mod types;
 
 #[cfg(feature = "native-relay")]
@@ -22,6 +23,9 @@ pub use imports::{
 #[cfg(feature = "native-relay")]
 pub use recovery::{preview_bfshare_recovery, recover_profile_from_bfshare_value};
 pub use rotation::finalize_rotation_update_import;
+pub use rotation_intent::{
+    RotationIntent, RotationKind, RotationStep, delete_intent, scan_rotation_intents, write_intent,
+};
 pub use types::{
     ProfileBackupPublishResult, ProfileExportResult, ProfileImportResult,
     ProfilePackageExportResult, StagedOnboardingImport,

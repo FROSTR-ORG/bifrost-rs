@@ -23,10 +23,11 @@ pub use config::{
 };
 pub use flows::{
     ProfileBackupPublishResult, ProfileExportResult, ProfileImportResult,
-    ProfilePackageExportResult, StagedOnboardingImport, export_profile,
-    export_profile_as_bfonboard, export_profile_as_bfprofile, export_profile_as_bfshare,
-    finalize_rotation_update_import, import_profile_from_bfprofile_value,
-    import_profile_from_files, preview_bfprofile_value, remove_encrypted_profile, remove_profile,
+    ProfilePackageExportResult, RotationIntent, RotationKind, RotationStep, StagedOnboardingImport,
+    delete_intent, export_profile, export_profile_as_bfonboard, export_profile_as_bfprofile,
+    export_profile_as_bfshare, finalize_rotation_update_import,
+    import_profile_from_bfprofile_value, import_profile_from_files, preview_bfprofile_value,
+    remove_encrypted_profile, remove_profile, scan_rotation_intents, write_intent,
 };
 #[cfg(feature = "native-relay")]
 pub use flows::{
