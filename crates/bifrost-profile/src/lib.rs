@@ -36,8 +36,9 @@ pub use kdf::{KDF_OUTPUT_LEN, KDF_SALT_LEN, derive_profile_encryption_key_v2};
 pub use models::{EncryptedProfileRecord, ProfileManifest, ProfilePreview, build_profile_manifest};
 pub use native::{
     FilesystemEncryptedProfileStore, FilesystemProfileDomain, FilesystemProfileManifestStore,
-    FilesystemRelayProfileStore, ImportedProfileArtifacts, load_relay_profiles_file,
-    load_shell_config_file, save_relay_profiles_file, save_shell_config_file,
+    FilesystemRelayProfileStore, ImportedProfileArtifacts, derive_file_store_key_for_record,
+    load_relay_profiles_file, load_shell_config_file, save_relay_profiles_file,
+    save_shell_config_file,
 };
 pub use packages::{
     build_policy_overrides_value, derive_member_pubkey_hex, derive_profile_id_for_share_secret,
