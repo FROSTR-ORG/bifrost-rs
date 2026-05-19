@@ -1,10 +1,12 @@
 use anyhow::{Result, anyhow};
 use bifrost_bridge_tokio::{Bridge, NostrSdkAdapter};
 use bifrost_core::secret::{DaemonToken, Passphrase};
+use bifrost_profile::ProfilePaths;
 use bifrost_signer::DeviceStore;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
+use tracing::warn;
 
 use crate::runtime::{
     DeviceLock, EncryptedFileStore, ResolvedAppConfig, begin_run, complete_clean_run,
@@ -67,11 +69,38 @@ pub async fn run_resolved_daemon(
     config: ResolvedAppConfig,
     transport: DaemonTransportConfig,
 ) -> Result<()> {
-    run_resolved_daemon_with_session(config, transport, None).await
+    run_resolved_daemon_with_session(config, transport, None, None).await
+}
+
+/// Scan `paths.rotations_dir` for incomplete rotation intents and log a
+/// `warn!` for each one.
+///
+/// Bucket C C.7 (rotation intent journal): the daemon performs this scan
+/// once at startup so the operator is alerted if a previous rotation
+/// crashed mid-flight. No auto-recovery is performed — the journal is
+/// informational pending PR12 / a future audit-driven workflow.
+///
+/// Returns the number of incomplete intents logged. JSON parse errors on
+/// individual intent files are warned about internally (see
+/// `scan_rotation_intents`) but do not abort the scan.
+pub fn log_incomplete_rotations(paths: &ProfilePaths) -> Result<usize> {
+    let incomplete = bifrost_profile::scan_rotation_intents(paths)?;
+    for intent in &incomplete {
+        warn!(
+            workspace_id = %intent.workspace_id,
+            profile_id = %intent.profile_id,
+            step = ?intent.step,
+            started_at = intent.started_at,
+            updated_at = intent.updated_at,
+            "incomplete rotation detected; manual inspection required",
+        );
+    }
+    Ok(incomplete.len())
 }
 
 /// Variant of [`run_resolved_daemon`] that holds a [`UnlockSession`] for the
-/// daemon process's lifetime.
+/// daemon process's lifetime and (optionally) scans the rotation intent
+/// journal at startup.
 ///
 /// Bucket C C.6: the session caches the [`bifrost_core::secret::FileStoreKey`]
 /// derived from the operator passphrase at startup, so any subsequent
@@ -84,11 +113,17 @@ pub async fn run_resolved_daemon(
 /// share material. Callers wiring follow-on rekey / rotate flows into the
 /// control loop should hand them a `&UnlockSession` reference to keep the
 /// KDF off the hot path.
+///
+/// Bucket C C.7: if `paths` is supplied, [`log_incomplete_rotations`] is
+/// called once after the session is bound but before the control socket
+/// starts accepting requests. Callers that don't manage a `ProfilePaths`
+/// (e.g. the existing in-tree integration tests) can pass `None`.
 #[cfg(unix)]
 pub async fn run_resolved_daemon_with_session(
     config: ResolvedAppConfig,
     transport: DaemonTransportConfig,
     unlock_session: Option<UnlockSession>,
+    paths: Option<&ProfilePaths>,
 ) -> Result<()> {
     // C.4: harden file-creation permissions for the entire daemon lifetime.
     // We deliberately discard the previous umask — the daemon should not
@@ -109,6 +144,16 @@ pub async fn run_resolved_daemon_with_session(
     // Rotate / rekey flows through here should accept this binding so the
     // cached FileStoreKey skips the ~400-600 ms Argon2id derivation.
     let _unlock_session = unlock_session;
+
+    // C.7: surface any incomplete rotation intents from a previous crashed
+    // run before we start accepting control requests. The scan is purely
+    // informational — operators are expected to triage the warning(s)
+    // manually pending the auto-recovery flow deferred to PR12.
+    if let Some(paths) = paths
+        && let Err(err) = log_incomplete_rotations(paths)
+    {
+        warn!(error = %err, "rotation-intent scan failed; continuing startup");
+    }
 
     let state_path = config.state_path.clone();
     let _lock = DeviceLock::acquire_exclusive(&state_path)?;
@@ -554,5 +599,48 @@ mod tests {
         assert!(response.ok);
         worker.await.expect("join worker").expect("handle status");
         assert!(rx.try_recv().is_err());
+    }
+
+    fn rotation_intent_temp_paths(label: &str) -> ProfilePaths {
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(format!("bifrost-app-rot-scan-{label}-{unique}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths =
+            ProfilePaths::from_roots(root.join("config"), root.join("data"), root.join("state"));
+        paths.ensure().expect("ensure paths");
+        paths
+    }
+
+    #[test]
+    fn log_incomplete_rotations_returns_count_of_non_completed_intents() {
+        use bifrost_profile::{RotationIntent, RotationKind, RotationStep, write_intent};
+
+        let paths = rotation_intent_temp_paths("count");
+
+        // Empty rotations_dir — zero incomplete intents.
+        let count = log_incomplete_rotations(&paths).expect("scan empty");
+        assert_eq!(count, 0);
+
+        // Seed one PostCreateNewProfile (incomplete) and one Completed
+        // (filtered) intent. The function must report exactly 1 to log.
+        let mut incomplete = RotationIntent::new("ws-a", RotationKind::RotateShare, "prof-1");
+        incomplete.advance(RotationStep::PostCreateNewProfile);
+        write_intent(&paths, &incomplete).expect("write incomplete");
+
+        let mut completed = RotationIntent::new("ws-b", RotationKind::RotateShare, "prof-2");
+        completed.advance(RotationStep::Completed);
+        write_intent(&paths, &completed).expect("write completed");
+
+        let count = log_incomplete_rotations(&paths).expect("scan seeded");
+        assert_eq!(count, 1, "completed intents must not be counted");
+
+        let _ = std::fs::remove_dir_all(paths.config_dir.parent().unwrap_or(&paths.config_dir));
     }
 }

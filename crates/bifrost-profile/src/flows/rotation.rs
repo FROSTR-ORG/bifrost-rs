@@ -87,7 +87,7 @@ mod tests {
         BfProfileDevice, BfProfilePayload, CreateKeysetConfig, KeysetBundle, create_keyset,
     };
 
-    use crate::flows::rotation_intent::{scan_rotation_intents, RotationStep};
+    use crate::flows::rotation_intent::{RotationStep, scan_rotation_intents};
     use crate::{
         FilesystemRelayProfileStore, ProfileManifestStore, RelayProfile, RelayProfileStore,
     };
@@ -163,10 +163,9 @@ mod tests {
     /// expectation.
     fn payload_for_share(bundle: &KeysetBundle, share_idx: usize) -> BfProfilePayload {
         let share = &bundle.shares[share_idx];
-        let profile_id = crate::derive_profile_id_for_share_secret(&hex::encode(
-            share.seckey.expose_bytes(),
-        ))
-        .expect("derive profile id");
+        let profile_id =
+            crate::derive_profile_id_for_share_secret(&hex::encode(share.seckey.expose_bytes()))
+                .expect("derive profile id");
         BfProfilePayload {
             profile_id,
             version: 1,
@@ -228,7 +227,9 @@ mod tests {
 
         // The migrated profile should be present and the target removed.
         match result {
-            ProfileImportResult::ProfileCreated { profile: migrated, .. } => {
+            ProfileImportResult::ProfileCreated {
+                profile: migrated, ..
+            } => {
                 let manifest_store =
                     crate::FilesystemProfileManifestStore::new(&paths.profiles_dir);
                 assert!(

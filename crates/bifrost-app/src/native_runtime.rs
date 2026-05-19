@@ -324,28 +324,27 @@ pub fn resolve_profile_runtime_with_unlock_session(
         &paths.encrypted_profiles_dir,
         &paths.encrypted_profiles_dir,
     );
-    let (share_raw, unlock_session) = match encrypted_store
-        .read_encrypted_profile(&profile.encrypted_profile_ref)
-    {
-        Ok(record) => {
-            let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
-            // `UnlockSession::new` consumes the passphrase (zeroized on drop)
-            // and validates the derived key against the supplied record.
-            let session = UnlockSession::new(passphrase, profile_id.to_string(), &record)
-                .map_err(|err| anyhow!(err.to_string()))?;
-            // Use the session's cached key for the actual decrypt — this is
-            // the hot path for any subsequent re-decrypt the caller triggers.
-            let share_raw = session
-                .decrypt_profile(&record)
-                .map_err(|err| anyhow!(err.to_string()))?;
-            (share_raw, Some(session))
-        }
-        Err(_) => {
-            let share_raw = fs::read_to_string(&profile.encrypted_profile_ref)
-                .with_context(|| format!("read {}", profile.encrypted_profile_ref))?;
-            (share_raw, None)
-        }
-    };
+    let (share_raw, unlock_session) =
+        match encrypted_store.read_encrypted_profile(&profile.encrypted_profile_ref) {
+            Ok(record) => {
+                let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
+                // `UnlockSession::new` consumes the passphrase (zeroized on drop)
+                // and validates the derived key against the supplied record.
+                let session = UnlockSession::new(passphrase, profile_id.to_string(), &record)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                // Use the session's cached key for the actual decrypt — this is
+                // the hot path for any subsequent re-decrypt the caller triggers.
+                let share_raw = session
+                    .decrypt_profile(&record)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                (share_raw, Some(session))
+            }
+            Err(_) => {
+                let share_raw = fs::read_to_string(&profile.encrypted_profile_ref)
+                    .with_context(|| format!("read {}", profile.encrypted_profile_ref))?;
+                (share_raw, None)
+            }
+        };
 
     let group =
         bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;

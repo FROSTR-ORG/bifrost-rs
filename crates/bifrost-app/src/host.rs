@@ -31,7 +31,7 @@ mod unlock;
 
 pub use client::DaemonClient;
 pub use daemon::{
-    DaemonStartupError, read_passphrase_from_stdin, run_resolved_daemon,
+    DaemonStartupError, log_incomplete_rotations, read_passphrase_from_stdin, run_resolved_daemon,
     run_resolved_daemon_with_session,
 };
 pub use handlers::{execute_command, run_command};

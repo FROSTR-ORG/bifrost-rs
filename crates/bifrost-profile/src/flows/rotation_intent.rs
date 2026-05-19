@@ -254,7 +254,8 @@ mod tests {
     fn fixture_paths() -> (PathBuf, ProfilePaths) {
         let root = unique_root();
         fs::create_dir_all(&root).expect("create root");
-        let paths = ProfilePaths::from_roots(root.join("config"), root.join("data"), root.join("state"));
+        let paths =
+            ProfilePaths::from_roots(root.join("config"), root.join("data"), root.join("state"));
         paths.ensure().expect("ensure paths");
         (root, paths)
     }
@@ -285,11 +286,7 @@ mod tests {
         write_intent(&paths, &intent).expect("write intent");
 
         let path = intent_path(&paths, "ws-mode");
-        let mode = fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "intent file must be 0o600");
 
         let _ = fs::remove_dir_all(root);
@@ -299,7 +296,8 @@ mod tests {
     fn scan_returns_incomplete_intents() {
         let (root, paths) = fixture_paths();
 
-        let mut incomplete = RotationIntent::new("ws-incomplete", RotationKind::RotateShare, "prof-1");
+        let mut incomplete =
+            RotationIntent::new("ws-incomplete", RotationKind::RotateShare, "prof-1");
         incomplete.advance(RotationStep::PostCreateNewProfile);
         write_intent(&paths, &incomplete).expect("write incomplete intent");
 
