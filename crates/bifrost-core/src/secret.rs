@@ -28,6 +28,10 @@
 //! - [`RecoveredSigningKey`]: clones because `RecoveredKeyMaterial` is
 //!   `Clone` (recovery flows fan out the recovered bytes through multiple
 //!   downstream builders before zeroization).
+//! - [`Passphrase`]: no `Clone` derive. Exposes an explicit `clone_secret()`
+//!   for the rare host call sites that genuinely need a second owned copy
+//!   (e.g. fanning a passphrase out to both a KDF and a verifier in one
+//!   pass). Every such call is grep-able.
 //!
 //! Any new `Clone` impl must add a line here explaining why.
 
@@ -98,6 +102,53 @@ impl_secret_newtype!(EcdhSharedSecret);
 impl_secret_newtype!(RecoveredSigningKey);
 impl_secret_newtype!(FileStoreKey);
 
+/// UTF-8 operator passphrase used to derive KDFs (profile encryption,
+/// recovery flows, etc.).
+///
+/// The runtime never compares passphrases for equality, so this type
+/// deliberately does not implement `PartialEq`/`Eq`. Use `expose_secret()`
+/// or `expose_bytes()` and feed the result into a KDF or verifier — do not
+/// build ad-hoc equality checks.
+#[derive(ZeroizeOnDrop)]
+pub struct Passphrase(String);
+
+impl Passphrase {
+    /// Wrap an owned UTF-8 passphrase. The caller relinquishes the string;
+    /// any prior copy on the stack should be zeroized at the source.
+    #[inline]
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    /// Borrow the underlying UTF-8 passphrase. Named to make call sites
+    /// searchable in audits (`rg 'expose_secret'`).
+    #[inline]
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+
+    /// Borrow the underlying passphrase as bytes. Convenient for KDFs that
+    /// take `&[u8]` (PBKDF2, Argon2, HKDF, etc.).
+    #[inline]
+    pub fn expose_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    /// Explicitly clone the wrapped passphrase. There is no `Clone` derive
+    /// on purpose — every call site that needs a second owned copy must
+    /// surface here so an auditor can find it.
+    #[inline]
+    pub fn clone_secret(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl fmt::Debug for Passphrase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Passphrase(<redacted>)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +182,27 @@ mod tests {
         let bytes = [3u8; 32];
         let key = NoncePoolSecret::new(bytes);
         assert_eq!(key.expose_bytes(), &bytes);
+    }
+
+    #[test]
+    fn passphrase_debug_is_redacted() {
+        let p = Passphrase::new("hunter2".into());
+        let rendered = format!("{:?}", p);
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains("hunter2"));
+    }
+
+    #[test]
+    fn passphrase_expose_round_trip() {
+        let p = Passphrase::new("correct horse battery staple".into());
+        assert_eq!(p.expose_secret(), "correct horse battery staple");
+        assert_eq!(p.expose_bytes(), b"correct horse battery staple");
+    }
+
+    #[test]
+    fn passphrase_clone_secret_round_trips() {
+        let p = Passphrase::new("x".into());
+        let q = p.clone_secret();
+        assert_eq!(p.expose_secret(), q.expose_secret());
     }
 }
