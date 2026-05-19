@@ -6,8 +6,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bifrost_app::host::{ControlCommand, DaemonClient, DaemonTransportConfig, run_resolved_daemon};
 use bifrost_app::runtime::{AppOptions, ResolvedAppConfig};
+use bifrost_core::secret::DaemonToken;
 use frostr_utils::{CreateKeysetConfig, create_keyset};
 use tokio::time::sleep;
+
+fn token_with_byte(b: u8) -> DaemonToken {
+    DaemonToken::from_hex(&hex::encode([b; 32])).expect("test token hex")
+}
 
 fn temp_path(name: &str, suffix: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -52,16 +57,15 @@ async fn wait_for_socket(socket_path: &Path) {
 async fn daemon_control_maps_invalid_hex_and_unknown_peer_errors() {
     let config = resolved_config();
     let socket_path = temp_path("control", "sock");
-    let token = "daemon-error-token".to_string();
     let transport = DaemonTransportConfig {
         socket_path: socket_path.clone(),
-        token: token.clone(),
+        token: token_with_byte(0x31),
     };
 
     let daemon = tokio::spawn(run_resolved_daemon(config.clone(), transport));
     wait_for_socket(&socket_path).await;
 
-    let client = DaemonClient::new(socket_path.clone(), token);
+    let client = DaemonClient::new(socket_path.clone(), token_with_byte(0x31));
 
     let err = client
         .request_ok(ControlCommand::Sign {

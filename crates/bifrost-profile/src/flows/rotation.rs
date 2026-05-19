@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use bifrost_core::secret::Passphrase;
 use bifrost_core::types::GroupPackage;
 use frostr_utils::BfProfilePayload;
 
@@ -13,7 +14,7 @@ pub fn finalize_rotation_update_import(
     target_payload: BfProfilePayload,
     rotated_group: &GroupPackage,
     rotated_payload: BfProfilePayload,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     if hex::encode(rotated_group.group_pk)
         != hex::encode(group_from_payload(&target_payload)?.group_pk)
@@ -25,16 +26,15 @@ pub fn finalize_rotation_update_import(
     }
 
     paths.ensure()?;
-    let passphrase = passphrase
-        .or_else(|| std::env::var("IGLOO_SHELL_PROFILE_PASSPHRASE").ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!("passphrase not provided; set IGLOO_SHELL_PROFILE_PASSPHRASE")
-        })?;
+    // C.5: env-var fallback removed. Callers must provide a `Passphrase`
+    // explicitly. The `IGLOO_SHELL_PROFILE_PASSPHRASE` env contract is
+    // being retired (igloo-shell PR12 will follow the bifrost-rs change).
+    let passphrase = passphrase.ok_or_else(|| anyhow::anyhow!("passphrase not provided"))?;
     let imported = profile_domain(paths).import_profile_from_payload(
         &rotated_payload,
         Some(target.label.clone()),
         Some(target.relay_profile.clone()),
-        &passphrase,
+        passphrase.expose_secret(),
         now_unix_secs(),
     )?;
     let mut migrated = imported.profile;

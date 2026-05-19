@@ -5,12 +5,14 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_codec::wire::SharePackageWire;
+use bifrost_core::secret::{DaemonToken, Passphrase};
 use bifrost_profile::{
     EncryptedProfileStore, ProfileImportResult, ProfileManifest, ProfileManifestStore,
     ProfilePaths, ProfilePreview, RelayProfileStore, derive_profile_id_for_share_secret,
     finalize_rotation_update_import,
 };
 use frostr_utils::{BfProfileDevice, BfProfilePayload, decode_bfonboard_package};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
@@ -21,8 +23,6 @@ use crate::onboarding::{
     BootstrapImportResult, complete_onboarding_package, persist_validated_onboarding_state,
 };
 use crate::runtime::{AppOptions, ResolvedAppConfig};
-
-const PROFILE_PASSPHRASE_ENV: &str = "IGLOO_SHELL_PROFILE_PASSPHRASE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonMetadata {
@@ -76,7 +76,7 @@ fn read_relay_profile(
 fn load_share_payload_with_passphrase(
     paths: &ProfilePaths,
     profile: &ProfileManifest,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<String> {
     if let Ok(record) = bifrost_profile::FilesystemEncryptedProfileStore::new(
         &paths.encrypted_profiles_dir,
@@ -84,14 +84,16 @@ fn load_share_payload_with_passphrase(
     )
     .read_encrypted_profile(&profile.encrypted_profile_ref)
     {
-        let passphrase = passphrase
-            .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
-            .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?;
+        // C.5: passphrase is provided in-process (e.g. read from stdin by the
+        // daemon child). Env-var fallback was removed — see PR10. The
+        // `IGLOO_SHELL_PROFILE_PASSPHRASE` env contract is gone from
+        // bifrost-rs; igloo-shell PR12 will follow.
+        let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
         return bifrost_profile::FilesystemEncryptedProfileStore::new(
             &paths.encrypted_profiles_dir,
             &paths.encrypted_profiles_dir,
         )
-        .decrypt_encrypted_profile(&record, &passphrase);
+        .decrypt_encrypted_profile(&record, passphrase.expose_secret());
     }
     fs::read_to_string(&profile.encrypted_profile_ref)
         .with_context(|| format!("read {}", profile.encrypted_profile_ref))
@@ -224,6 +226,9 @@ pub fn resolve_profile_runtime(
     let group_raw = fs::read_to_string(&profile.group_ref)
         .with_context(|| format!("read {}", profile.group_ref))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, None)?;
+    // No passphrase passed: only succeeds for plaintext profile records
+    // (legacy file imports). Encrypted profiles must use
+    // `resolve_profile_runtime_for_passphrase`.
     let group =
         bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
     let share =
@@ -254,7 +259,7 @@ pub fn resolve_profile_runtime(
 pub fn resolve_profile_runtime_for_passphrase(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<(ProfileManifest, ResolvedAppConfig)> {
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
     let relay_profile = read_relay_profile(paths, &profile.relay_profile)?;
@@ -303,10 +308,17 @@ pub fn write_daemon_metadata(
 ) -> Result<()> {
     let path = paths.daemon_metadata_path(profile_id);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        bifrost_profile::fs_guard::ensure_dir_restricted(parent, 0o700)
+            .with_context(|| format!("ensure {}", parent.display()))?;
     }
-    fs::write(&path, serde_json::to_vec_pretty(metadata)?)
-        .with_context(|| format!("write {}", path.display()))
+    // C.4: `daemon.json` carries the secret control-socket token. Route the
+    // write through `fs_guard::write_restricted_bytes_atomic` so the final
+    // file lands atomically with 0o600 perms even under a relaxed inherited
+    // umask.
+    let bytes = serde_json::to_vec_pretty(metadata)?;
+    bifrost_profile::fs_guard::write_restricted_bytes_atomic(&path, &bytes, 0o600)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 pub fn remove_daemon_metadata(paths: &ProfilePaths, profile_id: &str) -> Result<()> {
@@ -321,11 +333,15 @@ pub fn daemon_log_path(paths: &ProfilePaths, profile_id: &str) -> PathBuf {
     paths.daemon_log_path(profile_id)
 }
 
+/// Build a fresh `DaemonTransportConfig` for `profile`. The token is a
+/// random [`DaemonToken`] from the OS RNG — the previous deterministic
+/// `daemon-{id}-{ts}` form has been replaced as part of C.4.
 pub fn build_daemon_transport(profile: &ProfileManifest) -> DaemonTransportConfig {
     let socket_path = shorten_unix_socket_path(&profile.daemon_socket_path, &profile.id);
+    let mut rng = OsRng;
     DaemonTransportConfig {
         socket_path,
-        token: format!("daemon-{}-{}", profile.id, now_unix_secs()),
+        token: DaemonToken::new_random(&mut rng),
     }
 }
 
@@ -333,11 +349,13 @@ pub fn build_daemon_transport(profile: &ProfileManifest) -> DaemonTransportConfi
 pub async fn start_profile_daemon_with_passphrase(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<DaemonMetadata> {
+    use std::io::Write;
+
     paths.ensure()?;
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
-    let _ = load_share_payload_with_passphrase(paths, &profile, passphrase.clone())?;
+    let _ = load_share_payload_with_passphrase(paths, &profile, passphrase.as_ref())?;
     let transport = build_daemon_transport(&profile);
     let log_path = paths.daemon_log_path(profile_id);
     if let Some(parent) = log_path.parent() {
@@ -352,32 +370,60 @@ pub async fn start_profile_daemon_with_passphrase(
     let stderr = stdout.try_clone().context("clone daemon log handle")?;
     let exe = std::env::current_exe().context("resolve current executable")?;
     let mut command = Command::new(exe);
+    // C.4: stop passing `--token` on argv. The daemon child reads its
+    // expected token from `daemon.json` (written below before the child
+    // becomes ready). TODO(PR12): igloo-shell's `__daemon-run` argv parser
+    // must drop the `--token` argument and load the token from
+    // `daemon.json` keyed by `--profile`.
+    //
+    // C.5: stop setting `IGLOO_SHELL_PROFILE_PASSPHRASE` in the child env;
+    // the passphrase is written to stdin instead. TODO(PR12): igloo-shell's
+    // `__daemon-run` startup path must read its passphrase from stdin.
     command
         .arg("__daemon-run")
         .arg("--profile")
         .arg(profile_id)
         .arg("--socket-path")
         .arg(&transport.socket_path)
-        .arg("--token")
-        .arg(&transport.token)
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    if let Some(passphrase) = &passphrase {
-        command.env(PROFILE_PASSPHRASE_ENV, passphrase);
-    }
+        .stderr(Stdio::from(stderr))
+        .stdin(Stdio::piped());
     let mut child = command.spawn().context("spawn profile daemon")?;
+
+    // Pipe the passphrase to the child over stdin. We send a newline-
+    // terminated UTF-8 line and then close stdin; the child's read_line
+    // call returns immediately on EOF. Even when the caller did not
+    // provide a passphrase (legacy plaintext profile), we still close the
+    // pipe so the child does not hang waiting on stdin.
+    if let Some(mut child_stdin) = child.stdin.take() {
+        if let Some(passphrase) = passphrase.as_ref() {
+            child_stdin
+                .write_all(passphrase.expose_bytes())
+                .context("write passphrase to daemon stdin")?;
+            child_stdin
+                .write_all(b"\n")
+                .context("write passphrase newline to daemon stdin")?;
+        }
+        // Dropping `child_stdin` closes the pipe.
+        drop(child_stdin);
+    }
+    // `passphrase` is dropped here, zeroizing its buffer.
+    drop(passphrase);
 
     let metadata = DaemonMetadata {
         profile_id: profile_id.to_string(),
         pid: child.id(),
         socket_path: transport.socket_path.display().to_string(),
-        token: transport.token.clone(),
+        token: transport.token.to_hex(),
         log_path: log_path.display().to_string(),
         started_at: now_unix_secs(),
     };
     write_daemon_metadata(paths, profile_id, &metadata)?;
 
-    let client = DaemonClient::new(PathBuf::from(&metadata.socket_path), metadata.token.clone());
+    let client = DaemonClient::new(
+        PathBuf::from(&metadata.socket_path),
+        transport.token.clone_secret(),
+    );
     let mut last_error = None;
     for _ in 0..50 {
         match client.runtime_metadata().await {
@@ -413,7 +459,8 @@ pub async fn stop_profile_daemon_typed(
     profile_id: &str,
 ) -> Result<ShutdownPayload> {
     let metadata = read_daemon_metadata(paths, profile_id)?;
-    let client = DaemonClient::new(PathBuf::from(metadata.socket_path), metadata.token);
+    let token = DaemonToken::from_hex(&metadata.token).context("parse daemon.json token")?;
+    let client = DaemonClient::new(PathBuf::from(metadata.socket_path), token);
     let result = client.shutdown().await?;
     remove_daemon_metadata(paths, profile_id)?;
     Ok(result)
@@ -430,7 +477,7 @@ pub async fn import_profile_from_onboarding_value(
     package_raw: &str,
     label: Option<String>,
     relay_profile: Option<String>,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
     onboarding_password: Option<String>,
 ) -> Result<ProfileImportResult> {
     paths.ensure()?;
@@ -484,7 +531,7 @@ pub fn finalize_connected_onboarding_import(
     connection: ConnectedOnboardingImport,
     label: Option<String>,
     relay_profile: Option<String>,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     paths.ensure()?;
     let relay_profile_id = profile_domain(paths).ensure_onboarding_relay_profile(
@@ -496,6 +543,8 @@ pub fn finalize_connected_onboarding_import(
     let share_raw =
         serde_json::to_string_pretty(&SharePackageWire::from(connection.completion.share.clone()))
             .context("serialize onboarded share package")?;
+    // C.5: env-var fallback removed; caller provides `Passphrase` directly.
+    let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
     let share_record = bifrost_profile::FilesystemEncryptedProfileStore::new(
         &paths.encrypted_profiles_dir,
         &paths.encrypted_profiles_dir,
@@ -504,11 +553,10 @@ pub fn finalize_connected_onboarding_import(
         "share_package",
         "bfonboard_import",
         &share_raw,
-        &passphrase
-            .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
-            .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?,
+        passphrase.expose_secret(),
         now_unix_secs(),
     )?;
+    drop(passphrase);
 
     let imported = profile_domain(paths).finalize_onboarding_import(
         &connection.completion.group,
@@ -552,14 +600,14 @@ pub async fn apply_rotation_update_from_bfonboard_value(
     target_profile_id: &str,
     package_raw: &str,
     onboarding_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     let target = profile_manifest_store(paths).read_profile(target_profile_id)?;
     let connection = connect_onboarding_package_preview(package_raw, onboarding_password).await?;
 
     let target_payload = {
         let relay_profile = read_relay_profile(paths, &target.relay_profile)?;
-        let share_raw = load_share_payload_with_passphrase(paths, &target, passphrase.clone())?;
+        let share_raw = load_share_payload_with_passphrase(paths, &target, passphrase.as_ref())?;
         let group_raw = fs::read_to_string(&target.group_ref)
             .with_context(|| format!("read {}", target.group_ref))?;
         let group = bifrost_codec::parse_group_package(&group_raw)

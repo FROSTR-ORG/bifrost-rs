@@ -1,6 +1,8 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use bifrost_bridge_tokio::{Bridge, NostrSdkAdapter};
+use bifrost_core::secret::{DaemonToken, Passphrase};
 use bifrost_signer::DeviceStore;
+use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 
@@ -13,11 +15,70 @@ use super::handlers::{execute_control_payload, persist_if_needed};
 use super::protocol::{ControlRequest, ControlResponse};
 use super::types::{DaemonTransportConfig, bridge_config};
 
+/// Failure modes for [`read_passphrase_from_stdin`].
+///
+/// The variants intentionally do not echo the line that was read, so
+/// passphrase prefixes cannot leak into error output.
+#[derive(Debug, Error)]
+pub enum DaemonStartupError {
+    /// stdin closed before a newline-terminated passphrase arrived.
+    #[error("daemon stdin closed before passphrase was sent")]
+    PassphraseStdinClosed,
+
+    /// stdin returned an OS error before a passphrase could be read.
+    #[error("daemon stdin read failed: {0}")]
+    PassphraseStdinIo(#[from] std::io::Error),
+}
+
+/// Read a single newline-terminated line from `stdin` and wrap it in a
+/// [`Passphrase`].
+///
+/// C.5: every daemon-spawn path (`bifrost_app::start_profile_daemon_with_passphrase`
+/// and the consuming host's daemon argv handler) now pipes the passphrase
+/// over stdin instead of via `IGLOO_SHELL_PROFILE_PASSPHRASE`. This helper
+/// is the canonical receiver-side reader.
+///
+/// The trailing newline is stripped before wrapping. The `String` buffer
+/// is consumed into `Passphrase::new`, so its bytes are zeroized on drop.
+/// If the spawning parent closes stdin without ever sending a passphrase,
+/// or sends bytes without a terminating newline before EOF and the line is
+/// empty, the function returns [`DaemonStartupError::PassphraseStdinClosed`]
+/// — the daemon must not hang on a half-closed pipe.
+pub fn read_passphrase_from_stdin() -> Result<Passphrase, DaemonStartupError> {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line)?;
+    if read == 0 {
+        return Err(DaemonStartupError::PassphraseStdinClosed);
+    }
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(Passphrase::new(line))
+}
+
 #[cfg(unix)]
 pub async fn run_resolved_daemon(
     config: ResolvedAppConfig,
     transport: DaemonTransportConfig,
 ) -> Result<()> {
+    // C.4: harden file-creation permissions for the entire daemon lifetime.
+    // We deliberately discard the previous umask — the daemon should not
+    // inherit a relaxed umask from its caller, and any file it writes
+    // (state, control socket, logs) should default to user-only access.
+    //
+    // SAFETY: `libc::umask` is an FFI call that mutates a single
+    // process-global value with no other side effects. It is async-signal
+    // safe and safe to call from any thread context.
+    #[cfg(unix)]
+    unsafe {
+        libc::umask(0o077);
+    }
+
     let state_path = config.state_path.clone();
     let _lock = DeviceLock::acquire_exclusive(&state_path)?;
     let signer = load_or_init_signer_resolved(
@@ -40,6 +101,15 @@ pub async fn run_resolved_daemon(
         std::fs::create_dir_all(parent)?;
     }
     let listener = tokio::net::UnixListener::bind(&transport.socket_path)?;
+    // C.4: tighten the control socket to 0o600 immediately after bind so it
+    // is never connectable by other users on the host, even momentarily.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            &transport.socket_path,
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let mut shutdown_tx = Some(shutdown_tx);
     let mut save_tick = tokio::time::interval(std::time::Duration::from_secs(
@@ -97,16 +167,16 @@ pub(crate) async fn handle_control_stream(
     bridge: &Bridge,
     store: &EncryptedFileStore,
     config: &ResolvedAppConfig,
-    expected_token: &str,
+    expected_token: &DaemonToken,
     stream: &mut tokio::net::UnixStream,
     shutdown_tx: &mut Option<oneshot::Sender<()>>,
 ) -> Result<()> {
     let mut request_bytes = Vec::new();
     stream.read_to_end(&mut request_bytes).await?;
-    let request: ControlRequest =
-        serde_json::from_slice(&request_bytes).context("invalid control request json")?;
+    let request = ControlRequest::decode_wire(&request_bytes)?;
 
-    let response = if request.token != expected_token {
+    // Constant-time comparison via `DaemonToken`'s `PartialEq` (subtle).
+    let response = if &request.token != expected_token {
         ControlResponse {
             request_id: request.request_id,
             ok: false,
@@ -153,6 +223,18 @@ mod tests {
 
     use crate::host::protocol::ControlCommand;
     use crate::runtime::AppOptions;
+
+    fn token_with_byte(b: u8) -> DaemonToken {
+        DaemonToken::from_hex(&hex::encode([b; 32])).expect("test token hex")
+    }
+
+    fn expected_token() -> DaemonToken {
+        token_with_byte(0xAB)
+    }
+
+    fn wrong_token() -> DaemonToken {
+        token_with_byte(0x07)
+    }
 
     struct MockRelayAdapter {
         inbound_rx: mpsc::UnboundedReceiver<nostr::Event>,
@@ -266,23 +348,25 @@ mod tests {
         let fixture = daemon_fixture().await;
         let (mut client, mut server) = socket_pair().await;
         let mut shutdown_tx = None;
+        let token = expected_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
 
-        let request = serde_json::to_vec(&ControlRequest {
+        let request = ControlRequest {
             request_id: "req-status".to_string(),
-            token: "expected-token".to_string(),
+            token: expected_token(),
             command: ControlCommand::Status,
-        })
+        }
+        .encode_wire()
         .expect("serialize");
         client.write_all(&request).await.expect("write request");
         client.shutdown().await.expect("shutdown client");
@@ -300,22 +384,24 @@ mod tests {
         let fixture = daemon_fixture().await;
         let (mut client, mut server) = socket_pair().await;
         let mut shutdown_tx = None;
+        let token = expected_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
-        let invalid_request = serde_json::to_vec(&ControlRequest {
+        let invalid_request = ControlRequest {
             request_id: "req-auth".to_string(),
-            token: "wrong-token".to_string(),
+            token: wrong_token(),
             command: ControlCommand::Status,
-        })
+        }
+        .encode_wire()
         .expect("serialize invalid request");
         client
             .write_all(&invalid_request)
@@ -339,12 +425,13 @@ mod tests {
         let fixture = daemon_fixture().await;
         let (mut client, mut server) = socket_pair().await;
         let mut shutdown_tx = None;
+        let token = expected_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
@@ -369,23 +456,25 @@ mod tests {
         let (mut client, mut server) = socket_pair().await;
         let (tx, rx) = oneshot::channel();
         let mut shutdown_tx = Some(tx);
+        let token = expected_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
 
-        let request = serde_json::to_vec(&ControlRequest {
+        let request = ControlRequest {
             request_id: "req-shutdown".to_string(),
-            token: "expected-token".to_string(),
+            token: expected_token(),
             command: ControlCommand::Shutdown,
-        })
+        }
+        .encode_wire()
         .expect("serialize shutdown request");
         client.write_all(&request).await.expect("write request");
         client.shutdown().await.expect("shutdown client");
@@ -404,22 +493,24 @@ mod tests {
         let (mut client, mut server) = socket_pair().await;
         let (tx, mut rx) = oneshot::channel();
         let mut shutdown_tx = Some(tx);
+        let token = expected_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
-        let request = serde_json::to_vec(&ControlRequest {
+        let request = ControlRequest {
             request_id: "req-status".to_string(),
-            token: "expected-token".to_string(),
+            token: expected_token(),
             command: ControlCommand::Status,
-        })
+        }
+        .encode_wire()
         .expect("serialize status request");
         client.write_all(&request).await.expect("write request");
         client.shutdown().await.expect("shutdown client");
