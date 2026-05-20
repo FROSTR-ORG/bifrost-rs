@@ -562,11 +562,11 @@ pub async fn import_profile_from_onboarding_value(
     onboarding_password: Option<String>,
 ) -> Result<ProfileImportResult> {
     paths.ensure()?;
-    let password = onboarding_password
-        .or_else(|| std::env::var("IGLOO_SHELL_ONBOARDING_PASSWORD").ok())
-        .ok_or_else(|| {
-            anyhow!("onboarding package password not provided; set IGLOO_SHELL_ONBOARDING_PASSWORD")
-        })?;
+    // C.5: `IGLOO_SHELL_ONBOARDING_PASSWORD` env fallback removed in PR12b.
+    // Callers must supply the onboarding password explicitly; igloo-shell
+    // reads it via stdin or a TTY prompt.
+    let password =
+        onboarding_password.ok_or_else(|| anyhow!("onboarding package password not provided"))?;
     let decoded = decode_bfonboard_package(package_raw, password.as_str())
         .context("decode bfonboard package")?;
     let completion = complete_onboarding_package(decoded, Duration::from_secs(30)).await?;

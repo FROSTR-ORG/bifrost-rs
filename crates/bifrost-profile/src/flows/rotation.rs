@@ -148,7 +148,7 @@ mod tests {
             &share_path,
             Some("Alice".to_string()),
             Some("local".to_string()),
-            Some("rotation-test-passphrase".to_string()),
+            Some(Passphrase::new("rotation-test-passphrase".to_string())),
         )
         .expect("import profile");
         match result {

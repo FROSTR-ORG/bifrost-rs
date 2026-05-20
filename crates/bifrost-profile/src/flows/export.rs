@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use bifrost_codec::parse_share_package;
+use bifrost_core::secret::Passphrase;
 use frostr_utils::{
     BfOnboardPayload, BfSharePayload, encode_bfonboard_package, encode_bfprofile_package,
     encode_bfshare_package,
@@ -25,7 +26,7 @@ pub fn export_profile(
     paths: &ProfilePaths,
     profile_id: &str,
     out_dir: &Path,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<ProfileExportResult> {
     paths.ensure()?;
     #[cfg(unix)]
@@ -61,7 +62,7 @@ pub fn export_profile_as_bfprofile(
     paths: &ProfilePaths,
     profile_id: &str,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -80,7 +81,7 @@ pub fn export_profile_as_bfshare(
     paths: &ProfilePaths,
     profile_id: &str,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -107,7 +108,7 @@ pub fn export_profile_as_bfonboard(
     recipient_share_path: &Path,
     relay_urls: Option<Vec<String>>,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -268,7 +269,7 @@ mod tests {
             &share_path,
             Some("Alice".to_string()),
             Some("local".to_string()),
-            Some("encrypted-profile-pass".to_string()),
+            Some(Passphrase::new("encrypted-profile-pass".to_string())),
         )
         .expect("import profile");
         match result {
@@ -282,13 +283,9 @@ mod tests {
         let paths = test_paths("raw");
         let profile_id = import_sample_profile(&paths);
         let out_dir = paths.data_dir.join("raw-export");
-        let result = export_profile(
-            &paths,
-            &profile_id,
-            &out_dir,
-            Some("encrypted-profile-pass".into()),
-        )
-        .expect("export profile");
+        let pass = Passphrase::new("encrypted-profile-pass".into());
+        let result =
+            export_profile(&paths, &profile_id, &out_dir, Some(&pass)).expect("export profile");
         assert_eq!(result.profile_id, profile_id);
         assert!(Path::new(result.group_path.as_deref().expect("group path")).exists());
         assert!(Path::new(&result.share_path).exists());
@@ -298,11 +295,12 @@ mod tests {
     fn bfprofile_export_round_trips_into_import() {
         let paths = test_paths("bfprofile");
         let profile_id = import_sample_profile(&paths);
+        let pass = Passphrase::new("encrypted-profile-pass".to_string());
         let exported = export_profile_as_bfprofile(
             &paths,
             &profile_id,
             "package-pass".to_string(),
-            Some("encrypted-profile-pass".to_string()),
+            Some(&pass),
             None,
         )
         .expect("export bfprofile");
@@ -312,7 +310,7 @@ mod tests {
             "package-pass".to_string(),
             Some("Recovered".to_string()),
             Some("local".to_string()),
-            Some("encrypted-profile-pass".to_string()),
+            Some(Passphrase::new("encrypted-profile-pass".to_string())),
         )
         .expect("import bfprofile");
         match imported {
