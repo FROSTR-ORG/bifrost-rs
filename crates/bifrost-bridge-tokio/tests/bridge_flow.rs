@@ -176,12 +176,7 @@ async fn assert_all_peers_nonce_ready(bridge: &Bridge, expected_peers: usize) ->
 
 #[tokio::test]
 async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let peer_pubkeys = group
@@ -267,12 +262,7 @@ async fn bridge_roundtrip_ping_onboard_sign_and_ecdh() {
 
 #[tokio::test]
 async fn refresh_all_peers_converges_to_symmetric_nonce_ready_status_across_three_bridges() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let relay_hub = SharedRelayHub::default();
 

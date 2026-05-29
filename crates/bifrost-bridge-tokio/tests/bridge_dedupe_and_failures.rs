@@ -66,12 +66,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 
 #[tokio::test]
 async fn ecdh_round_fails_on_invalid_locked_peer_response() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 3,
-        count: 4,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 3, 4)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let local_signer = build_signer(&group, &local_share);
@@ -175,12 +170,7 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
 
 #[tokio::test]
 async fn inbound_duplicate_event_is_processed_once() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let remote_share = bundle.shares[1].clone();

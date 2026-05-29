@@ -21,12 +21,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 
 #[test]
 fn onboarded_signer_can_respond_to_sign_request_after_nonce_advertisement() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let inviter_share = bundle.shares[0].clone();
     let requester_share = bundle.shares[1].clone();
@@ -90,12 +85,7 @@ fn onboarded_signer_can_respond_to_sign_request_after_nonce_advertisement() {
 
 #[test]
 fn onboarded_signer_can_initiate_sign_with_inviter_bootstrap_nonces() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let inviter_share = bundle.shares[0].clone();
     let requester_share = bundle.shares[1].clone();

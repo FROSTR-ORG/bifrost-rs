@@ -1006,12 +1006,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn import_profiles_and_runtime_helpers_work_with_fake_shell() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let material_dir = temp_path("material");
         fs::create_dir_all(&material_dir).expect("create material dir");
         fs::write(

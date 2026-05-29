@@ -229,12 +229,8 @@ mod tests {
     fn import_sample_profile(paths: &ProfilePaths) -> String {
         paths.ensure().expect("ensure paths");
         write_relay_profile(paths);
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Export Test".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Export Test", 2, 3)).expect("create keyset");
         let group_path = paths.imports_dir.join("group.json");
         let share_path = paths.imports_dir.join("share.json");
         fs::create_dir_all(&paths.imports_dir).expect("create imports dir");

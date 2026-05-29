@@ -421,12 +421,7 @@ mod tests {
         Vec<frost::round1::SigningNonces>,
         Vec<frost::round1::SigningNonces>,
     ) {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("bundle");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");
 
         let share_a = bundle.shares[0].clone();
         let share_b = bundle.shares[1].clone();
@@ -510,12 +505,7 @@ mod tests {
 
     #[test]
     fn stateless_ecdh_flow_roundtrip() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("bundle");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");
 
         let share_a = bundle.shares[0].clone();
         let share_b = bundle.shares[1].clone();
@@ -533,12 +523,7 @@ mod tests {
 
     #[test]
     fn stateless_onboard_exchange_roundtrip() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("bundle");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");
         let local_share = bundle.shares[0].clone();
         let inviter_share = bundle.shares[1].clone();
         let inviter_secret = SecretKey::from_slice(&inviter_share.seckey).expect("inviter secret");

@@ -52,12 +52,7 @@ async fn wait_for_socket(socket_path: &Path) {
 
 #[tokio::test]
 async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let config = resolved_config(
         bundle.group,
         bundle.shares[0].clone(),
@@ -102,12 +97,7 @@ async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
 
 #[tokio::test]
 async fn daemon_control_admin_commands_roundtrip() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let config = resolved_config(
         bundle.group,
         bundle.shares[0].clone(),
@@ -160,12 +150,7 @@ async fn daemon_control_admin_commands_roundtrip() {
 
 #[tokio::test]
 async fn daemon_control_runtime_surfaces_roundtrip() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let config = resolved_config(
         bundle.group,
         bundle.shares[0].clone(),

@@ -21,12 +21,7 @@ fn temp_path(name: &str, suffix: &str) -> PathBuf {
 }
 
 fn resolved_config() -> ResolvedAppConfig {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     ResolvedAppConfig {
         group: bundle.group,
         share: bundle.shares[0].clone(),

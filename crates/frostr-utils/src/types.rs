@@ -6,6 +6,23 @@ pub struct CreateKeysetConfig {
     pub group_name: String,
     pub threshold: u16,
     pub count: u16,
+    #[serde(default)]
+    pub signing_key32: Option<Bytes32>,
+}
+
+impl CreateKeysetConfig {
+    /// Construct a config that generates a fresh signing key.
+    ///
+    /// Optional generation inputs (such as an existing signing key) default to
+    /// `None`, so adding further optional fields here does not churn call sites.
+    pub fn new(group_name: impl Into<String>, threshold: u16, count: u16) -> Self {
+        Self {
+            group_name: group_name.into(),
+            threshold,
+            count,
+            signing_key32: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

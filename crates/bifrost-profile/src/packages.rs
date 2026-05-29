@@ -174,12 +174,8 @@ mod tests {
     use frostr_utils::{CreateKeysetConfig, create_keyset};
 
     fn sample_payload() -> BfProfilePayload {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Managed Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Managed Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[1].clone();
         BfProfilePayload {
             profile_id: derive_profile_id_for_share_secret(&hex::encode(share.seckey))

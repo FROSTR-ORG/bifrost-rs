@@ -66,12 +66,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 
 #[tokio::test]
 async fn runtime_metadata_and_update_config_roundtrip() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let signer = build_signer(&group, &local_share);
@@ -115,12 +110,7 @@ async fn runtime_metadata_and_update_config_roundtrip() {
 
 #[tokio::test]
 async fn request_phase_reaches_completed_for_successful_ping() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let target_peer = hex::encode(&group.members[1].pubkey[1..]);
@@ -182,12 +172,7 @@ async fn request_phase_reaches_completed_for_successful_ping() {
 
 #[tokio::test]
 async fn request_phase_reaches_completed_for_successful_onboard_and_sign() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let target_peer = hex::encode(&group.members[1].pubkey[1..]);
@@ -258,12 +243,7 @@ async fn request_phase_reaches_completed_for_successful_onboard_and_sign() {
 
 #[tokio::test]
 async fn publish_failure_marks_request_failed() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let target_peer = hex::encode(&group.members[1].pubkey[1..]);
@@ -311,12 +291,7 @@ async fn publish_failure_marks_request_failed() {
 
 #[tokio::test]
 async fn locked_peer_timeout_marks_request_failed() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let target_peer = hex::encode(&group.members[1].pubkey[1..]);

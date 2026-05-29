@@ -142,12 +142,8 @@ mod tests {
     }
 
     async fn host_fixture_with_state(state: DeviceState) -> HostFixture {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
         let signer = build_signer(&group, &share, state);
@@ -186,12 +182,8 @@ mod tests {
     }
 
     async fn host_live_fixture() -> (HostFixture, tokio::task::JoinHandle<()>) {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
         let signer = build_signer(&group, &share, DeviceState::new(share.idx, share.seckey));
@@ -269,12 +261,8 @@ mod tests {
     }
 
     fn host_config_fixture() -> HostConfigFixture {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group_path = temp_path("cfg-group", "json");
         let share_path = temp_path("cfg-share", "json");
         let state_path = temp_path("cfg-state", "bin");

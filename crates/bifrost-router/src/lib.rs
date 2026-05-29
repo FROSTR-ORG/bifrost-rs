@@ -745,12 +745,8 @@ mod tests {
 
     #[test]
     fn enqueue_command_returns_queue_full_when_capacity_is_exhausted() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let mut core = BridgeCore::new(
             build_signer(&bundle.group, &share),
@@ -776,12 +772,8 @@ mod tests {
 
     #[test]
     fn enqueue_command_drop_oldest_keeps_newest_command() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let peer_a = encode_hex(&bundle.group.members[1].pubkey[1..]);
         let peer_b = encode_hex(&bundle.group.members[2].pubkey[1..]);
@@ -811,12 +803,8 @@ mod tests {
 
     #[test]
     fn wipe_state_resets_request_phases_and_persistence_hint() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
         let mut core =
@@ -842,12 +830,8 @@ mod tests {
 
     #[test]
     fn inbound_queue_fail_policy_rejects_newest_event() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let local_pubkey = encode_hex(
             &bundle
@@ -887,12 +871,8 @@ mod tests {
 
     #[test]
     fn inbound_queue_drop_oldest_keeps_newest_event() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let local_pubkey = encode_hex(
             &bundle
@@ -932,12 +912,8 @@ mod tests {
 
     #[test]
     fn dedupe_cache_eviction_allows_reprocessing_oldest_event() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let local_pubkey = encode_hex(
             &bundle
@@ -973,12 +949,8 @@ mod tests {
 
     #[test]
     fn fail_request_marks_phase_failed_and_emits_failure() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
         let mut core =
@@ -1004,12 +976,8 @@ mod tests {
 
     #[test]
     fn expire_marks_timed_out_request_failed() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         let peer = encode_hex(&bundle.group.members[1].pubkey[1..]);
         let mut core = BridgeCore::new(

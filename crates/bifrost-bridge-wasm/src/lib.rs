@@ -9,14 +9,13 @@ use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolic
 use bifrost_signer::{
     CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
     PeerNonceInventoryObservation, RuntimeStatusSummary, SigningDevice,
-    finalize_onboarding_bootstrap_seed,
-    generate_onboarding_bootstrap_seed,
+    finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
     EncryptedProfileBackup, PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE,
-    PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair, RotateKeysetRequest,
-    build_onboard_request_event as rust_build_onboard_request_event,
+    PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair, RecoverKeyInput,
+    RotateKeysetRequest, build_onboard_request_event as rust_build_onboard_request_event,
     build_profile_backup_event as rust_build_profile_backup_event,
     create_encrypted_profile_backup as rust_create_encrypted_profile_backup,
     create_keyset as rust_create_keyset,
@@ -33,7 +32,7 @@ use frostr_utils::{
     encode_bfshare_package as rust_encode_bfshare_package,
     encrypt_profile_backup_content as rust_encrypt_profile_backup_content,
     generate_opaque_request_id as rust_generate_opaque_request_id,
-    parse_profile_backup_event as rust_parse_profile_backup_event,
+    parse_profile_backup_event as rust_parse_profile_backup_event, recover_key as rust_recover_key,
     rotate_keyset_dealer as rust_rotate_keyset_dealer,
 };
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -226,6 +225,12 @@ struct RotateKeysetBundleInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecoverKeyBundleInput {
+    group: GroupPackageWire,
+    shares: Vec<SharePackageWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct KeysetBundleExport {
     group: GroupPackageWire,
     shares: Vec<SharePackageWire>,
@@ -292,6 +297,10 @@ enum CompletedOperationJson {
         group_member_count: usize,
         group: GroupPackageWire,
         nonces: Vec<DerivedPublicNonceWire>,
+    },
+    OnboardServed {
+        request_id: String,
+        peer_pubkey32_hex: String,
     },
 }
 
@@ -867,6 +876,29 @@ pub fn rotate_keyset_bundle(input_json: String) -> HostResult<String> {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn recover_secret_key_from_shares(input_json: String) -> HostResult<String> {
+    let input: RecoverKeyBundleInput =
+        serde_json::from_str(&input_json).map_err(|e| to_host_error(e.to_string()))?;
+    let group: GroupPackage = input
+        .group
+        .try_into()
+        .map_err(|e: CodecError| to_host_error(e.to_string()))?;
+    let shares = input
+        .shares
+        .into_iter()
+        .map(|share| {
+            share
+                .try_into()
+                .map_err(|e: CodecError| anyhow!(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|e| to_host_error(e.to_string()))?;
+    let recovered = rust_recover_key(&RecoverKeyInput { group, shares })
+        .map_err(|e| to_host_error(e.to_string()))?;
+    Ok(hex::encode(recovered.signing_key32))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn derive_group_id(group_json: String) -> HostResult<String> {
     let group_wire: GroupPackageWire =
         serde_json::from_str(&group_json).map_err(|e| to_host_error(e.to_string()))?;
@@ -1093,7 +1125,9 @@ fn nonce_pool_snapshot_json(
         let idx = decode_member_index(&group, peer)?;
         let stats = state.nonce_pool.peer_stats(idx);
         let current_codes = state.nonce_pool.outgoing_public_nonce_codes(idx);
-        let current_code_set = current_codes.into_iter().collect::<std::collections::HashSet<_>>();
+        let current_code_set = current_codes
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let observed_count = state
             .remote_nonce_inventory_observations
             .get(peer)
@@ -1244,12 +1278,8 @@ mod tests {
 
     #[test]
     fn build_core_seeds_initial_peer_nonces_into_runtime_state() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group;
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
@@ -1288,13 +1318,52 @@ mod tests {
     }
 
     #[test]
+    fn recover_secret_key_from_shares_reconstructs_and_validates_threshold() {
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Recover Group", 2, 3)).expect("create keyset");
+
+        // Threshold-many shares reconstruct successfully (recover_key validates the
+        // reconstructed key against the group public key internally).
+        let ok_input = RecoverKeyBundleInput {
+            group: GroupPackageWire::from(bundle.group.clone()),
+            shares: bundle
+                .shares
+                .iter()
+                .take(2)
+                .cloned()
+                .map(SharePackageWire::from)
+                .collect(),
+        };
+        let recovered = recover_secret_key_from_shares(
+            serde_json::to_string(&ok_input).expect("serialize input"),
+        )
+        .expect("recover key");
+        assert_eq!(recovered.len(), 64, "signing key hex should be 32 bytes");
+
+        // Fewer than threshold shares must be rejected.
+        let short_input = RecoverKeyBundleInput {
+            group: GroupPackageWire::from(bundle.group.clone()),
+            shares: bundle
+                .shares
+                .iter()
+                .take(1)
+                .cloned()
+                .map(SharePackageWire::from)
+                .collect(),
+        };
+        assert!(
+            recover_secret_key_from_shares(
+                serde_json::to_string(&short_input).expect("serialize short input"),
+            )
+            .is_err(),
+            "insufficient shares must fail",
+        );
+    }
+
+    #[test]
     fn snapshot_json_serializes_nonce_pool_stats() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
@@ -1335,12 +1404,8 @@ mod tests {
 
     #[test]
     fn read_and_update_config_round_trip() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let local_share = bundle.shares[0].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
@@ -1395,12 +1460,8 @@ mod tests {
 
     #[test]
     fn readiness_reports_capability_counts() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
@@ -1454,12 +1515,8 @@ mod tests {
 
     #[test]
     fn runtime_diagnostics_reports_operation_readiness_fields() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
@@ -1507,12 +1564,8 @@ mod tests {
 
     #[test]
     fn runtime_diagnostics_matches_runtime_status_contract() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let local_share = bundle.shares[0].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
@@ -1554,12 +1607,8 @@ mod tests {
 
     #[test]
     fn init_runtime_rejects_invalid_bridge_config_and_bad_command_hex() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
         let mut runtime = WasmBridgeRuntime::new();
 
@@ -1596,12 +1645,8 @@ mod tests {
 
     #[test]
     fn restore_runtime_round_trip_preserves_runtime_metadata_and_status() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
         let mut runtime = WasmBridgeRuntime::new();
         runtime
@@ -1643,12 +1688,8 @@ mod tests {
 
     #[test]
     fn decode_bfonboard_package_round_trips_and_rejects_wrong_password() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[1].clone();
         let payload = BfOnboardPayload {
@@ -1674,12 +1715,8 @@ mod tests {
 
     #[test]
     fn refresh_all_peers_policy_updates_and_runtime_events_round_trip() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
         let first_peer = bootstrap.peers[0].clone();
 
@@ -1743,12 +1780,8 @@ mod tests {
 
     #[test]
     fn wipe_state_clears_runtime_status_and_emits_state_wiped_event() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
 
         let mut runtime = WasmBridgeRuntime::new();
@@ -1780,12 +1813,8 @@ mod tests {
 
     #[test]
     fn runtime_metadata_peer_status_and_empty_drains_are_queryable() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
 
         let mut runtime = WasmBridgeRuntime::new();
@@ -1893,12 +1922,8 @@ mod tests {
 
     #[test]
     fn queue_runtime_status_event_dedupes_unchanged_status_changed_events() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
         let core = build_core(
             &RuntimeConfigInput {
@@ -1929,12 +1954,8 @@ mod tests {
 
     #[test]
     fn public_runtime_error_paths_cover_invalid_input_helpers() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let bootstrap = bootstrap_for_bundle(&bundle, 0);
         let mut runtime = WasmBridgeRuntime::new();
         runtime
@@ -1962,12 +1983,8 @@ mod tests {
 
     #[test]
     fn ping_round_trip_flows_through_outbound_inbound_tick_and_completions() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
         let bob_bootstrap = bootstrap_for_bundle(&bundle, 1);
         let bob_peer = alice_bootstrap.peers[0].clone();
@@ -2049,12 +2066,8 @@ mod tests {
 
     #[test]
     fn timeout_flow_surfaces_failures_through_runtime_wrapper() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 2,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
         let alice_bootstrap = bootstrap_for_bundle(&bundle, 0);
         let bob_peer = alice_bootstrap.peers[0].clone();
         let device = DeviceConfig {
@@ -2171,6 +2184,10 @@ impl From<CompletedOperation> for CompletedOperationJson {
                 group_member_count,
                 group: GroupPackageWire::from(group),
                 nonces: nonces.into_iter().map(Into::into).collect(),
+            },
+            CompletedOperation::OnboardServed { request_id, peer } => Self::OnboardServed {
+                request_id,
+                peer_pubkey32_hex: peer,
             },
         }
     }

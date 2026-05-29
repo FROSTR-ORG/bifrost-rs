@@ -14,13 +14,27 @@ use crate::verify::verify_keyset;
 pub fn create_keyset(config: CreateKeysetConfig) -> FrostUtilsResult<KeysetBundle> {
     validate_keyset_shape(config.threshold, config.count)?;
 
-    let (shares, public_key_package) = frost::keys::generate_with_dealer(
-        config.count,
-        config.threshold,
-        frost::keys::IdentifierList::Default,
-        OsRng,
-    )
-    .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+    let (shares, public_key_package) = if let Some(signing_key32) = config.signing_key32 {
+        let signing_key = frost::SigningKey::deserialize(&signing_key32)
+            .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+            .into_even_y(None);
+        frost::keys::split(
+            &signing_key,
+            config.count,
+            config.threshold,
+            frost::keys::IdentifierList::Default,
+            &mut OsRng,
+        )
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+    } else {
+        frost::keys::generate_with_dealer(
+            config.count,
+            config.threshold,
+            frost::keys::IdentifierList::Default,
+            OsRng,
+        )
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
+    };
 
     build_keyset_bundle(
         config.group_name,
@@ -168,24 +182,34 @@ mod tests {
 
     #[test]
     fn create_keyset_builds_valid_bundle() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
         assert_eq!(bundle.group.members.len(), 3);
         assert_eq!(bundle.shares.len(), 3);
     }
 
     #[test]
-    fn rotate_keyset_preserves_group_public_key() {
-        let current = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
+    fn create_keyset_can_split_existing_signing_key() {
+        let signing_key32 = [7u8; 32];
+        let bundle = create_keyset(CreateKeysetConfig {
+            group_name: "Imported Key".to_string(),
             threshold: 2,
             count: 3,
+            signing_key32: Some(signing_key32),
         })
-        .expect("create");
+        .expect("create from existing key");
+
+        let recovered = recover_key(&RecoverKeyInput {
+            group: bundle.group.clone(),
+            shares: bundle.shares[..2].to_vec(),
+        })
+        .expect("recover key");
+
+        assert_eq!(recovered.signing_key32, signing_key32);
+    }
+
+    #[test]
+    fn rotate_keyset_preserves_group_public_key() {
+        let current = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let rotated = rotate_keyset_dealer(
             &current.group,
@@ -205,12 +229,7 @@ mod tests {
 
     #[test]
     fn rotate_keyset_allows_threshold_and_count_change() {
-        let current = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let current = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let rotated = rotate_keyset_dealer(
             &current.group,
@@ -230,12 +249,7 @@ mod tests {
 
     #[test]
     fn rotated_group_rejects_old_shares() {
-        let current = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let current = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let rotated = rotate_keyset_dealer(
             &current.group,
@@ -253,12 +267,7 @@ mod tests {
 
     #[test]
     fn rotated_shares_recover_same_signing_key() {
-        let current = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let current = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let original = recover_key(&RecoverKeyInput {
             group: current.group.clone(),

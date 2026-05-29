@@ -93,12 +93,7 @@ mod tests {
 
     #[test]
     fn recover_key_with_threshold_shares() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let input = RecoverKeyInput {
             group: bundle.group,
@@ -110,18 +105,8 @@ mod tests {
 
     #[test]
     fn recover_key_rejects_group_public_key_mismatch() {
-        let first = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
-        let second = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let first = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
+        let second = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let mismatched = RecoverKeyInput {
             group: second.group,
@@ -133,12 +118,7 @@ mod tests {
 
     #[test]
     fn recover_key_rejects_insufficient_or_unknown_shares() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let insufficient = RecoverKeyInput {
             group: bundle.group.clone(),

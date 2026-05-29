@@ -371,12 +371,7 @@ mod tests {
 
     #[test]
     fn persist_validated_onboarding_state_preserves_inviter_nonces() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("keyset");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
         let share = bundle
             .shares
             .iter()
@@ -442,12 +437,7 @@ mod tests {
 
     #[test]
     fn stateless_onboard_request_event_roundtrips_with_signer() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("keyset");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
         let local_share = bundle.shares[0].clone();
         let inviter_share = bundle.shares[1].clone();
         let inviter_pubkey = hex::encode(

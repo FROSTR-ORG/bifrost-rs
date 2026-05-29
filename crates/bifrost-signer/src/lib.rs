@@ -394,6 +394,13 @@ pub enum CompletedOperation {
         group: GroupPackage,
         nonces: Vec<DerivedPublicNonce>,
     },
+    /// Recorded by the responder after it serves an onboard response to a peer.
+    /// `peer` is the onboarding device's x-only pubkey; hosts use it to mark the
+    /// matching share as onboarded.
+    OnboardServed {
+        request_id: String,
+        peer: String,
+    },
 }
 
 impl CompletedOperation {
@@ -402,7 +409,8 @@ impl CompletedOperation {
             CompletedOperation::Sign { request_id, .. }
             | CompletedOperation::Ecdh { request_id, .. }
             | CompletedOperation::Ping { request_id, .. }
-            | CompletedOperation::Onboard { request_id, .. } => request_id,
+            | CompletedOperation::Onboard { request_id, .. }
+            | CompletedOperation::OnboardServed { request_id, .. } => request_id,
         }
     }
 }
@@ -1710,7 +1718,16 @@ impl SigningDevice {
                     group_member_count = self.group.members.len(),
                     "sending onboard response"
                 );
-                self.encrypt_for_peers(&[sender], &response)
+                let served_request_id = response.request_id.clone();
+                let served_peer = sender.clone();
+                let outbound = self.encrypt_for_peers(&[sender], &response)?;
+                // Record that we served an onboard response so hosts can mark the
+                // onboarding device's share as onboarded.
+                self.completions.push_back(CompletedOperation::OnboardServed {
+                    request_id: served_request_id,
+                    peer: served_peer,
+                });
+                Ok(outbound)
             }
             BridgePayload::SignRequest(wire) => {
                 if !self.inbound_allowed(&sender, "sign") {
@@ -2156,7 +2173,8 @@ impl SigningDevice {
     }
 
     fn peer_needs_nonce_refill(&self, peer: &str, peer_idx: u16) -> bool {
-        self.normalized_remote_held_nonce_codes(peer, peer_idx).len()
+        self.normalized_remote_held_nonce_codes(peer, peer_idx)
+            .len()
             < self.state.nonce_pool.config().min_threshold
     }
 
@@ -2196,7 +2214,11 @@ impl SigningDevice {
         }
 
         let target_size = self.nonce_sync_target_size();
-        let current_available = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx).len();
+        let current_available = self
+            .state
+            .nonce_pool
+            .outgoing_public_nonce_codes(peer_idx)
+            .len();
         if current_available < target_size {
             self.state
                 .nonce_pool
@@ -2326,12 +2348,8 @@ mod tests {
     }
 
     fn fixture(strategy: PeerSelectionStrategy) -> Fixture {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
 
         let group = bundle.group.clone();
         let shares = bundle.shares.clone();
@@ -2701,11 +2719,27 @@ mod tests {
             .expect("begin onboard")
             .outbound;
         assert_eq!(onboard.len(), 1);
-        let onboard_response = inviter
+        let inviter_effects = inviter
             .signer
-            .process_event(&onboard[0])
+            .apply(SignerInput::ProcessEvent {
+                event: onboard[0].clone(),
+            })
             .expect("process onboard");
-        assert_eq!(onboard_response.len(), 1);
+        assert_eq!(inviter_effects.outbound.len(), 1);
+        // The responder records an OnboardServed completion carrying the
+        // requester's x-only pubkey so hosts can mark its share onboarded.
+        let requester_pubkey =
+            decode_member_pubkey(&inviter.group, requester_share.idx).expect("requester pubkey");
+        let served_peer = inviter_effects
+            .completions
+            .iter()
+            .find_map(|completion| match completion {
+                CompletedOperation::OnboardServed { peer, .. } => Some(peer.clone()),
+                _ => None,
+            })
+            .expect("expected onboard-served completion");
+        assert_eq!(served_peer, requester_pubkey);
+        let onboard_response = inviter_effects.outbound;
 
         let effects = requester
             .apply(SignerInput::ProcessEvent {
@@ -2778,11 +2812,8 @@ mod tests {
             .outbound;
         assert_eq!(first_ping.len(), 1);
 
-        let decoded = decode_envelope_for_local(
-            &peer_share,
-            fixture.signer.local_pubkey32(),
-            &first_ping[0],
-        );
+        let decoded =
+            decode_envelope_for_local(&peer_share, fixture.signer.local_pubkey32(), &first_ping[0]);
         let BridgePayload::PingRequest(wire) = decoded.payload else {
             panic!("expected ping request");
         };
