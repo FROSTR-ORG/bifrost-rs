@@ -562,7 +562,7 @@ impl FilesystemEncryptedProfileStore {
             payload,
             passphrase,
             now_unix_secs,
-            &Argon2Params::default(),
+            &Argon2Params::for_new_envelope(),
         )
     }
 

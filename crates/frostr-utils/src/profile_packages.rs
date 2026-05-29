@@ -598,7 +598,12 @@ fn encrypt_plaintext_payload(
     plaintext: &str,
     password: &str,
 ) -> FrostUtilsResult<String> {
-    encrypt_plaintext_payload_with_params(prefix, plaintext, password, &Argon2Params::default())
+    encrypt_plaintext_payload_with_params(
+        prefix,
+        plaintext,
+        password,
+        &Argon2Params::for_new_envelope(),
+    )
 }
 
 fn encrypt_plaintext_payload_with_params(
@@ -624,7 +629,7 @@ fn encrypt_profile_payload_with_outer_id(
         profile_id,
         plaintext,
         password,
-        &Argon2Params::default(),
+        &Argon2Params::for_new_envelope(),
     )
 }
 

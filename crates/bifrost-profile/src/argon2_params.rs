@@ -144,6 +144,24 @@ impl Argon2Params {
         }
     }
 
+    /// Parameters for encrypting a NEW envelope.
+    ///
+    /// In release builds this is always [`Argon2Params::default`] (256 MiB / t=4).
+    /// In debug builds ONLY, setting `BIFROST_TEST_FAST_KDF` selects
+    /// [`Argon2Params::minimum_secure`] (64 MiB / t=3) so the test suites that
+    /// exercise the real CLI/daemon don't pay the full KDF cost on every round
+    /// trip. The `cfg(debug_assertions)` gate guarantees the branch is compiled
+    /// out of release binaries — production can never derive with weaker params.
+    pub fn for_new_envelope() -> Self {
+        #[cfg(debug_assertions)]
+        {
+            if std::env::var_os("BIFROST_TEST_FAST_KDF").is_some() {
+                return Self::minimum_secure();
+            }
+        }
+        Self::default()
+    }
+
     /// Memory cost in KiB.
     pub const fn m_cost(&self) -> u32 {
         self.m_cost
@@ -255,6 +273,42 @@ mod tests {
     fn new_accepts_ceiling() {
         let p = Argon2Params::new(ARGON2_MAX_M_COST, 4, 1).expect("ceiling must validate");
         assert_eq!(p.m_cost(), ARGON2_MAX_M_COST);
+    }
+
+    // Env-var mutation races under parallel test execution, so the UNSET and
+    // (debug-only) SET behaviors are asserted in a single serialized test body
+    // that reads-then-restores the var, rather than as two competing tests.
+    #[test]
+    fn for_new_envelope_honors_fast_kdf_knob() {
+        const KNOB: &str = "BIFROST_TEST_FAST_KDF";
+        let previous = std::env::var_os(KNOB);
+
+        unsafe {
+            std::env::remove_var(KNOB);
+        }
+        // UNSET path: always the production default (256 MiB / t=4), in both
+        // debug and release builds.
+        assert_eq!(Argon2Params::for_new_envelope(), Argon2Params::default());
+
+        // SET path is debug-build-only; in release the branch is compiled out
+        // by `cfg(debug_assertions)` and the resolver stays at `default()`.
+        #[cfg(debug_assertions)]
+        {
+            unsafe {
+                std::env::set_var(KNOB, "1");
+            }
+            assert_eq!(
+                Argon2Params::for_new_envelope(),
+                Argon2Params::minimum_secure()
+            );
+        }
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(KNOB, value),
+                None => std::env::remove_var(KNOB),
+            }
+        }
     }
 
     #[test]
