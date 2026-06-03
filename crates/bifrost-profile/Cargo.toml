@@ -20,9 +20,15 @@ k256.workspace = true
 futures-util.workspace = true
 nostr.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 bifrost-core = { path = "../bifrost-core" }
 bifrost-codec = { path = "../bifrost-codec" }
 frostr-utils = { path = "../frostr-utils" }
 argon2 = "0.5"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

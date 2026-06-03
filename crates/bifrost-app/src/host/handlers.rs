@@ -193,6 +193,9 @@ pub async fn execute_command(
                 resolved.options.state_save_interval_secs,
             ));
             #[cfg(unix)]
+            let empty_token = bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0u8; 32]))
+                .expect("zero token must parse");
+            #[cfg(unix)]
             loop {
                 tokio::select! {
                     _ = save_tick.tick() => {
@@ -209,7 +212,7 @@ pub async fn execute_command(
                         }
                     } => {
                         if let Some(Ok((mut stream, _))) = accept {
-                            let token = control_token.as_deref().unwrap_or_default();
+                            let token = control_token.as_ref().unwrap_or(&empty_token);
                             let mut no_shutdown = None;
                             let response = super::daemon::handle_control_stream(&bridge, &store, &resolved, token, &mut stream, &mut no_shutdown).await;
                             if let Err(err) = response {
@@ -454,7 +457,7 @@ mod tests {
             group.clone(),
             share.clone(),
             peers.clone(),
-            DeviceState::new(share.idx, share.seckey),
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
             bifrost_signer::DeviceConfig::default(),
         )
         .expect("build signer");
@@ -506,7 +509,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-status".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::Status,
             },
         )
@@ -522,7 +526,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-readiness".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::Readiness,
             },
         )
@@ -537,7 +542,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-runtime-status".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::RuntimeStatus,
             },
         )
@@ -552,7 +558,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-diag".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::RuntimeDiagnostics,
             },
         )
@@ -569,7 +576,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-meta".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::RuntimeMetadata,
             },
         )
@@ -584,7 +592,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-peer-status".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::PeerStatus,
             },
         )
@@ -599,7 +608,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-read-config".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::ReadConfig,
             },
         )
@@ -625,7 +635,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-invalid-hex".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::Sign {
                     message_hex32: "zz".to_string(),
                     timeout_secs: None,
@@ -642,7 +653,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-unknown-peer".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::Ping {
                     peer: "deadbeef".to_string(),
                     timeout_secs: Some(1),
@@ -659,7 +671,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-bad-patch".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::UpdateConfig {
                     config_patch_json: "{".to_string(),
                 },
@@ -675,7 +688,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-clear-overrides".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::ClearPeerPolicyOverrides,
             },
         )
@@ -692,7 +706,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-wipe".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::WipeState,
             },
         )
@@ -705,7 +720,8 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-shutdown".to_string(),
-                token: "token".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
                 command: ControlCommand::Shutdown,
             },
         )

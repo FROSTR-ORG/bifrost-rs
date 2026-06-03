@@ -5,6 +5,7 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
+use crate::secret::NoncePoolSecret;
 use crate::types::{Bytes32, DerivedPublicNonce, MemberPublicNonce};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,10 +27,12 @@ impl Default for NoncePoolConfig {
     }
 }
 
+/// Purely-public nonce book-keeping. The FROST signing secret that seeds
+/// nonce generation is held separately in `DeviceSecrets::nonce_pool_secret`
+/// and passed into [`NoncePool::generate_for_peer`] at call time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoncePool {
     our_idx: u16,
-    seckey: Bytes32,
     config: NoncePoolConfig,
     outgoing_public: HashMap<u16, HashMap<Bytes32, DerivedPublicNonce>>,
     outgoing_secret: HashMap<u16, HashMap<Bytes32, frost::round1::SigningNonces>>,
@@ -47,10 +50,9 @@ pub struct NoncePeerStats {
 }
 
 impl NoncePool {
-    pub fn new(our_idx: u16, seckey: Bytes32, config: NoncePoolConfig) -> Self {
+    pub fn new(our_idx: u16, config: NoncePoolConfig) -> Self {
         Self {
             our_idx,
-            seckey,
             config,
             outgoing_public: HashMap::new(),
             outgoing_secret: HashMap::new(),
@@ -130,8 +132,9 @@ impl NoncePool {
         &mut self,
         peer_idx: u16,
         count: usize,
+        seckey: &NoncePoolSecret,
     ) -> CoreResult<Vec<DerivedPublicNonce>> {
-        let signing_share = frost::keys::SigningShare::deserialize(&self.seckey)
+        let signing_share = frost::keys::SigningShare::deserialize(seckey.expose_bytes())
             .map_err(|e| CoreError::Frost(e.to_string()))?;
         let public_map = self.outgoing_public.entry(peer_idx).or_default();
         let secret_map = self.outgoing_secret.entry(peer_idx).or_default();
@@ -345,16 +348,13 @@ mod tests {
                 .expect("dealer");
         let (id, secret_share) = shares.into_iter().next().expect("share");
         let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
-        let mut seckey = [0u8; 32];
-        seckey.copy_from_slice(&key_package.signing_share().serialize());
+        let mut seckey_bytes = [0u8; 32];
+        seckey_bytes.copy_from_slice(&key_package.signing_share().serialize());
+        let seckey = NoncePoolSecret::new(seckey_bytes);
 
-        let mut pool = NoncePool::new(
-            id.serialize()[31] as u16,
-            seckey,
-            NoncePoolConfig::default(),
-        );
+        let mut pool = NoncePool::new(id.serialize()[31] as u16, NoncePoolConfig::default());
         pool.init_peer(2);
-        let generated = pool.generate_for_peer(2, 4).expect("generate");
+        let generated = pool.generate_for_peer(2, 4, &seckey).expect("generate");
         assert!(!generated.is_empty());
         pool.store_incoming(2, generated);
         let consumed = pool.consume_incoming(2);
@@ -368,17 +368,14 @@ mod tests {
                 .expect("dealer");
         let (id, secret_share) = shares.into_iter().next().expect("share");
         let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
-        let mut seckey = [0u8; 32];
-        seckey.copy_from_slice(&key_package.signing_share().serialize());
+        let mut seckey_bytes = [0u8; 32];
+        seckey_bytes.copy_from_slice(&key_package.signing_share().serialize());
+        let seckey = NoncePoolSecret::new(seckey_bytes);
 
-        let mut pool = NoncePool::new(
-            id.serialize()[31] as u16,
-            seckey,
-            NoncePoolConfig::default(),
-        );
+        let mut pool = NoncePool::new(id.serialize()[31] as u16, NoncePoolConfig::default());
         pool.init_peer(2);
 
-        let generated = pool.generate_for_peer(2, 1).expect("generate");
+        let generated = pool.generate_for_peer(2, 1, &seckey).expect("generate");
         let code = generated.first().expect("nonce").code;
 
         let first = pool.take_outgoing_signing_nonces(2, code);
@@ -395,16 +392,13 @@ mod tests {
                 .expect("dealer");
         let (id, secret_share) = shares.into_iter().next().expect("share");
         let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
-        let mut seckey = [0u8; 32];
-        seckey.copy_from_slice(&key_package.signing_share().serialize());
+        let mut seckey_bytes = [0u8; 32];
+        seckey_bytes.copy_from_slice(&key_package.signing_share().serialize());
+        let seckey = NoncePoolSecret::new(seckey_bytes);
 
-        let mut pool = NoncePool::new(
-            id.serialize()[31] as u16,
-            seckey,
-            NoncePoolConfig::default(),
-        );
+        let mut pool = NoncePool::new(id.serialize()[31] as u16, NoncePoolConfig::default());
         pool.init_peer(2);
-        let generated = pool.generate_for_peer(2, 3).expect("generate");
+        let generated = pool.generate_for_peer(2, 3, &seckey).expect("generate");
         pool.store_incoming(2, generated);
 
         let stats = pool.peer_stats(2);
@@ -414,7 +408,7 @@ mod tests {
 
     #[test]
     fn incoming_nonces_are_consumed_fifo() {
-        let mut pool = NoncePool::new(1, [1u8; 32], NoncePoolConfig::default());
+        let mut pool = NoncePool::new(1, NoncePoolConfig::default());
         pool.init_peer(2);
 
         let first = DerivedPublicNonce {

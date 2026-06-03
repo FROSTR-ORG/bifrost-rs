@@ -12,9 +12,18 @@ sha2.workspace = true
 hmac.workspace = true
 rand_core.workspace = true
 zeroize.workspace = true
+subtle.workspace = true
 k256.workspace = true
 serde.workspace = true
+base64.workspace = true
+chacha20.workspace = true
 frost-secp256k1-tr-unofficial.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# Integration tests under tests/ are separate crates and do not inherit the
+# library's normal dependencies, so the FROST primitives + RNG used to build
+# keysets/nonces in the test harness must be declared here as well. Both are
+# already in Cargo.lock via the normal dependency, so this adds no new fetch.
+frost-secp256k1-tr-unofficial.workspace = true
+rand_core.workspace = true

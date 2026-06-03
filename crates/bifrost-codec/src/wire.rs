@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use bifrost_core::secret::SharePrivateKey;
 use bifrost_core::types::{
     DerivedPublicNonce, EcdhEntry, EcdhPackage, GroupPackage, IndexedPublicNonceCommitment,
     MemberNonceCommitmentSet, MemberPackage, MemberPublicNonce, MethodPolicy, OnboardRequest,
@@ -15,6 +16,37 @@ const MAX_GROUP_MEMBERS: usize = 1000;
 const MAX_SIGN_BATCH_SIZE: usize = 100;
 const MAX_ECDH_BATCH_SIZE: usize = 100;
 const MAX_NONCE_PACKAGE: usize = 1000;
+
+/// Per-field string cap for identifier/label fields (`kind`,
+/// `group_name`, `code`, `message`).
+const MAX_IDENTIFIER_FIELD_BYTES: usize = 1024;
+
+/// Per-field string cap for the hex `content` field carried in sign
+/// sessions. 32 KiB covers any realistic event payload while staying
+/// well under the 64 KiB envelope ceiling.
+const MAX_CONTENT_FIELD_BYTES: usize = 32 * 1024;
+
+#[inline]
+fn check_identifier_field(field: &'static str, value: &str) -> crate::error::CodecResult<()> {
+    if value.len() > MAX_IDENTIFIER_FIELD_BYTES {
+        return Err(crate::error::CodecError::FieldTooLarge {
+            field,
+            limit: MAX_IDENTIFIER_FIELD_BYTES,
+        });
+    }
+    Ok(())
+}
+
+#[inline]
+fn check_content_field(field: &'static str, value: &str) -> crate::error::CodecResult<()> {
+    if value.len() > MAX_CONTENT_FIELD_BYTES {
+        return Err(crate::error::CodecError::FieldTooLarge {
+            field,
+            limit: MAX_CONTENT_FIELD_BYTES,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberPackageWire {
@@ -176,6 +208,7 @@ impl TryFrom<GroupPackageWire> for GroupPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: GroupPackageWire) -> Result<Self, Self::Error> {
+        check_identifier_field("group_name", &value.group_name)?;
         if value.group_name.trim().is_empty() {
             return Err(crate::error::CodecError::InvalidPayload(
                 "group name must be non-empty",
@@ -240,9 +273,10 @@ impl TryFrom<SharePackageWire> for SharePackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: SharePackageWire) -> Result<Self, Self::Error> {
+        let seckey_bytes: [u8; 32] = hexbytes::decode(&value.seckey)?;
         Ok(Self {
             idx: value.idx,
-            seckey: hexbytes::decode(&value.seckey)?,
+            seckey: SharePrivateKey::new(seckey_bytes),
         })
     }
 }
@@ -251,7 +285,7 @@ impl From<SharePackage> for SharePackageWire {
     fn from(value: SharePackage) -> Self {
         Self {
             idx: value.idx,
-            seckey: hexbytes::encode(&value.seckey),
+            seckey: hexbytes::encode(value.seckey.expose_bytes()),
         }
     }
 }
@@ -364,6 +398,10 @@ impl TryFrom<SignSessionPackageWire> for SignSessionPackage {
     type Error = crate::error::CodecError;
 
     fn try_from(value: SignSessionPackageWire) -> Result<Self, Self::Error> {
+        check_identifier_field("kind", &value.kind)?;
+        if let Some(content) = value.content.as_ref() {
+            check_content_field("content", content)?;
+        }
         if value.members.is_empty() {
             return Err(crate::error::CodecError::InvalidPayload(
                 "sign session members must not be empty",
@@ -620,7 +658,11 @@ impl From<PingPayload> for PingPayloadWire {
     fn from(value: PingPayload) -> Self {
         Self {
             version: value.version,
-            advertised_nonces: value.advertised_nonces.into_iter().map(Into::into).collect(),
+            advertised_nonces: value
+                .advertised_nonces
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             held_peer_nonce_codes: value
                 .held_peer_nonce_codes
                 .into_iter()

@@ -558,12 +558,14 @@ mod tests {
             create_keyset(CreateKeysetConfig::new("Managed WASM", 2, 3)).expect("create keyset");
         let share = bundle.shares[0].clone();
         BrowserProfilePackagePayload {
-            profile_id: derive_profile_id_for_share_secret(&hex::encode(share.seckey))
-                .expect("profile id"),
+            profile_id: derive_profile_id_for_share_secret(&hex::encode(
+                share.seckey.expose_bytes(),
+            ))
+            .expect("profile id"),
             version: 1,
             device: BrowserProfilePackageDevice {
                 name: "Browser Device".to_string(),
-                share_secret: hex::encode(share.seckey),
+                share_secret: hex::encode(share.seckey.expose_bytes()),
                 manual_peer_policy_overrides: Vec::new(),
                 relays: vec!["wss://relay.example.test".to_string()],
             },
@@ -645,7 +647,9 @@ mod tests {
 
     #[test]
     fn constants_and_id_helpers_match_profile_package_contract() {
-        assert_eq!(bf_package_version(), 1);
+        // Bumped to 2 in Bucket B PR5 (portable-package v2 migration:
+        // Argon2id + XChaCha20Poly1305). Hard-cut; no v1 reader.
+        assert_eq!(bf_package_version(), 2);
         assert_eq!(bfshare_prefix(), "bfshare");
         assert_eq!(bfonboard_prefix(), "bfonboard");
         assert_eq!(bfprofile_prefix(), "bfprofile");

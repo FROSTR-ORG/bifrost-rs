@@ -10,6 +10,7 @@ use bifrost_codec::{
 };
 use bifrost_core::create_session_package;
 use bifrost_core::nonce::{NoncePool, NoncePoolConfig};
+use bifrost_core::secret::{EcdhSharedSecret, NoncePoolSecret};
 use bifrost_core::types::{
     Bytes32, DerivedPublicNonce, EcdhPackage, GroupPackage, OnboardResponse, PartialSigPackage,
     PeerPolicy, PeerPolicyOverride, PeerScopedPolicyProfile, PingPayload, PolicyOverrideValue,
@@ -90,21 +91,73 @@ impl DeviceStore for InMemoryStore {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime-only secrets held alongside a [`DeviceState`].
+///
+/// This substruct never crosses the persistence boundary — the
+/// [`DeviceStatePersisted`] DTO does not carry it. Secrets are rebuilt from
+/// the share (and other source material) every time a [`DeviceState`] is
+/// restored from disk or a WASM snapshot.
+///
+/// The ECDH cache also lives here: its entries carry [`EcdhSharedSecret`]
+/// values which must not be persisted. On restart the cache starts empty.
+///
+/// `Clone` is implemented manually (not derived) so the `ZeroizeOnDrop`
+/// contract on each newtype is preserved on both the original and the clone.
+pub struct DeviceSecrets {
+    pub nonce_pool_secret: NoncePoolSecret,
+    pub ecdh_cache: HashMap<String, EcdhCacheEntryLive>,
+    pub ecdh_cache_order: VecDeque<String>,
+}
+
+impl DeviceSecrets {
+    pub fn new(share_seckey: [u8; 32]) -> Self {
+        Self {
+            nonce_pool_secret: NoncePoolSecret::new(share_seckey),
+            ecdh_cache: HashMap::new(),
+            ecdh_cache_order: VecDeque::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for DeviceSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceSecrets")
+            .field("nonce_pool_secret", &self.nonce_pool_secret)
+            .field("ecdh_cache_len", &self.ecdh_cache.len())
+            .finish()
+    }
+}
+
+impl Clone for DeviceSecrets {
+    fn clone(&self) -> Self {
+        let mut ecdh_cache = HashMap::with_capacity(self.ecdh_cache.len());
+        for (key, entry) in &self.ecdh_cache {
+            ecdh_cache.insert(key.clone(), entry.clone());
+        }
+        Self {
+            nonce_pool_secret: NoncePoolSecret::new(*self.nonce_pool_secret.expose_bytes()),
+            ecdh_cache,
+            ecdh_cache_order: self.ecdh_cache_order.clone(),
+        }
+    }
+}
+
+/// Live runtime device state.
+///
+/// Held in memory, shared across the signer, router, and bridge. Not itself
+/// `Serialize`/`Deserialize`: every persistence boundary goes through
+/// [`DeviceStatePersisted`].
+#[derive(Debug, Clone)]
 pub struct DeviceState {
+    pub secrets: DeviceSecrets,
     pub nonce_pool: NoncePool,
     pub replay_cache: HashMap<String, u64>,
-    pub ecdh_cache: HashMap<String, EcdhCacheEntry>,
-    pub ecdh_cache_order: VecDeque<String>,
     pub sig_cache: HashMap<String, SigCacheEntry>,
     pub sig_cache_order: VecDeque<String>,
-    #[serde(default)]
     pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
-    #[serde(default)]
     pub remote_nonce_inventory_observations: HashMap<String, PeerNonceInventoryObservation>,
     pub pending_operations: HashMap<String, PendingOperation>,
-    #[serde(default)]
     pub peer_last_seen: HashMap<String, u64>,
     pub request_seq: u64,
     pub last_active: u64,
@@ -112,17 +165,15 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
-    pub const VERSION: u32 = 5;
+    pub const VERSION: u32 = 6;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
-        let mut nonce_pool =
-            NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
+        let mut nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
         nonce_pool.init_peer(group_member_idx);
         Self {
+            secrets: DeviceSecrets::new(share_seckey),
             nonce_pool,
             replay_cache: HashMap::new(),
-            ecdh_cache: HashMap::new(),
-            ecdh_cache_order: VecDeque::new(),
             sig_cache: HashMap::new(),
             sig_cache_order: VecDeque::new(),
             manual_policy_overrides: HashMap::new(),
@@ -141,11 +192,76 @@ impl DeviceState {
         group_member_idx: u16,
         share_seckey: [u8; 32],
     ) {
-        self.nonce_pool =
-            NoncePool::new(group_member_idx, share_seckey, NoncePoolConfig::default());
+        self.secrets = DeviceSecrets::new(share_seckey);
+        self.nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
         self.pending_operations.clear();
         self.remote_nonce_inventory_observations.clear();
         self.last_active = now_unix_secs();
+    }
+
+    /// Rebuild a live [`DeviceState`] from a persisted DTO plus runtime-only
+    /// secrets supplied by the host. The ECDH cache starts empty on every
+    /// restore — it is not serialized into [`DeviceStatePersisted`].
+    pub fn from_persisted(secrets: DeviceSecrets, persisted: DeviceStatePersisted) -> Self {
+        Self {
+            secrets,
+            nonce_pool: persisted.nonce_pool,
+            replay_cache: persisted.replay_cache,
+            sig_cache: persisted.sig_cache,
+            sig_cache_order: persisted.sig_cache_order,
+            manual_policy_overrides: persisted.manual_policy_overrides,
+            remote_scoped_policies: persisted.remote_scoped_policies,
+            remote_nonce_inventory_observations: persisted.remote_nonce_inventory_observations,
+            pending_operations: persisted.pending_operations,
+            peer_last_seen: persisted.peer_last_seen,
+            request_seq: persisted.request_seq,
+            last_active: persisted.last_active,
+            version: persisted.version,
+        }
+    }
+}
+
+/// Serialization-only DTO for [`DeviceState`].
+///
+/// Explicitly does **not** carry the runtime-only secrets from
+/// [`DeviceSecrets`] (the FROST nonce-pool seckey and the ECDH cache).
+/// `version` is pinned to [`DeviceState::VERSION`] on encode; any mismatch
+/// on decode surfaces as [`SignerError::UnsupportedVersion`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceStatePersisted {
+    pub version: u32,
+    pub nonce_pool: NoncePool,
+    pub replay_cache: HashMap<String, u64>,
+    pub sig_cache: HashMap<String, SigCacheEntry>,
+    pub sig_cache_order: VecDeque<String>,
+    #[serde(default)]
+    pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
+    pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
+    #[serde(default)]
+    pub remote_nonce_inventory_observations: HashMap<String, PeerNonceInventoryObservation>,
+    pub pending_operations: HashMap<String, PendingOperation>,
+    #[serde(default)]
+    pub peer_last_seen: HashMap<String, u64>,
+    pub request_seq: u64,
+    pub last_active: u64,
+}
+
+impl From<&DeviceState> for DeviceStatePersisted {
+    fn from(state: &DeviceState) -> Self {
+        Self {
+            version: state.version,
+            nonce_pool: state.nonce_pool.clone(),
+            replay_cache: state.replay_cache.clone(),
+            sig_cache: state.sig_cache.clone(),
+            sig_cache_order: state.sig_cache_order.clone(),
+            manual_policy_overrides: state.manual_policy_overrides.clone(),
+            remote_scoped_policies: state.remote_scoped_policies.clone(),
+            remote_nonce_inventory_observations: state.remote_nonce_inventory_observations.clone(),
+            pending_operations: state.pending_operations.clone(),
+            peer_last_seen: state.peer_last_seen.clone(),
+            request_seq: state.request_seq,
+            last_active: state.last_active,
+        }
     }
 }
 
@@ -156,7 +272,7 @@ pub struct PeerNonceInventoryObservation {
     pub updated_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct OnboardingBootstrapSeed {
     pub request_nonces: Vec<DerivedPublicNonce>,
     pub state: DeviceState,
@@ -170,9 +286,17 @@ pub fn generate_onboarding_bootstrap_seed(
     count: usize,
 ) -> Result<OnboardingBootstrapSeed> {
     let mut state = DeviceState::new(ONBOARD_BOOTSTRAP_LOCAL_IDX, share_seckey);
-    let request_nonces = state
-        .nonce_pool
-        .generate_for_peer(ONBOARD_BOOTSTRAP_PEER_IDX, count)
+    let DeviceState {
+        ref mut nonce_pool,
+        ref secrets,
+        ..
+    } = state;
+    let request_nonces = nonce_pool
+        .generate_for_peer(
+            ONBOARD_BOOTSTRAP_PEER_IDX,
+            count,
+            &secrets.nonce_pool_secret,
+        )
         .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
     Ok(OnboardingBootstrapSeed {
         request_nonces,
@@ -313,7 +437,26 @@ pub struct RuntimeStatusSummary {
     pub readiness: RuntimeReadiness,
     pub peers: Vec<PeerStatus>,
     pub peer_permission_states: Vec<PeerPermissionState>,
+    #[serde(default)]
+    pub onboarding_statuses: Vec<OnboardingStatus>,
     pub pending_operations: Vec<PendingOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingStatusStage {
+    DeviceContactedHost,
+    HandshakeCompleted,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OnboardingStatus {
+    pub pubkey: String,
+    pub stage: OnboardingStatusStage,
+    pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,12 +629,28 @@ pub struct OperationFailure {
     pub failed_peer: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EcdhCacheEntry {
+/// Runtime-only ECDH cache entry.
+///
+/// Holds an [`EcdhSharedSecret`] which is zeroized on drop. Not
+/// `Serialize`/`Deserialize`: the ECDH cache is runtime-only and does not
+/// cross the [`DeviceStatePersisted`] boundary.
+#[derive(Debug)]
+pub struct EcdhCacheEntryLive {
     pub key_hex: String,
-    pub shared_secret: [u8; 32],
+    pub shared_secret: EcdhSharedSecret,
     pub stored_at: u64,
     pub last_accessed_at: u64,
+}
+
+impl Clone for EcdhCacheEntryLive {
+    fn clone(&self) -> Self {
+        Self {
+            key_hex: self.key_hex.clone(),
+            shared_secret: EcdhSharedSecret::new(*self.shared_secret.expose_bytes()),
+            stored_at: self.stored_at,
+            last_accessed_at: self.last_accessed_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,6 +672,7 @@ pub struct SigningDevice {
     device_id: DeviceId,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
+    onboarding_statuses: HashMap<String, OnboardingStatus>,
     latest_request_id: Option<String>,
     runtime_persistence_hint: PersistenceHint,
 }
@@ -531,11 +691,7 @@ impl SigningDevice {
             return Err(SignerError::InvalidConfig("invalid group".to_string()));
         }
         if state.version != DeviceState::VERSION {
-            return Err(SignerError::StateCorrupted(format!(
-                "unsupported device state version {} (expected {})",
-                state.version,
-                DeviceState::VERSION
-            )));
+            return Err(SignerError::UnsupportedVersion(state.version));
         }
 
         let share_idx = share.idx;
@@ -555,9 +711,12 @@ impl SigningDevice {
         state.nonce_pool.init_peer(share_idx);
         state.last_active = now_unix_secs();
         let device_id = DeviceId::new(format!("{}-{}", share_public_key_hex, share_idx));
-        state
-            .ecdh_cache_order
-            .retain(|k| state.ecdh_cache.contains_key(k));
+        let DeviceSecrets {
+            ecdh_cache,
+            ecdh_cache_order,
+            ..
+        } = &mut state.secrets;
+        ecdh_cache_order.retain(|k| ecdh_cache.contains_key(k));
         state
             .sig_cache_order
             .retain(|k| state.sig_cache.contains_key(k));
@@ -573,6 +732,7 @@ impl SigningDevice {
             device_id,
             completions: VecDeque::new(),
             failures: VecDeque::new(),
+            onboarding_statuses: HashMap::new(),
             latest_request_id: None,
             runtime_persistence_hint: PersistenceHint::None,
         })
@@ -584,7 +744,7 @@ impl SigningDevice {
         peers: Vec<String>,
         config: DeviceConfig,
     ) -> Result<Self> {
-        let state = DeviceState::new(share.idx, share.seckey);
+        let state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         Self::new(group, share, peers, state, config)
     }
 
@@ -613,7 +773,7 @@ impl SigningDevice {
     }
 
     pub fn wipe_state(&mut self) {
-        self.state = DeviceState::new(self.share.idx, self.share.seckey);
+        self.state = DeviceState::new(self.share.idx, *self.share.seckey.expose_bytes());
         for peer in &self.peers {
             if let Some(idx) = self.member_idx_by_pubkey.get(peer).copied() {
                 self.state.nonce_pool.init_peer(idx);
@@ -622,6 +782,7 @@ impl SigningDevice {
         self.state.nonce_pool.init_peer(self.share.idx);
         self.completions.clear();
         self.failures.clear();
+        self.onboarding_statuses.clear();
         self.latest_request_id = None;
         self.runtime_persistence_hint = PersistenceHint::Immediate;
     }
@@ -832,6 +993,16 @@ impl SigningDevice {
         operations
     }
 
+    pub fn onboarding_statuses(&self) -> Vec<OnboardingStatus> {
+        let mut statuses = self
+            .onboarding_statuses
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        statuses.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
+        statuses
+    }
+
     pub fn runtime_status(&self) -> RuntimeStatusSummary {
         let peers = self.peer_status();
         RuntimeStatusSummary {
@@ -840,6 +1011,7 @@ impl SigningDevice {
             readiness: self.readiness_from_peers(&peers),
             peers,
             peer_permission_states: self.peer_permission_states(),
+            onboarding_statuses: self.onboarding_statuses(),
             pending_operations: self.pending_operations(),
         }
     }
@@ -856,6 +1028,40 @@ impl SigningDevice {
                 effective_policy: self.effective_policy_for_peer(&peer),
             })
             .collect()
+    }
+
+    fn note_onboarding_status(
+        &mut self,
+        peer: &str,
+        stage: OnboardingStatusStage,
+        updated_at: u64,
+        error: Option<String>,
+    ) {
+        let normalized = peer.to_ascii_lowercase();
+        if !self.member_idx_by_pubkey.contains_key(&normalized) {
+            return;
+        }
+
+        if matches!(stage, OnboardingStatusStage::DeviceContactedHost)
+            && matches!(
+                self.onboarding_statuses
+                    .get(&normalized)
+                    .map(|status| &status.stage),
+                Some(OnboardingStatusStage::HandshakeCompleted)
+            )
+        {
+            return;
+        }
+
+        self.onboarding_statuses.insert(
+            normalized.clone(),
+            OnboardingStatus {
+                pubkey: normalized,
+                stage,
+                updated_at,
+                error,
+            },
+        );
     }
 
     fn readiness_from_peers(&self, peers: &[PeerStatus]) -> RuntimeReadiness {
@@ -915,35 +1121,39 @@ impl SigningDevice {
 
     fn ecdh_cache_get(&mut self, target: [u8; 32], now: u64) -> Option<[u8; 32]> {
         let key = hex::encode(target);
-        self.state.ecdh_cache.retain(|_, entry| {
-            now.saturating_sub(entry.stored_at) <= self.config.ecdh_cache_ttl_secs
-        });
-        self.state
-            .ecdh_cache_order
-            .retain(|k| self.state.ecdh_cache.contains_key(k));
-        let entry = self.state.ecdh_cache.get_mut(&key)?;
+        let ttl = self.config.ecdh_cache_ttl_secs;
+        let DeviceSecrets {
+            ecdh_cache,
+            ecdh_cache_order,
+            ..
+        } = &mut self.state.secrets;
+        ecdh_cache.retain(|_, entry| now.saturating_sub(entry.stored_at) <= ttl);
+        ecdh_cache_order.retain(|k| ecdh_cache.contains_key(k));
+        let entry = ecdh_cache.get_mut(&key)?;
         entry.last_accessed_at = now;
-        Self::touch_lru_key(&mut self.state.ecdh_cache_order, &key);
-        Some(entry.shared_secret)
+        Self::touch_lru_key(ecdh_cache_order, &key);
+        Some(*entry.shared_secret.expose_bytes())
     }
 
     fn ecdh_cache_put(&mut self, target: [u8; 32], secret: [u8; 32], now: u64) {
         let key = hex::encode(target);
-        self.state.ecdh_cache.insert(
+        let capacity = self.config.ecdh_cache_capacity;
+        let DeviceSecrets {
+            ecdh_cache,
+            ecdh_cache_order,
+            ..
+        } = &mut self.state.secrets;
+        ecdh_cache.insert(
             key.clone(),
-            EcdhCacheEntry {
+            EcdhCacheEntryLive {
                 key_hex: key.clone(),
-                shared_secret: secret,
+                shared_secret: EcdhSharedSecret::new(secret),
                 stored_at: now,
                 last_accessed_at: now,
             },
         );
-        Self::touch_lru_key(&mut self.state.ecdh_cache_order, &key);
-        Self::evict_lru(
-            &mut self.state.ecdh_cache,
-            &mut self.state.ecdh_cache_order,
-            self.config.ecdh_cache_capacity,
-        );
+        Self::touch_lru_key(ecdh_cache_order, &key);
+        Self::evict_lru(ecdh_cache, ecdh_cache_order, capacity);
     }
 
     fn sig_cache_get(&mut self, message: [u8; 32], now: u64) -> Option<Vec<[u8; 64]>> {
@@ -1125,10 +1335,13 @@ impl SigningDevice {
             });
         }
 
-        let local_generated = self
-            .state
-            .nonce_pool
-            .generate_for_peer(self.share.idx, 1)
+        let DeviceState {
+            nonce_pool,
+            secrets,
+            ..
+        } = &mut self.state;
+        let local_generated = nonce_pool
+            .generate_for_peer(self.share.idx, 1, &secrets.nonce_pool_secret)
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
         let local_nonce = local_generated
             .first()
@@ -1326,11 +1539,20 @@ impl SigningDevice {
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
         let now = now_unix_secs();
-        let request_nonces = self
-            .state
-            .nonce_pool
-            .generate_for_peer(peer_idx, NoncePoolConfig::default().pool_size)
-            .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+        let request_nonces = {
+            let DeviceState {
+                nonce_pool,
+                secrets,
+                ..
+            } = &mut self.state;
+            nonce_pool
+                .generate_for_peer(
+                    peer_idx,
+                    NoncePoolConfig::default().pool_size,
+                    &secrets.nonce_pool_secret,
+                )
+                .map_err(|e| SignerError::InvalidRequest(e.to_string()))?
+        };
 
         self.state.pending_operations.insert(
             request_id.clone(),
@@ -1586,7 +1808,8 @@ impl SigningDevice {
 
     fn decrypt_event(&self, event: &Event, sender33: &str) -> Result<BridgeEnvelope> {
         let ciphertext = event_content(event)?;
-        let plaintext = decrypt_content_from_peer(self.share.seckey, sender33, &ciphertext)?;
+        let plaintext =
+            decrypt_content_from_peer(*self.share.seckey.expose_bytes(), sender33, &ciphertext)?;
         decode_bridge_envelope(&plaintext).map_err(|e| SignerError::InvalidRequest(e.to_string()))
     }
 
@@ -1600,9 +1823,15 @@ impl SigningDevice {
     fn encrypt_for_peer(&self, peer: &str, envelope: &BridgeEnvelope) -> Result<Event> {
         let plaintext = encode_bridge_envelope(envelope)
             .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
-        let content = encrypt_content_for_peer(self.share.seckey, peer, &plaintext)?;
+        let content =
+            encrypt_content_for_peer(*self.share.seckey.expose_bytes(), peer, &plaintext)?;
         let tags = vec![vec!["p".to_string(), peer.to_string()]];
-        build_signed_event(self.share.seckey, self.config.event_kind, tags, content)
+        build_signed_event(
+            *self.share.seckey.expose_bytes(),
+            self.config.event_kind,
+            tags,
+            content,
+        )
     }
 
     fn handle_inbound_request(
@@ -1657,6 +1886,12 @@ impl SigningDevice {
             }
             BridgePayload::OnboardRequest(wire) => {
                 if !self.inbound_allowed(&sender, "onboard") {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("inbound onboard denied by local policy".to_string()),
+                    );
                     return self.reject_request(
                         &sender,
                         envelope.request_id,
@@ -1677,26 +1912,70 @@ impl SigningDevice {
                     "received onboard request"
                 );
                 if request.version != 1 {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some(format!(
+                            "unsupported onboard request version {}",
+                            request.version
+                        )),
+                    );
                     return Err(SignerError::InvalidRequest(format!(
                         "unsupported onboard request version {}",
                         request.version
                     )));
                 }
                 if request.nonces.is_empty() {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("onboard bootstrap nonces missing".to_string()),
+                    );
                     return Err(SignerError::InvalidRequest(
                         "onboard bootstrap nonces missing".to_string(),
                     ));
                 }
+                self.note_onboarding_status(
+                    &sender,
+                    OnboardingStatusStage::DeviceContactedHost,
+                    now,
+                    None,
+                );
                 self.state
                     .nonce_pool
                     .store_incoming(sender_idx, request.nonces);
 
-                self.state
-                    .nonce_pool
-                    .generate_for_peer(sender_idx, NoncePoolConfig::default().pool_size)
-                    .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
+                let generate_result = {
+                    let DeviceState {
+                        nonce_pool,
+                        secrets,
+                        ..
+                    } = &mut self.state;
+                    nonce_pool.generate_for_peer(
+                        sender_idx,
+                        NoncePoolConfig::default().pool_size,
+                        &secrets.nonce_pool_secret,
+                    )
+                };
+                if let Err(error) = generate_result {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some(error.to_string()),
+                    );
+                    return Err(SignerError::InvalidRequest(error.to_string()));
+                }
                 let nonces = self.state.nonce_pool.outgoing_public_nonces(sender_idx);
                 if nonces.is_empty() {
+                    self.note_onboarding_status(
+                        &sender,
+                        OnboardingStatusStage::Failed,
+                        now,
+                        Some("onboard bootstrap nonces unavailable".to_string()),
+                    );
                     return Err(SignerError::InvalidRequest(
                         "onboard bootstrap nonces unavailable".to_string(),
                     ));
@@ -1720,13 +1999,20 @@ impl SigningDevice {
                 );
                 let served_request_id = response.request_id.clone();
                 let served_peer = sender.clone();
-                let outbound = self.encrypt_for_peers(&[sender], &response)?;
+                let outbound = self.encrypt_for_peers(&[sender.clone()], &response)?;
+                self.note_onboarding_status(
+                    &sender,
+                    OnboardingStatusStage::HandshakeCompleted,
+                    now,
+                    None,
+                );
                 // Record that we served an onboard response so hosts can mark the
                 // onboarding device's share as onboarded.
-                self.completions.push_back(CompletedOperation::OnboardServed {
-                    request_id: served_request_id,
-                    peer: served_peer,
-                });
+                self.completions
+                    .push_back(CompletedOperation::OnboardServed {
+                        request_id: served_request_id,
+                        peer: served_peer,
+                    });
                 Ok(outbound)
             }
             BridgePayload::SignRequest(wire) => {
@@ -2220,9 +2506,17 @@ impl SigningDevice {
             .outgoing_public_nonce_codes(peer_idx)
             .len();
         if current_available < target_size {
-            self.state
-                .nonce_pool
-                .generate_for_peer(peer_idx, target_size.saturating_sub(current_available))
+            let DeviceState {
+                nonce_pool,
+                secrets,
+                ..
+            } = &mut self.state;
+            nonce_pool
+                .generate_for_peer(
+                    peer_idx,
+                    target_size.saturating_sub(current_available),
+                    &secrets.nonce_pool_secret,
+                )
                 .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
         }
 
@@ -2365,7 +2659,7 @@ mod tests {
             group.clone(),
             local_share.clone(),
             peers,
-            DeviceState::new(local_share.idx, local_share.seckey),
+            DeviceState::new(local_share.idx, *local_share.seckey.expose_bytes()),
             DeviceConfig {
                 peer_selection_strategy: strategy,
                 ..DeviceConfig::default()
@@ -2402,7 +2696,7 @@ mod tests {
             group.clone(),
             share.clone(),
             peers,
-            DeviceState::new(share.idx, share.seckey),
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("peer signer")
@@ -2414,8 +2708,12 @@ mod tests {
         event: &Event,
     ) -> BridgeEnvelope {
         let ciphertext = event_content(event).expect("event content");
-        let plaintext = decrypt_content_from_peer(local_share.seckey, sender_pubkey32, &ciphertext)
-            .expect("decrypt envelope");
+        let plaintext = decrypt_content_from_peer(
+            *local_share.seckey.expose_bytes(),
+            sender_pubkey32,
+            &ciphertext,
+        )
+        .expect("decrypt envelope");
         decode_bridge_envelope(&plaintext).expect("decode envelope")
     }
 
@@ -2452,10 +2750,14 @@ mod tests {
         sorted_peers.sort_unstable();
         let chosen_peer = sorted_peers[1].clone();
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &chosen_peer);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(fixture.local_share.idx, 10)
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_state.secrets.nonce_pool_secret,
+            )
             .expect("generate peer nonces");
         fixture
             .signer
@@ -2496,10 +2798,14 @@ mod tests {
         sorted_peers.sort_unstable();
         let ready_peer = sorted_peers[1].clone();
         let ready_share = share_for_peer(&fixture.group, &fixture.shares, &ready_peer);
-        let mut peer_state = DeviceState::new(ready_share.idx, ready_share.seckey);
+        let mut peer_state = DeviceState::new(ready_share.idx, *ready_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(fixture.local_share.idx, 10)
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_state.secrets.nonce_pool_secret,
+            )
             .expect("generate peer nonces");
         fixture
             .signer
@@ -2595,10 +2901,14 @@ mod tests {
             .insert(peer.clone(), now_unix_secs());
 
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(fixture.local_share.idx, 10)
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_state.secrets.nonce_pool_secret,
+            )
             .expect("generate peer nonces");
         fixture
             .signer
@@ -2694,7 +3004,7 @@ mod tests {
             inviter.group.clone(),
             requester_share.clone(),
             requester_peers,
-            DeviceState::new(requester_share.idx, requester_share.seckey),
+            DeviceState::new(requester_share.idx, *requester_share.seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("requester signer");
@@ -2946,14 +3256,14 @@ mod tests {
         };
         let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
         let content = super::crypto::encrypt_content_for_peer_with_nonce(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             &local_pubkey,
             &plaintext,
             [9u8; 32],
         )
         .expect("encrypt");
         let event = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), local_pubkey.clone()]],
             content,
@@ -3004,6 +3314,54 @@ mod tests {
             .handle_inbound_request(unsupported_version, sender)
             .expect_err("unsupported version must fail");
         assert!(matches!(err, SignerError::InvalidRequest(_)));
+        assert_eq!(fixture.signer.onboarding_statuses().len(), 1);
+        let status = &fixture.signer.onboarding_statuses()[0];
+        assert_eq!(status.pubkey, fixture.signer.peers[0]);
+        assert_eq!(status.stage, OnboardingStatusStage::Failed);
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("unsupported onboard request version"))
+        );
+    }
+
+    #[test]
+    fn inbound_onboard_request_updates_runtime_onboarding_status() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let sender = fixture.signer.peers[0].clone();
+
+        let request = BridgeEnvelope {
+            request_id: "req-onboard-status".to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
+                version: 1,
+                nonces: vec![DerivedPublicNonceWire {
+                    binder_pn: hex::encode([7u8; 33]),
+                    hidden_pn: hex::encode([8u8; 33]),
+                    code: hex::encode([9u8; 32]),
+                }],
+            }),
+        };
+
+        let outbound = fixture
+            .signer
+            .handle_inbound_request(request, sender.clone())
+            .expect("valid onboard request should produce response");
+        assert_eq!(outbound.len(), 1);
+
+        let statuses = fixture.signer.onboarding_statuses();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].pubkey, sender);
+        assert_eq!(statuses[0].stage, OnboardingStatusStage::HandshakeCompleted);
+        assert!(statuses[0].error.is_none());
+
+        let runtime_status = fixture.signer.runtime_status();
+        assert_eq!(runtime_status.onboarding_statuses.len(), 1);
+        assert_eq!(
+            runtime_status.onboarding_statuses[0].stage,
+            OnboardingStatusStage::HandshakeCompleted
+        );
     }
 
     #[test]
@@ -3146,10 +3504,14 @@ mod tests {
         let peer = fixture.signer.peers[0].clone();
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(fixture.local_share.idx, 10)
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_state.secrets.nonce_pool_secret,
+            )
             .expect("generate peer nonces");
         fixture
             .signer
@@ -3285,7 +3647,7 @@ mod tests {
         let local = fixture.signer.local_pubkey32().to_string();
 
         let event_ok = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), local.clone()]],
             "payload".to_string(),
@@ -3294,7 +3656,7 @@ mod tests {
         assert!(fixture.signer.has_exact_local_recipient_tag(&event_ok));
 
         let event_missing = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![],
             "payload".to_string(),
@@ -3303,7 +3665,7 @@ mod tests {
         assert!(!fixture.signer.has_exact_local_recipient_tag(&event_missing));
 
         let event_multi = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![
                 vec!["p".to_string(), local.clone()],
@@ -3315,7 +3677,7 @@ mod tests {
         assert!(!fixture.signer.has_exact_local_recipient_tag(&event_multi));
 
         let event_wrong = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind,
             vec![vec!["p".to_string(), peer]],
             "payload".to_string(),
@@ -3418,16 +3780,21 @@ mod tests {
 
         let ecdh_target = [0xCC; 32];
         let ecdh_key = hex::encode(ecdh_target);
-        fixture.signer.state.ecdh_cache.insert(
+        fixture.signer.state.secrets.ecdh_cache.insert(
             ecdh_key.clone(),
-            EcdhCacheEntry {
+            EcdhCacheEntryLive {
                 key_hex: ecdh_key.clone(),
-                shared_secret: [0xDD; 32],
+                shared_secret: EcdhSharedSecret::new([0xDD; 32]),
                 stored_at: now,
                 last_accessed_at: now,
             },
         );
-        fixture.signer.state.ecdh_cache_order.push_back(ecdh_key);
+        fixture
+            .signer
+            .state
+            .secrets
+            .ecdh_cache_order
+            .push_back(ecdh_key);
 
         let ecdh_effects = fixture
             .signer
@@ -3561,11 +3928,12 @@ mod tests {
 
         fixture.signer.ecdh_cache_put([1u8; 32], [2u8; 32], now);
         fixture.signer.ecdh_cache_put([3u8; 32], [4u8; 32], now + 1);
-        assert_eq!(fixture.signer.state.ecdh_cache.len(), 1);
+        assert_eq!(fixture.signer.state.secrets.ecdh_cache.len(), 1);
         assert!(
             fixture
                 .signer
                 .state
+                .secrets
                 .ecdh_cache
                 .contains_key(&hex::encode([3u8; 32]))
         );
@@ -3594,7 +3962,7 @@ mod tests {
         let local = fixture.signer.local_pubkey32().to_string();
 
         let wrong_kind = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             fixture.signer.config.event_kind + 1,
             vec![vec!["p".to_string(), local.clone()]],
             "payload".to_string(),
@@ -3609,7 +3977,7 @@ mod tests {
         );
 
         let wrong_recipient = build_signed_event(
-            peer_share.seckey,
+            *peer_share.seckey.expose_bytes(),
             signer.config.event_kind,
             vec![vec!["p".to_string(), peer.clone()]],
             "payload".to_string(),
@@ -3623,7 +3991,7 @@ mod tests {
         );
 
         let self_authored = build_signed_event(
-            signer.share.seckey,
+            *signer.share.seckey.expose_bytes(),
             signer.config.event_kind,
             vec![vec!["p".to_string(), local]],
             "payload".to_string(),
@@ -3635,5 +4003,127 @@ mod tests {
                 .expect("self event")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn device_state_v5_rejected_with_unsupported_version_error() {
+        // Hard-cut boundary: any state blob written under VERSION = 5 must
+        // surface as `SignerError::UnsupportedVersion` rather than being
+        // silently accepted or falling through to `StateCorrupted`.
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
+        let share = bundle.shares[0].clone();
+        let state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        let mut persisted = DeviceStatePersisted::from(&state);
+        persisted.version = 5;
+
+        let v5_state = DeviceState::from_persisted(
+            DeviceSecrets::new(*bundle.shares[0].seckey.expose_bytes()),
+            persisted,
+        );
+        let err = match SigningDevice::new(
+            bundle.group,
+            share,
+            Vec::new(),
+            v5_state,
+            DeviceConfig::default(),
+        ) {
+            Ok(_) => panic!("v5 state must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, SignerError::UnsupportedVersion(5)));
+    }
+
+    #[test]
+    fn device_state_round_trip_through_persisted_dto_preserves_non_cache_fields() {
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.request_seq = 99;
+        state.last_active = 1_700_000_000;
+        state.peer_last_seen.insert("peer-a".into(), 1_699_999_999);
+        state.replay_cache.insert("some-request".into(), 42);
+        state.pending_operations.insert(
+            "req-1".into(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: "req-1".into(),
+                started_at: 1,
+                timeout_at: 2,
+                target_peers: vec!["peer-a".into()],
+                threshold: 1,
+                collected_responses: Vec::new(),
+                context: PendingOpContext::PingRequest,
+            },
+        );
+
+        let encoded =
+            serde_json::to_string(&DeviceStatePersisted::from(&state)).expect("serialize");
+        let decoded: DeviceStatePersisted = serde_json::from_str(&encoded).expect("deserialize");
+        let restored =
+            DeviceState::from_persisted(DeviceSecrets::new(*share.seckey.expose_bytes()), decoded);
+
+        assert_eq!(restored.version, DeviceState::VERSION);
+        assert_eq!(restored.request_seq, 99);
+        assert_eq!(restored.last_active, 1_700_000_000);
+        assert_eq!(
+            restored.peer_last_seen.get("peer-a").copied(),
+            Some(1_699_999_999)
+        );
+        assert_eq!(restored.replay_cache.get("some-request").copied(), Some(42));
+        assert!(restored.pending_operations.contains_key("req-1"));
+    }
+
+    #[test]
+    fn device_state_restore_starts_ecdh_cache_empty() {
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.secrets.ecdh_cache.insert(
+            "deadbeef".into(),
+            EcdhCacheEntryLive {
+                key_hex: "deadbeef".into(),
+                shared_secret: EcdhSharedSecret::new([0x11; 32]),
+                stored_at: 1,
+                last_accessed_at: 1,
+            },
+        );
+        state.secrets.ecdh_cache_order.push_back("deadbeef".into());
+
+        // Round-trip through the persisted DTO — ecdh cache is not encoded.
+        let encoded =
+            serde_json::to_string(&DeviceStatePersisted::from(&state)).expect("serialize");
+        let decoded: DeviceStatePersisted = serde_json::from_str(&encoded).expect("deserialize");
+        let restored =
+            DeviceState::from_persisted(DeviceSecrets::new(*share.seckey.expose_bytes()), decoded);
+        assert!(restored.secrets.ecdh_cache.is_empty());
+        assert!(restored.secrets.ecdh_cache_order.is_empty());
+    }
+
+    #[test]
+    fn device_state_debug_does_not_leak_secret_bytes() {
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("keyset");
+        let share = bundle.shares[0].clone();
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
+        state.secrets.ecdh_cache.insert(
+            "ffffffff".into(),
+            EcdhCacheEntryLive {
+                key_hex: "ffffffff".into(),
+                shared_secret: EcdhSharedSecret::new([0xAB; 32]),
+                stored_at: 1,
+                last_accessed_at: 1,
+            },
+        );
+
+        let rendered = format!("{:?}", state);
+        // Any run of 32 or more hex digits is suspicious: that is the
+        // minimum length of a leaked 16-byte secret in hex.
+        for window in rendered.as_bytes().windows(32) {
+            let hex_run = window.iter().all(|byte| byte.is_ascii_hexdigit());
+            assert!(
+                !hex_run,
+                "debug output contains a 32-char hex run: {}",
+                rendered,
+            );
+        }
     }
 }

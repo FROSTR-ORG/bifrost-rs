@@ -63,7 +63,7 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
                 state_path = %state_path.display(),
                 "dirty restart detected; discarding volatile state"
             );
-            state.discard_volatile_for_dirty_restart(share.idx, share.seckey);
+            state.discard_volatile_for_dirty_restart(share.idx, *share.seckey.expose_bytes());
         } else {
             info!(
                 state_path = %state_path.display(),
@@ -72,7 +72,7 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
         }
         state
     } else {
-        DeviceState::new(share.idx, share.seckey)
+        DeviceState::new(share.idx, *share.seckey.expose_bytes())
     };
 
     let mut signer = SigningDevice::new(
@@ -203,7 +203,7 @@ mod tests {
             options: AppOptions::default(),
         };
         let store = EncryptedFileStore::new(resolved.state_path.clone(), share.clone());
-        let mut state = DeviceState::new(share.idx, share.seckey);
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         state.request_seq = 42;
         state.pending_operations.insert(
             "req-1".to_string(),

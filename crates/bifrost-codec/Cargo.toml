@@ -11,3 +11,11 @@ serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 bifrost-core = { path = "../bifrost-core" }
+
+[dev-dependencies]
+# Integration tests are separate crates and do not inherit the library's normal
+# dependencies. The wire-decoder targets (bifrost-core types) and the hex helper
+# used by the fuzz harness must be declared here too. Both already resolve via
+# the normal dependency graph in Cargo.lock, so this adds no new fetch.
+bifrost-core = { path = "../bifrost-core" }
+hex.workspace = true

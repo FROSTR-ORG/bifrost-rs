@@ -20,7 +20,7 @@ fn temp_path(name: &str) -> PathBuf {
 fn test_share() -> SharePackage {
     SharePackage {
         idx: 1,
-        seckey: [7u8; 32],
+        seckey: bifrost_core::secret::SharePrivateKey::new([7u8; 32]),
     }
 }
 

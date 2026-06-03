@@ -8,8 +8,8 @@ use bifrost_bridge_tokio::{NostrSdkAdapter, RelayAdapter};
 use bifrost_core::nonce::NoncePoolConfig;
 use bifrost_core::types::{DerivedPublicNonce, GroupPackage, SharePackage};
 use bifrost_signer::{
-    DeviceConfig, DeviceState, DeviceStore, finalize_onboarding_bootstrap_seed,
-    generate_onboarding_bootstrap_seed,
+    DeviceConfig, DeviceSecrets, DeviceState, DeviceStatePersisted, DeviceStore,
+    finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
     BfOnboardPayload, build_onboard_request_event, decode_onboard_response_event,
@@ -118,7 +118,7 @@ where
     let inviter_member_idx = inviter_member_idx(&response.group, &peer_pubkey)?;
     let share = SharePackage {
         idx: local_member_idx,
-        seckey: share_secret,
+        seckey: bifrost_core::secret::SharePrivateKey::new(share_secret),
     };
     if response.nonces.is_empty() {
         bail!("onboard response is missing bootstrap nonces for inviter peer {peer_pubkey}");
@@ -176,7 +176,10 @@ pub fn persist_validated_onboarding_state(
     completion: &BootstrapImportResult,
 ) -> Result<BootstrapValidationReport> {
     let inviter_member_idx = inviter_member_idx(&completion.group, &completion.peer_pubkey)?;
-    let mut state = decode_device_state_hex(&completion.bootstrap_state.device_state_hex)?;
+    let mut state = decode_device_state_hex(
+        &completion.bootstrap_state.device_state_hex,
+        *completion.share.seckey.expose_bytes(),
+    )?;
     state.pending_operations.clear();
     let run_id = begin_run(state_path).context("begin onboarding import run marker")?;
     let persisted = state.nonce_pool.peer_stats(inviter_member_idx);
@@ -241,13 +244,24 @@ pub fn persist_validated_onboarding_state(
 }
 
 fn encode_device_state_hex(state: &DeviceState) -> Result<String> {
-    let encoded = bincode::serialize(state).context("serialize bootstrap device state")?;
+    let persisted = DeviceStatePersisted::from(state);
+    let encoded = bincode::serialize(&persisted).context("serialize bootstrap device state")?;
     Ok(hex::encode(encoded))
 }
 
-fn decode_device_state_hex(value: &str) -> Result<DeviceState> {
+fn decode_device_state_hex(value: &str, share_seckey: [u8; 32]) -> Result<DeviceState> {
     let bytes = hex::decode(value).context("decode bootstrap device state hex")?;
-    bincode::deserialize(&bytes).context("decode bootstrap device state bytes")
+    let persisted: DeviceStatePersisted =
+        bincode::deserialize(&bytes).context("decode bootstrap device state bytes")?;
+    if persisted.version != DeviceState::VERSION {
+        bail!(
+            "unsupported device state version {} (expected {})",
+            persisted.version,
+            DeviceState::VERSION
+        );
+    }
+    let secrets = DeviceSecrets::new(share_seckey);
+    Ok(DeviceState::from_persisted(secrets, persisted))
 }
 
 fn derive_member_pubkey(seckey: [u8; 32]) -> Result<[u8; 33]> {
@@ -384,7 +398,7 @@ mod tests {
             .iter()
             .find(|member| member.idx == 1)
             .expect("alice member");
-        let mut state = DeviceState::new(share.idx, share.seckey);
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         state.nonce_pool.store_incoming(
             1,
             vec![DerivedPublicNonce {
@@ -395,7 +409,7 @@ mod tests {
         );
         state
             .nonce_pool
-            .generate_for_peer(1, 4)
+            .generate_for_peer(1, 4, &state.secrets.nonce_pool_secret)
             .expect("bootstrap outgoing");
         let completion = BootstrapImportResult {
             request_id: "req-1".to_string(),
@@ -460,17 +474,17 @@ mod tests {
             bundle.group.clone(),
             inviter_share,
             peers,
-            DeviceState::new(2, bundle.shares[1].seckey),
+            DeviceState::new(2, *bundle.shares[1].seckey.expose_bytes()),
             DeviceConfig::default(),
         )
         .expect("build inviter");
         let bootstrap_seed = generate_onboarding_bootstrap_seed(
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             NoncePoolConfig::default().pool_size,
         )
         .expect("bootstrap seed");
         let event = build_onboard_request_event(
-            local_share.seckey,
+            *local_share.seckey.expose_bytes(),
             &inviter_pubkey,
             DeviceConfig::default().event_kind,
             "request-1",

@@ -12,6 +12,10 @@ pub enum CodecError {
     InvalidLength { expected: usize, actual: usize },
     #[error("invalid payload shape: {0}")]
     InvalidPayload(&'static str),
+    #[error("bridge envelope exceeds maximum size")]
+    EnvelopeTooLarge,
+    #[error("field `{field}` exceeds maximum size of {limit} bytes")]
+    FieldTooLarge { field: &'static str, limit: usize },
 }
 
 impl From<serde_json::Error> for CodecError {

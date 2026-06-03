@@ -1,19 +1,13 @@
-use std::borrow::Cow;
-
-use aes_gcm::AesGcm;
-use aes_gcm::aead::{Aead, KeyInit, consts::U24, generic_array::GenericArray};
-use aes_gcm::aes::Aes256;
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bech32::primitives::checksum::Engine as ChecksumEngine;
 use bech32::primitives::decode::UncheckedHrpstring;
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 use bech32::{Checksum, Fe32};
-use chacha20::ChaCha20;
-use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, Mac};
 use nostr::{Event, EventBuilder, Keys, Kind, SecretKey, Timestamp};
-use pbkdf2::pbkdf2_hmac_array;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,12 +18,17 @@ use bifrost_core::types::{
     GroupPackage, MethodPolicyOverride, PeerPolicyOverride, PolicyOverrideValue,
 };
 
+use crate::argon2_params::{Argon2Params, PACKAGE_KDF_SALT_LEN, derive_package_encryption_key_v2};
 use crate::errors::{FrostUtilsError, FrostUtilsResult};
+use crate::package_aad::build_aad_package;
 
-pub const BF_PACKAGE_VERSION: u8 = 1;
-pub const BF_PACKAGE_PBKDF2_ITERATIONS: u32 = 600_000;
+/// Portable bech32m package envelope version. Bumped 1→2 by Bucket B B.2;
+/// v1 envelopes (old PBKDF2 + AES-GCM-24 scheme) are not readable.
+pub const BF_PACKAGE_VERSION: u8 = 2;
+/// Salt length in raw bytes used by the package envelope.
 pub const BF_PACKAGE_SALT_BYTES: usize = 16;
-pub const BF_PACKAGE_IV_BYTES: usize = 24;
+/// XChaCha20Poly1305 nonce length in raw bytes (24-byte native nonce).
+pub const BF_PACKAGE_XCHACHA_NONCE_BYTES: usize = 24;
 pub const PROFILE_BACKUP_EVENT_KIND: u16 = 10_000;
 pub const PROFILE_BACKUP_KEY_DOMAIN: &str = "frostr-profile-backup/v1";
 pub const PROFILE_ID_DOMAIN: &str = "frostr:profile-id:v1";
@@ -37,7 +36,9 @@ pub const PREFIX_BFSHARE: &str = "bfshare";
 pub const PREFIX_BFONBOARD: &str = "bfonboard";
 pub const PREFIX_BFPROFILE: &str = "bfprofile";
 
-type Aes256Gcm24 = AesGcm<Aes256, U24>;
+const KDF_MARKER_ARGON2ID: &str = "argon2id";
+const AEAD_MARKER_XCHACHA20POLY1305: &str = "xchacha20poly1305";
+
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -123,14 +124,20 @@ pub struct EncryptedProfileBackup {
     pub group_package: GroupPackageWire,
 }
 
+/// Portable bech32m package envelope (v2). Bucket B B.2 (2026-04-22) replaced
+/// the v1 envelope (PBKDF2 + AES-GCM-24) with this layout. Reader rejects
+/// any `version != 2` and any other `kdf` / `aead` marker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ProtectedPackageEnvelope {
     version: u8,
-    password_encoding: Cow<'static, str>,
-    iterations: u32,
-    iv_bytes: usize,
+    kdf: String,
+    kdf_m_cost: u32,
+    kdf_t_cost: u32,
+    kdf_p_cost: u8,
+    aead: String,
     salt_hex: String,
-    cipher_text: String,
+    nonce_hex: String,
+    ciphertext: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -591,22 +598,23 @@ fn encrypt_plaintext_payload(
     plaintext: &str,
     password: &str,
 ) -> FrostUtilsResult<String> {
-    let salt = random_bytes(BF_PACKAGE_SALT_BYTES);
-    let iv = random_bytes(BF_PACKAGE_IV_BYTES);
-    let key = derive_package_encryption_key(password, &salt);
-    let cipher = Aes256Gcm24::new_from_slice(&key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("init AES-GCM: {e}")))?;
-    let encrypted = cipher
-        .encrypt(GenericArray::from_slice(&iv), plaintext.as_bytes())
-        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
-    let envelope = ProtectedPackageEnvelope {
-        version: BF_PACKAGE_VERSION,
-        password_encoding: Cow::Borrowed("sha256"),
-        iterations: BF_PACKAGE_PBKDF2_ITERATIONS,
-        iv_bytes: BF_PACKAGE_IV_BYTES,
-        salt_hex: hex::encode(salt),
-        cipher_text: URL_SAFE_NO_PAD.encode(combine_iv_and_ciphertext(&iv, &encrypted)),
-    };
+    encrypt_plaintext_payload_with_params(
+        prefix,
+        plaintext,
+        password,
+        &Argon2Params::for_new_envelope(),
+    )
+}
+
+fn encrypt_plaintext_payload_with_params(
+    prefix: &str,
+    plaintext: &str,
+    password: &str,
+    params: &Argon2Params,
+) -> FrostUtilsResult<String> {
+    let salt = random_salt();
+    let nonce = random_nonce();
+    let envelope = build_v2_envelope(prefix, password, plaintext, None, &salt, &nonce, params)?;
     encode_envelope(prefix, &envelope)
 }
 
@@ -616,24 +624,69 @@ fn encrypt_profile_payload_with_outer_id(
     plaintext: &str,
     password: &str,
 ) -> FrostUtilsResult<String> {
+    encrypt_profile_payload_with_outer_id_and_params(
+        prefix,
+        profile_id,
+        plaintext,
+        password,
+        &Argon2Params::for_new_envelope(),
+    )
+}
+
+fn encrypt_profile_payload_with_outer_id_and_params(
+    prefix: &str,
+    profile_id: &str,
+    plaintext: &str,
+    password: &str,
+    params: &Argon2Params,
+) -> FrostUtilsResult<String> {
     let normalized_profile_id = normalize_hex32(profile_id, "profile id")?;
-    let salt = random_bytes(BF_PACKAGE_SALT_BYTES);
-    let iv = random_bytes(BF_PACKAGE_IV_BYTES);
-    let key = derive_package_encryption_key(password, &salt);
-    let cipher = Aes256Gcm24::new_from_slice(&key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("init AES-GCM: {e}")))?;
-    let encrypted = cipher
-        .encrypt(GenericArray::from_slice(&iv), plaintext.as_bytes())
-        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
-    let envelope = ProtectedPackageEnvelope {
-        version: BF_PACKAGE_VERSION,
-        password_encoding: Cow::Borrowed("sha256"),
-        iterations: BF_PACKAGE_PBKDF2_ITERATIONS,
-        iv_bytes: BF_PACKAGE_IV_BYTES,
-        salt_hex: hex::encode(salt),
-        cipher_text: URL_SAFE_NO_PAD.encode(combine_iv_and_ciphertext(&iv, &encrypted)),
-    };
+    let salt = random_salt();
+    let nonce = random_nonce();
+    let envelope = build_v2_envelope(
+        prefix,
+        password,
+        plaintext,
+        Some(&normalized_profile_id),
+        &salt,
+        &nonce,
+        params,
+    )?;
     encode_profile_envelope(prefix, &normalized_profile_id, &envelope)
+}
+
+fn build_v2_envelope(
+    prefix: &str,
+    password: &str,
+    plaintext: &str,
+    outer_id: Option<&str>,
+    salt: &[u8; PACKAGE_KDF_SALT_LEN],
+    nonce: &[u8; BF_PACKAGE_XCHACHA_NONCE_BYTES],
+    params: &Argon2Params,
+) -> FrostUtilsResult<ProtectedPackageEnvelope> {
+    let aad = build_aad_package(BF_PACKAGE_VERSION, prefix, salt, outer_id)?;
+    let key = derive_package_encryption_key_v2(password, salt, params)?;
+    let cipher = XChaCha20Poly1305::new((&key).into());
+    let ciphertext = cipher
+        .encrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: &aad,
+            },
+        )
+        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
+    Ok(ProtectedPackageEnvelope {
+        version: BF_PACKAGE_VERSION,
+        kdf: KDF_MARKER_ARGON2ID.to_string(),
+        kdf_m_cost: params.m_cost(),
+        kdf_t_cost: params.t_cost(),
+        kdf_p_cost: params.p_cost(),
+        aead: AEAD_MARKER_XCHACHA20POLY1305.to_string(),
+        salt_hex: hex::encode(salt),
+        nonce_hex: hex::encode(nonce),
+        ciphertext: URL_SAFE_NO_PAD.encode(&ciphertext),
+    })
 }
 
 fn decrypt_plaintext_payload(
@@ -642,35 +695,7 @@ fn decrypt_plaintext_payload(
     password: &str,
 ) -> FrostUtilsResult<String> {
     let envelope = decode_envelope(prefix, package_text)?;
-    if envelope.version != BF_PACKAGE_VERSION {
-        return Err(FrostUtilsError::UnsupportedFormat(format!(
-            "{prefix} package version {}",
-            envelope.version
-        )));
-    }
-    if envelope.iv_bytes != BF_PACKAGE_IV_BYTES {
-        return Err(FrostUtilsError::UnsupportedFormat(format!(
-            "{prefix} package iv_bytes {}",
-            envelope.iv_bytes
-        )));
-    }
-    let salt = hex::decode(&envelope.salt_hex)
-        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} salt: {e}")))?;
-    let key = derive_package_encryption_key(password, &salt);
-    let cipher = Aes256Gcm24::new_from_slice(&key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("init AES-GCM: {e}")))?;
-    let combined = URL_SAFE_NO_PAD
-        .decode(envelope.cipher_text.as_bytes())
-        .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
-    if combined.len() <= BF_PACKAGE_IV_BYTES {
-        return Err(FrostUtilsError::Codec(format!("Invalid {prefix} package.")));
-    }
-    let (iv, ciphertext) = combined.split_at(BF_PACKAGE_IV_BYTES);
-    let decrypted = cipher
-        .decrypt(GenericArray::from_slice(iv), ciphertext)
-        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
-    String::from_utf8(decrypted)
-        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} plaintext: {e}")))
+    decrypt_v2_envelope(prefix, &envelope, password, None)
 }
 
 fn decrypt_profile_payload_with_outer_id(
@@ -679,41 +704,82 @@ fn decrypt_profile_payload_with_outer_id(
     password: &str,
 ) -> FrostUtilsResult<(String, String)> {
     let (profile_id, envelope) = decode_profile_envelope(prefix, package_text)?;
-    if envelope.version != BF_PACKAGE_VERSION {
-        return Err(FrostUtilsError::UnsupportedFormat(format!(
-            "{prefix} package version {}",
-            envelope.version
-        )));
-    }
-    if envelope.iv_bytes != BF_PACKAGE_IV_BYTES {
-        return Err(FrostUtilsError::UnsupportedFormat(format!(
-            "{prefix} package iv_bytes {}",
-            envelope.iv_bytes
-        )));
-    }
-    let salt = hex::decode(&envelope.salt_hex)
-        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} salt: {e}")))?;
-    let key = derive_package_encryption_key(password, &salt);
-    let cipher = Aes256Gcm24::new_from_slice(&key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("init AES-GCM: {e}")))?;
-    let combined = URL_SAFE_NO_PAD
-        .decode(envelope.cipher_text.as_bytes())
-        .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
-    if combined.len() <= BF_PACKAGE_IV_BYTES {
-        return Err(FrostUtilsError::Codec(format!("Invalid {prefix} package.")));
-    }
-    let (iv, ciphertext) = combined.split_at(BF_PACKAGE_IV_BYTES);
-    let decrypted = cipher
-        .decrypt(GenericArray::from_slice(iv), ciphertext)
-        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
-    let plaintext = String::from_utf8(decrypted)
-        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} plaintext: {e}")))?;
+    let plaintext = decrypt_v2_envelope(prefix, &envelope, password, Some(&profile_id))?;
     Ok((profile_id, plaintext))
 }
 
-fn derive_package_encryption_key(password: &str, salt: &[u8]) -> [u8; 32] {
-    let password_digest = Sha256::digest(password.as_bytes());
-    pbkdf2_hmac_array::<Sha256, 32>(&password_digest, salt, BF_PACKAGE_PBKDF2_ITERATIONS)
+fn decrypt_v2_envelope(
+    prefix: &str,
+    envelope: &ProtectedPackageEnvelope,
+    password: &str,
+    outer_id: Option<&str>,
+) -> FrostUtilsResult<String> {
+    if envelope.version != BF_PACKAGE_VERSION {
+        return Err(FrostUtilsError::UnsupportedVersion(envelope.version));
+    }
+    if envelope.kdf != KDF_MARKER_ARGON2ID {
+        return Err(FrostUtilsError::UnsupportedKdf(envelope.kdf.clone()));
+    }
+    if envelope.aead != AEAD_MARKER_XCHACHA20POLY1305 {
+        return Err(FrostUtilsError::UnsupportedAead(envelope.aead.clone()));
+    }
+    let params = Argon2Params::new(
+        envelope.kdf_m_cost,
+        envelope.kdf_t_cost,
+        envelope.kdf_p_cost,
+    )
+    .map_err(FrostUtilsError::from)?;
+    let salt_bytes = hex::decode(&envelope.salt_hex)
+        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} salt: {e}")))?;
+    if salt_bytes.len() != PACKAGE_KDF_SALT_LEN {
+        return Err(FrostUtilsError::Codec(format!(
+            "{prefix} salt length {} != {}",
+            salt_bytes.len(),
+            PACKAGE_KDF_SALT_LEN
+        )));
+    }
+    let mut salt = [0u8; PACKAGE_KDF_SALT_LEN];
+    salt.copy_from_slice(&salt_bytes);
+
+    let nonce_bytes = hex::decode(&envelope.nonce_hex)
+        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} nonce: {e}")))?;
+    if nonce_bytes.len() != BF_PACKAGE_XCHACHA_NONCE_BYTES {
+        return Err(FrostUtilsError::Codec(format!(
+            "{prefix} nonce length {} != {}",
+            nonce_bytes.len(),
+            BF_PACKAGE_XCHACHA_NONCE_BYTES
+        )));
+    }
+
+    let aad = build_aad_package(BF_PACKAGE_VERSION, prefix, &salt, outer_id)?;
+    let key = derive_package_encryption_key_v2(password, &salt, &params)?;
+    let cipher = XChaCha20Poly1305::new((&key).into());
+    let ciphertext = URL_SAFE_NO_PAD
+        .decode(envelope.ciphertext.as_bytes())
+        .map_err(|_| FrostUtilsError::Codec(format!("Invalid {prefix} package.")))?;
+    let plaintext = cipher
+        .decrypt(
+            XNonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: &ciphertext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| FrostUtilsError::DecryptionFailed)?;
+    String::from_utf8(plaintext)
+        .map_err(|e| FrostUtilsError::Codec(format!("decode {prefix} plaintext: {e}")))
+}
+
+fn random_salt() -> [u8; PACKAGE_KDF_SALT_LEN] {
+    let mut buf = [0u8; PACKAGE_KDF_SALT_LEN];
+    OsRng.fill_bytes(&mut buf);
+    buf
+}
+
+fn random_nonce() -> [u8; BF_PACKAGE_XCHACHA_NONCE_BYTES] {
+    let mut buf = [0u8; BF_PACKAGE_XCHACHA_NONCE_BYTES];
+    OsRng.fill_bytes(&mut buf);
+    buf
 }
 
 fn encode_envelope(prefix: &str, envelope: &ProtectedPackageEnvelope) -> FrostUtilsResult<String> {
@@ -845,19 +911,6 @@ fn secret_key_from_hex(hex32: &str) -> FrostUtilsResult<SecretKey> {
         .map_err(|e| FrostUtilsError::InvalidInput(format!("invalid share secret: {e}")))
 }
 
-fn random_bytes(len: usize) -> Vec<u8> {
-    let mut bytes = vec![0u8; len];
-    OsRng.fill_bytes(&mut bytes);
-    bytes
-}
-
-fn combine_iv_and_ciphertext(iv: &[u8], ciphertext: &[u8]) -> Vec<u8> {
-    let mut combined = Vec::with_capacity(iv.len() + ciphertext.len());
-    combined.extend_from_slice(iv);
-    combined.extend_from_slice(ciphertext);
-    combined
-}
-
 fn hmac_sha256(key: &[u8], data: &[u8]) -> FrostUtilsResult<[u8; 32]> {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
         .map_err(|e| FrostUtilsError::Crypto(format!("HMAC init failed: {e}")))?;
@@ -868,155 +921,47 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> FrostUtilsResult<[u8; 32]> {
     Ok(out)
 }
 
-fn hkdf_expand_sha256(prk: &[u8], info: &[u8], len: usize) -> FrostUtilsResult<Vec<u8>> {
-    let mut okm = Vec::with_capacity(len);
-    let mut previous = Vec::<u8>::new();
-    let mut counter = 1u8;
-    while okm.len() < len {
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(prk)
-            .map_err(|e| FrostUtilsError::Crypto(format!("HKDF expand init failed: {e}")))?;
-        mac.update(&previous);
-        mac.update(info);
-        mac.update(&[counter]);
-        previous = mac.finalize().into_bytes().to_vec();
-        let remaining = len - okm.len();
-        okm.extend_from_slice(&previous[..remaining.min(previous.len())]);
-        counter = counter
-            .checked_add(1)
-            .ok_or_else(|| FrostUtilsError::Crypto("HKDF counter overflow".to_string()))?;
-    }
-    Ok(okm)
-}
-
 fn encrypt_nip44_compatible_payload(
     conversation_key: &[u8; 32],
     plaintext: &str,
 ) -> FrostUtilsResult<String> {
-    let nonce32 = random_nonce32();
-    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
-    let mut padded = pad_message(plaintext)?;
-    let mut chacha = ChaCha20::new((&chacha_key).into(), (&chacha_nonce).into());
-    chacha.apply_keystream(&mut padded);
-    let mac = hmac_aad(&hmac_key, &nonce32, &padded)?;
-    let mut encoded = Vec::with_capacity(1 + 32 + padded.len() + 32);
-    encoded.push(2u8);
-    encoded.extend_from_slice(&nonce32);
-    encoded.extend_from_slice(&padded);
-    encoded.extend_from_slice(&mac);
-    Ok(STANDARD_NO_PAD.encode(encoded))
+    let mut nonce32 = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce32);
+    bifrost_core::nip44::encrypt_under_conversation_key(conversation_key, &nonce32, plaintext)
+        .map_err(cipher_error)
 }
 
 fn decrypt_nip44_compatible_payload(
     conversation_key: &[u8; 32],
     payload: &str,
 ) -> FrostUtilsResult<String> {
-    let data = STANDARD_NO_PAD
-        .decode(payload.as_bytes())
-        .map_err(|e| FrostUtilsError::Codec(format!("invalid backup base64: {e}")))?;
-    if data.len() < 99 || data[0] != 2 {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let mut nonce32 = [0u8; 32];
-    nonce32.copy_from_slice(&data[1..33]);
-    let ciphertext = &data[33..data.len() - 32];
-    let mut mac = [0u8; 32];
-    mac.copy_from_slice(&data[data.len() - 32..]);
-    let (chacha_key, chacha_nonce, hmac_key) = get_message_keys(conversation_key, &nonce32)?;
-    let expected_mac = hmac_aad(&hmac_key, &nonce32, ciphertext)?;
-    if expected_mac != mac {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let mut padded = ciphertext.to_vec();
-    let mut chacha = ChaCha20::new((&chacha_key).into(), (&chacha_nonce).into());
-    chacha.apply_keystream(&mut padded);
-    unpad_message(&padded)
+    bifrost_core::nip44::decrypt_under_conversation_key(conversation_key, payload)
+        .map_err(cipher_error)
 }
 
-fn random_nonce32() -> [u8; 32] {
-    let mut nonce = [0u8; 32];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
-}
-
-fn get_message_keys(
-    conversation_key: &[u8; 32],
-    nonce32: &[u8; 32],
-) -> FrostUtilsResult<([u8; 32], [u8; 12], [u8; 32])> {
-    let keys = hkdf_expand_sha256(conversation_key, nonce32, 76)?;
-    let mut chacha_key = [0u8; 32];
-    let mut chacha_nonce = [0u8; 12];
-    let mut hmac_key = [0u8; 32];
-    chacha_key.copy_from_slice(&keys[0..32]);
-    chacha_nonce.copy_from_slice(&keys[32..44]);
-    hmac_key.copy_from_slice(&keys[44..76]);
-    Ok((chacha_key, chacha_nonce, hmac_key))
-}
-
-fn calc_padded_len(unpadded_len: usize) -> FrostUtilsResult<usize> {
-    if unpadded_len == 0 {
-        return Err(FrostUtilsError::InvalidInput(
-            "invalid plaintext size".to_string(),
-        ));
+/// Map `bifrost_core::nip44::CipherError` onto the crate's native error
+/// type. Cipher-level failures collapse to `DecryptionFailed` to keep the
+/// pre-consolidation caller contract; structural / input errors surface
+/// as `Crypto` / `InvalidInput` so the underlying diagnostic is not lost.
+fn cipher_error(e: bifrost_core::nip44::CipherError) -> FrostUtilsError {
+    use bifrost_core::nip44::CipherError;
+    match e {
+        CipherError::InvalidVersion
+        | CipherError::PayloadTooShort
+        | CipherError::MacMismatch
+        | CipherError::BadUtf8 => FrostUtilsError::DecryptionFailed,
+        CipherError::BadBase64(msg) => {
+            FrostUtilsError::Codec(format!("invalid backup base64: {msg}"))
+        }
+        CipherError::BadLength(msg) => FrostUtilsError::InvalidInput(msg),
+        CipherError::Crypto(msg) => FrostUtilsError::Crypto(msg),
     }
-    if unpadded_len <= 32 {
-        return Ok(32);
-    }
-    let next_power = 1usize << ((usize::BITS - (unpadded_len - 1).leading_zeros()) as usize);
-    let chunk = if next_power <= 256 {
-        32
-    } else {
-        next_power / 8
-    };
-    Ok(chunk * (((unpadded_len - 1) / chunk) + 1))
-}
-
-fn pad_message(plaintext: &str) -> FrostUtilsResult<Vec<u8>> {
-    let unpadded = plaintext.as_bytes();
-    let len = unpadded.len();
-    if len == 0 || len > 0xffff {
-        return Err(FrostUtilsError::InvalidInput(
-            "invalid plaintext size: must be between 1 and 65535 bytes".to_string(),
-        ));
-    }
-    let padded_len = calc_padded_len(len)?;
-    let mut out = Vec::with_capacity(2 + padded_len);
-    out.extend_from_slice(&(len as u16).to_be_bytes());
-    out.extend_from_slice(unpadded);
-    out.resize(2 + padded_len, 0u8);
-    Ok(out)
-}
-
-fn unpad_message(padded: &[u8]) -> FrostUtilsResult<String> {
-    if padded.len() < 2 {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let unpadded_len = u16::from_be_bytes([padded[0], padded[1]]) as usize;
-    let expected_len = 2 + calc_padded_len(unpadded_len)?;
-    if unpadded_len == 0 || padded.len() != expected_len || padded.len() < 2 + unpadded_len {
-        return Err(FrostUtilsError::DecryptionFailed);
-    }
-    let bytes = &padded[2..2 + unpadded_len];
-    String::from_utf8(bytes.to_vec()).map_err(|_| FrostUtilsError::DecryptionFailed)
-}
-
-fn hmac_aad(
-    hmac_key: &[u8; 32],
-    nonce32: &[u8; 32],
-    ciphertext: &[u8],
-) -> FrostUtilsResult<[u8; 32]> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("HMAC init failed: {e}")))?;
-    mac.update(nonce32);
-    mac.update(ciphertext);
-    let bytes = mac.finalize().into_bytes();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
 
     fn sample_profile() -> BfProfilePayload {
         let device = BfProfileDevice {
@@ -1189,5 +1134,30 @@ mod tests {
         let encoded = encode_bfshare_package(&payload, "secret").expect("encode");
         let err = decode_bfshare_package(&encoded, "wrong").expect_err("wrong password must fail");
         matches!(err, FrostUtilsError::DecryptionFailed);
+    }
+
+    /// Flip a single bit in the MAC tag at four probed positions on a
+    /// profile-backup payload and confirm `decrypt_nip44_compatible_payload`
+    /// rejects every tampered variant. Guards the constant-time MAC compare.
+    #[test]
+    fn decrypt_nip44_compatible_payload_rejects_mac_mismatch_at_every_probed_position() {
+        let conversation_key = [0xABu8; 32];
+        let ciphertext = encrypt_nip44_compatible_payload(&conversation_key, "mac-probe-backup")
+            .expect("encrypt");
+        let bytes = STANDARD_NO_PAD
+            .decode(ciphertext.as_bytes())
+            .expect("decode payload");
+        let mac_start = bytes.len() - 32;
+
+        let probes: &[(usize, u8)] = &[(0, 0x80), (16, 0x01), (31, 0x40), (0, 0x01)];
+        for &(offset, mask) in probes {
+            let mut tampered = bytes.clone();
+            tampered[mac_start + offset] ^= mask;
+            let encoded = STANDARD_NO_PAD.encode(&tampered);
+            let err = decrypt_nip44_compatible_payload(&conversation_key, &encoded).expect_err(
+                &format!("mac flip at offset {offset:#x} mask {mask:#x} must fail"),
+            );
+            assert!(matches!(err, FrostUtilsError::DecryptionFailed));
+        }
     }
 }

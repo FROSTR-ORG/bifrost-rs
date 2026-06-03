@@ -3,8 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use bifrost_core::secret::{FileStoreKey, NoncePoolSecret};
 use bifrost_core::types::SharePackage;
-use bifrost_signer::{DeviceState, DeviceStore};
+use bifrost_signer::{DeviceSecrets, DeviceState, DeviceStatePersisted, DeviceStore};
 use bincode::{DefaultOptions, Options};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
@@ -14,7 +15,12 @@ use sha2::{Digest, Sha256};
 
 pub struct EncryptedFileStore {
     path: PathBuf,
-    key: [u8; 32],
+    key: FileStoreKey,
+    // Held separately from FileStoreKey because the nonce-pool secret has a
+    // different domain separation: it is the raw FROST signing share, whereas
+    // FileStoreKey is derived via Sha256. Zeroized on drop via
+    // NoncePoolSecret's ZeroizeOnDrop impl.
+    share_seckey: NoncePoolSecret,
 }
 
 const MAX_STATE_PLAINTEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -23,18 +29,22 @@ const MAX_STATE_CIPHERTEXT_BYTES: usize = 4 * 1024 * 1024 + 1 + 12 + 16;
 impl EncryptedFileStore {
     pub fn new(path: PathBuf, share: SharePackage) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(share.seckey);
+        hasher.update(share.seckey.expose_bytes());
         hasher.update(b"bifrost-device-state");
         let key_bytes = hasher.finalize();
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
-        Self { path, key }
+        Self {
+            path,
+            key: FileStoreKey::new(key),
+            share_seckey: NoncePoolSecret::new(*share.seckey.expose_bytes()),
+        }
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let cipher = ChaCha20Poly1305::new((&self.key).into());
+        let cipher = ChaCha20Poly1305::new(self.key.expose_bytes().into());
         let ciphertext = cipher
             .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
             .map_err(|_| anyhow!("state encryption failure"))?;
@@ -58,7 +68,7 @@ impl EncryptedFileStore {
         nonce_bytes.copy_from_slice(&ciphertext[1..13]);
         let payload = &ciphertext[13..];
 
-        let cipher = ChaCha20Poly1305::new((&self.key).into());
+        let cipher = ChaCha20Poly1305::new(self.key.expose_bytes().into());
         cipher
             .decrypt(Nonce::from_slice(&nonce_bytes), payload)
             .map_err(|_| anyhow!("state decryption failure"))
@@ -82,10 +92,17 @@ impl DeviceStore for EncryptedFileStore {
                 "state plaintext exceeds maximum size".to_string(),
             ));
         }
-        DefaultOptions::new()
+        let persisted: DeviceStatePersisted = DefaultOptions::new()
             .with_limit(MAX_STATE_PLAINTEXT_BYTES as u64)
             .deserialize(&plaintext)
-            .map_err(|e| bifrost_signer::SignerError::StateCorrupted(e.to_string()))
+            .map_err(|e| bifrost_signer::SignerError::StateCorrupted(e.to_string()))?;
+        if persisted.version != DeviceState::VERSION {
+            return Err(bifrost_signer::SignerError::UnsupportedVersion(
+                persisted.version,
+            ));
+        }
+        let secrets = DeviceSecrets::new(*self.share_seckey.expose_bytes());
+        Ok(DeviceState::from_persisted(secrets, persisted))
     }
 
     fn save(&self, state: &DeviceState) -> bifrost_signer::Result<()> {
@@ -93,9 +110,10 @@ impl DeviceStore for EncryptedFileStore {
             fs::create_dir_all(parent)
                 .map_err(|e| bifrost_signer::SignerError::StateCorrupted(e.to_string()))?;
         }
+        let persisted = DeviceStatePersisted::from(state);
         let plaintext = DefaultOptions::new()
             .with_limit(MAX_STATE_PLAINTEXT_BYTES as u64)
-            .serialize(state)
+            .serialize(&persisted)
             .map_err(|e| bifrost_signer::SignerError::StateCorrupted(e.to_string()))?;
         if plaintext.len() > MAX_STATE_PLAINTEXT_BYTES {
             return Err(bifrost_signer::SignerError::StateCorrupted(

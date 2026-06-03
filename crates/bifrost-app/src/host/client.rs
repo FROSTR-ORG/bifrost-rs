@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use bifrost_core::secret::DaemonToken;
 use bifrost_core::types::PeerPolicyOverride;
 use bifrost_signer::{
     DeviceConfig, DeviceStatus, PeerStatus, RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary,
@@ -16,31 +17,29 @@ use super::types::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[cfg(unix)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DaemonClient {
     socket_path: std::path::PathBuf,
-    token: String,
+    token: DaemonToken,
 }
 
 #[cfg(unix)]
 impl DaemonClient {
-    pub fn new(socket_path: std::path::PathBuf, token: String) -> Self {
+    pub fn new(socket_path: std::path::PathBuf, token: DaemonToken) -> Self {
         Self { socket_path, token }
     }
 
     pub async fn request(&self, command: ControlCommand) -> Result<ControlResponse> {
         let request = ControlRequest {
             request_id: next_request_id(),
-            token: self.token.clone(),
+            token: self.token.clone_secret(),
             command,
         };
 
         let mut stream = tokio::net::UnixStream::connect(&self.socket_path)
             .await
             .with_context(|| format!("connect {}", self.socket_path.display()))?;
-        stream
-            .write_all(serde_json::to_vec(&request)?.as_slice())
-            .await?;
+        stream.write_all(&request.encode_wire()?).await?;
         stream.shutdown().await?;
 
         let mut response_bytes = Vec::new();
@@ -194,6 +193,11 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn test_token() -> DaemonToken {
+        DaemonToken::from_hex(&hex::encode([0x42u8; 32])).expect("test token hex")
+    }
+
+    #[cfg(unix)]
     async fn with_fake_daemon<F, Fut>(name: &str, handle: F) -> Result<DaemonClient>
     where
         F: FnOnce(ControlRequest) -> Fut + Send + 'static,
@@ -209,22 +213,22 @@ mod tests {
                 .read_to_end(&mut request_bytes)
                 .await
                 .expect("read should succeed");
-            let request: ControlRequest =
-                serde_json::from_slice(&request_bytes).expect("request should parse");
+            let request =
+                ControlRequest::decode_wire(&request_bytes).expect("request should parse");
             let response = handle(request).await;
             stream
                 .write_all(&serde_json::to_vec(&response).expect("response should serialize"))
                 .await
                 .expect("write should succeed");
         });
-        Ok(DaemonClient::new(socket_path, "test-token".to_string()))
+        Ok(DaemonClient::new(socket_path, test_token()))
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn status_uses_status_command_and_decodes_payload() -> Result<()> {
         let client = with_fake_daemon("status", |request| async move {
-            assert_eq!(request.token, "test-token");
+            assert_eq!(request.token, test_token());
             assert!(matches!(request.command, ControlCommand::Status));
             ControlResponse {
                 request_id: request.request_id,

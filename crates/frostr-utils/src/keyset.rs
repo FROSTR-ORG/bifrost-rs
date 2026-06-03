@@ -1,4 +1,5 @@
 use bifrost_core::get_group_id;
+use bifrost_core::secret::SharePrivateKey;
 use bifrost_core::types::{GroupPackage, MemberPackage, SharePackage};
 use frost_secp256k1_tr_unofficial as frost;
 use frost_secp256k1_tr_unofficial::keys::EvenY;
@@ -58,7 +59,7 @@ pub fn rotate_keyset_dealer(
         shares: req.shares,
     })?;
 
-    let signing_key = frost::SigningKey::deserialize(&recovered.signing_key32)
+    let signing_key = frost::SigningKey::deserialize(recovered.signing_key32.expose_bytes())
         .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?
         .into_even_y(None);
 
@@ -154,7 +155,10 @@ fn build_keyset_bundle(
             idx,
             pubkey: member_pk,
         });
-        share_packages.push(SharePackage { idx, seckey });
+        share_packages.push(SharePackage {
+            idx,
+            seckey: SharePrivateKey::new(seckey),
+        });
     }
 
     members.sort_by_key(|m| m.idx);
@@ -204,7 +208,7 @@ mod tests {
         })
         .expect("recover key");
 
-        assert_eq!(recovered.signing_key32, signing_key32);
+        assert_eq!(recovered.signing_key32.expose_bytes(), &signing_key32);
     }
 
     #[test]
@@ -291,6 +295,9 @@ mod tests {
         })
         .expect("recover rotated");
 
-        assert_eq!(recovered.signing_key32, original.signing_key32);
+        assert_eq!(
+            recovered.signing_key32.expose_bytes(),
+            original.signing_key32.expose_bytes()
+        );
     }
 }

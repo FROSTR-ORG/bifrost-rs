@@ -7,9 +7,9 @@ use bifrost_core::types::{GroupPackage, PeerPolicyOverride, PolicyOverrideValue}
 use bifrost_core::{get_group_id, nonce::NoncePoolConfig};
 use bifrost_router::{BridgeCommand, BridgeConfig, BridgeCore, QueueOverflowPolicy};
 use bifrost_signer::{
-    CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceState, OperationFailure,
-    PeerNonceInventoryObservation, RuntimeStatusSummary, SigningDevice,
-    finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
+    CompletedOperation, DeviceConfig, DeviceConfigPatch, DeviceSecrets, DeviceState,
+    DeviceStatePersisted, OperationFailure, PeerNonceInventoryObservation, RuntimeStatusSummary,
+    SigningDevice, finalize_onboarding_bootstrap_seed, generate_onboarding_bootstrap_seed,
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
@@ -346,7 +346,9 @@ impl WasmBridgeRuntime {
             serde_json::from_str(&config_json).map_err(|e| to_host_error(e.to_string()))?;
         let snapshot: RuntimeSnapshot =
             serde_json::from_str(&snapshot_json).map_err(|e| to_host_error(e.to_string()))?;
-        let state = decode_device_state_hex(&snapshot.state_hex)
+        let share_seckey = decode_hex32(&snapshot.bootstrap.share.seckey)
+            .map_err(|e| to_host_error(e.to_string()))?;
+        let state = decode_device_state_hex(&snapshot.state_hex, share_seckey)
             .map_err(|e| to_host_error(e.to_string()))?;
         let core = build_core(&config, &snapshot.bootstrap, Some(state))
             .map_err(|e| to_host_error(e.to_string()))?;
@@ -754,8 +756,8 @@ pub fn build_onboarding_runtime_snapshot(
         .map(TryInto::try_into)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e: bifrost_codec::CodecError| to_host_error(e.to_string()))?;
-    let seed_state =
-        decode_device_state_hex(&bootstrap_state_hex).map_err(|e| to_host_error(e.to_string()))?;
+    let seed_state = decode_device_state_hex(&bootstrap_state_hex, share)
+        .map_err(|e| to_host_error(e.to_string()))?;
     let finalized_state =
         finalize_onboarding_bootstrap_seed(seed_state, local_idx, inviter_idx, response_nonces)
             .map_err(|e| to_host_error(e.to_string()))?;
@@ -895,7 +897,7 @@ pub fn recover_secret_key_from_shares(input_json: String) -> HostResult<String> 
         .map_err(|e| to_host_error(e.to_string()))?;
     let recovered = rust_recover_key(&RecoverKeyInput { group, shares })
         .map_err(|e| to_host_error(e.to_string()))?;
-    Ok(hex::encode(recovered.signing_key32))
+    Ok(hex::encode(recovered.signing_key32.expose_bytes()))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -982,7 +984,7 @@ fn build_core(
     let signer = match state {
         Some(existing) => SigningDevice::new(group, share, peers, existing, device_cfg)?,
         None => {
-            let mut initial_state = DeviceState::new(share.idx, share.seckey);
+            let mut initial_state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
             seed_initial_peer_nonces(&mut initial_state, &group, &bootstrap.initial_peer_nonces)?;
             SigningDevice::new(group, share, peers, initial_state, device_cfg)?
         }
@@ -1092,7 +1094,7 @@ fn device_state_snapshot_json(
         last_active: state.last_active,
         request_seq: state.request_seq,
         replay_cache_size: state.replay_cache.len(),
-        ecdh_cache_size: state.ecdh_cache.len(),
+        ecdh_cache_size: state.secrets.ecdh_cache.len(),
         sig_cache_size: state.sig_cache.len(),
         manual_policy_overrides: state.manual_policy_overrides.clone(),
         remote_scoped_policies: state.remote_scoped_policies.clone(),
@@ -1103,15 +1105,26 @@ fn device_state_snapshot_json(
 }
 
 fn encode_device_state_hex(state: &DeviceState) -> Result<String> {
-    let encoded =
-        bincode::serialize(state).map_err(|e| anyhow!("failed to encode device state: {e}"))?;
+    let persisted = DeviceStatePersisted::from(state);
+    let encoded = bincode::serialize(&persisted)
+        .map_err(|e| anyhow!("failed to encode device state: {e}"))?;
     Ok(hex::encode(encoded))
 }
 
-fn decode_device_state_hex(state_hex: &str) -> Result<DeviceState> {
+fn decode_device_state_hex(state_hex: &str, share_seckey: [u8; 32]) -> Result<DeviceState> {
     let bytes = hex::decode(state_hex)
         .map_err(|e| anyhow!("failed to decode device state snapshot hex: {e}"))?;
-    bincode::deserialize(&bytes).map_err(|e| anyhow!("failed to decode device state snapshot: {e}"))
+    let persisted: DeviceStatePersisted = bincode::deserialize(&bytes)
+        .map_err(|e| anyhow!("failed to decode device state snapshot: {e}"))?;
+    if persisted.version != DeviceState::VERSION {
+        return Err(anyhow!(
+            "unsupported device state version {} (expected {})",
+            persisted.version,
+            DeviceState::VERSION
+        ));
+    }
+    let secrets = DeviceSecrets::new(share_seckey);
+    Ok(DeviceState::from_persisted(secrets, persisted))
 }
 
 fn nonce_pool_snapshot_json(
@@ -1285,10 +1298,10 @@ mod tests {
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(local_share.idx, 3)
+            .generate_for_peer(local_share.idx, 3, &peer_state.secrets.nonce_pool_secret)
             .expect("generate peer nonces");
 
         let bootstrap = RuntimeBootstrapInput {
@@ -1369,10 +1382,10 @@ mod tests {
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
 
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(local_share.idx, 2)
+            .generate_for_peer(local_share.idx, 2, &peer_state.secrets.nonce_pool_secret)
             .expect("generate peer nonces");
 
         let bootstrap = RuntimeBootstrapInput {
@@ -1466,10 +1479,10 @@ mod tests {
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(local_share.idx, 10)
+            .generate_for_peer(local_share.idx, 10, &peer_state.secrets.nonce_pool_secret)
             .expect("generate peer nonces");
 
         let bootstrap = RuntimeBootstrapInput {
@@ -1521,10 +1534,10 @@ mod tests {
         let local_share = bundle.shares[0].clone();
         let peer_share = bundle.shares[1].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
-        let mut peer_state = DeviceState::new(peer_share.idx, peer_share.seckey);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
         let generated = peer_state
             .nonce_pool
-            .generate_for_peer(local_share.idx, 10)
+            .generate_for_peer(local_share.idx, 10, &peer_state.secrets.nonce_pool_secret)
             .expect("generate peer nonces");
 
         let bootstrap = RuntimeBootstrapInput {
@@ -1693,7 +1706,7 @@ mod tests {
         let group = bundle.group.clone();
         let share = bundle.shares[1].clone();
         let payload = BfOnboardPayload {
-            share_secret: hex::encode(share.seckey),
+            share_secret: hex::encode(share.seckey.expose_bytes()),
             relays: vec!["wss://relay.example".to_string()],
             peer_pk: hex::encode(&group.members[0].pubkey[1..]),
         };

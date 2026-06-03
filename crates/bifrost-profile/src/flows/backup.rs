@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
+use bifrost_core::secret::Passphrase;
 use frostr_utils::{build_profile_backup_event, create_encrypted_profile_backup};
 use futures_util::{SinkExt, StreamExt};
 use nostr::Event;
@@ -121,7 +122,7 @@ pub(super) async fn fetch_latest_nostr_event(
 pub async fn publish_profile_backup(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<ProfileBackupPublishResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
     let backup = create_encrypted_profile_backup(&payload).context("build encrypted backup")?;

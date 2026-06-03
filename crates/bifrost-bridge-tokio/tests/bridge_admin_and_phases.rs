@@ -58,7 +58,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -305,7 +305,7 @@ async fn locked_peer_timeout_marks_request_failed() {
         group,
         local_share.clone(),
         peers,
-        DeviceState::new(local_share.idx, local_share.seckey),
+        DeviceState::new(local_share.idx, *local_share.seckey.expose_bytes()),
         DeviceConfig {
             ping_timeout_secs: 1,
             ..DeviceConfig::default()

@@ -58,7 +58,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -74,7 +74,8 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
         .try_into()
         .expect("xonly target");
     let event_kind = DeviceConfig::default().event_kind as u16;
-    let local_secret = SecretKey::from_slice(&local_share.seckey).expect("local secret");
+    let local_secret =
+        SecretKey::from_slice(local_share.seckey.expose_bytes()).expect("local secret");
     let local_keys = Keys::new(local_secret.clone());
 
     let mut peer_signers = bundle
@@ -124,7 +125,8 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                     }),
                 };
                 let malformed_plain = encode_bridge_envelope(&malformed).expect("encode envelope");
-                let peer_secret = SecretKey::from_slice(&share.seckey).expect("peer secret");
+                let peer_secret =
+                    SecretKey::from_slice(share.seckey.expose_bytes()).expect("peer secret");
                 let peer_keys = Keys::new(peer_secret.clone());
                 let encrypted = nip44::encrypt(
                     &peer_secret,

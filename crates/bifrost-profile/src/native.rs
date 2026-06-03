@@ -2,23 +2,141 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use argon2::Argon2;
 use bifrost_codec::wire::{GroupPackageWire, SharePackageWire};
 use bifrost_core::get_group_id;
+use bifrost_core::secret::FileStoreKey;
 use bifrost_core::types::{GroupPackage, SharePackage};
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use rand_core::{OsRng, RngCore};
 use serde::{Serialize, de::DeserializeOwned};
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
-    ENCRYPTED_PROFILE_VERSION, EncryptedProfileRecord, ProfileManifest, ProfileManifestStore,
-    RelayProfile, RelayProfileStore, ShellConfig, build_policy_overrides_value,
-    build_profile_manifest, derive_profile_id_for_share_secret, empty_policy_overrides_value,
-    find_member_index_for_share_secret, group_from_payload, hex_to_bytes32,
+    ENCRYPTED_PROFILE_VERSION, EncryptedProfileRecord, KDF_ID_ARGON2ID, ProfileManifest,
+    ProfileManifestStore, RelayProfile, RelayProfileStore, ShellConfig,
+    aad::{AAD_SALT_LEN, build_aad_hostlocal},
+    argon2_params::Argon2Params,
+    build_policy_overrides_value, build_profile_manifest, derive_profile_id_for_share_secret,
+    empty_policy_overrides_value, find_member_index_for_share_secret, group_from_payload,
+    hex_to_bytes32,
+    kdf::{KDF_SALT_LEN, derive_profile_encryption_key_v2},
+    state_error::StateError,
     traits::EncryptedProfileStore,
 };
 use frostr_utils::BfProfilePayload;
+
+/// ChaCha20Poly1305 nonce size for the v2 envelope.
+const ENVELOPE_NONCE_LEN: usize = 12;
+
+/// ChaCha20Poly1305 tag size (Poly1305 MAC, appended to ciphertext by the AEAD).
+const ENVELOPE_TAG_LEN: usize = 16;
+
+/// Minimum v2 envelope length in bytes:
+/// `version(1) + kdf_id(1) + m_cost(4) + t_cost(4) + p_cost(1) + nonce(12) + tag(16)`.
+const ENVELOPE_MIN_LEN: usize = 1 + 1 + 4 + 4 + 1 + ENVELOPE_NONCE_LEN + ENVELOPE_TAG_LEN;
+
+/// Internal helper struct holding the parsed v2 envelope header and the
+/// ciphertext+tag tail. Constructed by [`ParsedEnvelope::parse`], consumed by
+/// [`decrypt_with_file_store_key`]. Allows both the passphrase-based and the
+/// pre-derived-key decrypt paths to share the same parse + AEAD invocation.
+struct ParsedEnvelope<'a> {
+    params: Argon2Params,
+    nonce: [u8; ENVELOPE_NONCE_LEN],
+    ciphertext: &'a [u8],
+}
+
+impl<'a> ParsedEnvelope<'a> {
+    fn parse(envelope: &'a [u8]) -> Result<Self> {
+        // Length check first — never index into a short/corrupt file.
+        if envelope.len() < ENVELOPE_MIN_LEN {
+            return Err(anyhow!(StateError::Truncated {
+                actual: envelope.len(),
+                minimum: ENVELOPE_MIN_LEN,
+            }));
+        }
+
+        let version = envelope[0];
+        if version != ENCRYPTED_PROFILE_VERSION {
+            return Err(anyhow!(StateError::UnsupportedVersion(version)));
+        }
+
+        let kdf_id = envelope[1];
+        if kdf_id != KDF_ID_ARGON2ID {
+            return Err(anyhow!(StateError::UnsupportedKdf(kdf_id)));
+        }
+
+        let m_cost = u32::from_be_bytes([envelope[2], envelope[3], envelope[4], envelope[5]]);
+        let t_cost = u32::from_be_bytes([envelope[6], envelope[7], envelope[8], envelope[9]]);
+        let p_cost = envelope[10];
+        let params = Argon2Params::new(m_cost, t_cost, p_cost)
+            .map_err(|err| anyhow!(StateError::from(err)))?;
+
+        let mut nonce = [0u8; ENVELOPE_NONCE_LEN];
+        nonce.copy_from_slice(&envelope[11..11 + ENVELOPE_NONCE_LEN]);
+
+        Ok(Self {
+            params,
+            nonce,
+            ciphertext: &envelope[11 + ENVELOPE_NONCE_LEN..],
+        })
+    }
+}
+
+/// AEAD-decrypt a parsed envelope with a pre-derived [`FileStoreKey`] and the
+/// record-bound AAD. Used by both [`FilesystemEncryptedProfileStore::decrypt_encrypted_profile`]
+/// and [`FilesystemEncryptedProfileStore::decrypt_encrypted_profile_with_key`].
+fn decrypt_with_file_store_key(
+    parsed: &ParsedEnvelope<'_>,
+    record: &EncryptedProfileRecord,
+    key: &FileStoreKey,
+) -> Result<String> {
+    let aad = build_aad_hostlocal(record).map_err(|err| anyhow!(err))?;
+    let cipher = ChaCha20Poly1305::new(key.expose_bytes().into());
+    let plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(&parsed.nonce),
+            Payload {
+                msg: parsed.ciphertext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| anyhow!("encrypted profile decryption failure"))?;
+    String::from_utf8(plaintext).context("encrypted profile plaintext is not utf8")
+}
+
+/// Derive a [`FileStoreKey`] for the given envelope record from a passphrase.
+///
+/// Reads the envelope file at `record.ciphertext_path` to recover the Argon2id
+/// parameters embedded in the v2 header, decodes the salt from the sidecar
+/// metadata, and runs Argon2id once. Returns a [`FileStoreKey`] that the caller
+/// can hand back to [`FilesystemEncryptedProfileStore::decrypt_encrypted_profile_with_key`]
+/// (or, in practice, to [`bifrost_app::host::UnlockSession`]).
+///
+/// Bucket C C.6: the daemon calls this exactly once at startup, then drops the
+/// passphrase. Subsequent decrypts run AEAD only, never Argon2.
+pub fn derive_file_store_key_for_record(
+    record: &EncryptedProfileRecord,
+    passphrase_bytes: &[u8],
+) -> Result<FileStoreKey> {
+    let envelope = fs::read(&record.ciphertext_path)
+        .with_context(|| format!("read {}", record.ciphertext_path))?;
+    let parsed = ParsedEnvelope::parse(&envelope)?;
+
+    let salt_bytes = hex::decode(&record.salt_hex).context("decode encrypted profile salt")?;
+    if salt_bytes.len() != AAD_SALT_LEN {
+        return Err(anyhow!(StateError::InvalidMetadata {
+            reason: "salt_hex does not decode to 16 bytes",
+        }));
+    }
+    let mut salt = [0u8; KDF_SALT_LEN];
+    salt.copy_from_slice(&salt_bytes);
+
+    let key_bytes = derive_profile_encryption_key_v2(passphrase_bytes, &salt, &parsed.params)
+        .map_err(|err| anyhow!(err))?;
+    Ok(FileStoreKey::new(key_bytes))
+}
 
 pub fn load_shell_config_file(path: &Path) -> Result<ShellConfig> {
     if !path.exists() {
@@ -179,7 +297,8 @@ impl FilesystemProfileDomain {
         passphrase: &str,
         now_unix_secs: u64,
     ) -> Result<ImportedProfileArtifacts> {
-        let profile_id = derive_profile_id_for_share_secret(&hex::encode(share.seckey))?;
+        let profile_id =
+            derive_profile_id_for_share_secret(&hex::encode(share.seckey.expose_bytes()))?;
         self.ensure_profile_id_unused(&profile_id)?;
         let relay_profile_id = self.resolve_relay_profile_id(relay_profile)?;
         let group_ref = self.store_group_package(group)?;
@@ -223,7 +342,9 @@ impl FilesystemProfileDomain {
         let group = group_from_payload(payload)?;
         let share = SharePackage {
             idx: find_member_index_for_share_secret(&group, &payload.device.share_secret)?,
-            seckey: hex_to_bytes32(&payload.device.share_secret)?,
+            seckey: bifrost_core::secret::SharePrivateKey::new(hex_to_bytes32(
+                &payload.device.share_secret,
+            )?),
         };
         let share_raw = serde_json::to_string_pretty(&SharePackageWire::from(share))
             .context("serialize bfprofile share package")?;
@@ -260,7 +381,8 @@ impl FilesystemProfileDomain {
         encrypted_profile: EncryptedProfileRecord,
         now_unix_secs: u64,
     ) -> Result<ImportedProfileArtifacts> {
-        let profile_id = derive_profile_id_for_share_secret(&hex::encode(share.seckey))?;
+        let profile_id =
+            derive_profile_id_for_share_secret(&hex::encode(share.seckey.expose_bytes()))?;
         self.ensure_profile_id_unused(&profile_id)?;
         let group_ref = self.store_group_package(group)?;
         let profile = self.write_imported_profile(
@@ -307,6 +429,10 @@ impl FilesystemProfileDomain {
         policy_overrides: serde_json::Value,
     ) -> Result<ProfileManifest> {
         let state_dir = self.state_profiles_dir.join(profile_id);
+        #[cfg(unix)]
+        ensure_dir_restricted(&state_dir, 0o700)
+            .with_context(|| format!("create {}", state_dir.display()))?;
+        #[cfg(not(unix))]
         fs::create_dir_all(&state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
         let mut profile = build_profile_manifest(
@@ -430,38 +556,87 @@ impl FilesystemEncryptedProfileStore {
         passphrase: &str,
         now_unix_secs: u64,
     ) -> Result<EncryptedProfileRecord> {
-        let mut salt = [0u8; 16];
-        let mut nonce = [0u8; 12];
+        self.store_encrypted_profile_with_params(
+            kind,
+            source,
+            payload,
+            passphrase,
+            now_unix_secs,
+            &Argon2Params::for_new_envelope(),
+        )
+    }
+
+    /// Variant that accepts an explicit `Argon2Params`. Callers that do not
+    /// need to override the defaults should use [`Self::store_encrypted_profile`].
+    pub fn store_encrypted_profile_with_params(
+        &self,
+        kind: &str,
+        source: &str,
+        payload: &str,
+        passphrase: &str,
+        now_unix_secs: u64,
+        params: &Argon2Params,
+    ) -> Result<EncryptedProfileRecord> {
+        let mut salt = [0u8; KDF_SALT_LEN];
+        let mut nonce = [0u8; ENVELOPE_NONCE_LEN];
         OsRng.fill_bytes(&mut salt);
         OsRng.fill_bytes(&mut nonce);
-        let key = derive_profile_encryption_key(passphrase, &salt)?;
-        let cipher = ChaCha20Poly1305::new((&key).into());
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), payload.as_bytes())
-            .map_err(|_| anyhow!("encrypted profile encryption failure"))?;
-        let mut envelope = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
-        envelope.push(ENCRYPTED_PROFILE_VERSION);
-        envelope.extend_from_slice(&nonce);
-        envelope.extend_from_slice(&ciphertext);
 
         let id = format!("encrypted-profile-{now_unix_secs}-{}", random_hex(4));
-        let ciphertext_path = self.ciphertext_path(&id);
-        if let Some(parent) = ciphertext_path.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-        }
-        fs::write(&ciphertext_path, envelope)
-            .with_context(|| format!("write {}", ciphertext_path.display()))?;
-
         let record = EncryptedProfileRecord {
             id: id.clone(),
             kind: kind.to_string(),
             source: source.to_string(),
-            ciphertext_path: ciphertext_path.display().to_string(),
+            ciphertext_path: self.ciphertext_path(&id).display().to_string(),
             key_source: "passphrase".to_string(),
             salt_hex: hex::encode(salt),
             created_at: now_unix_secs,
             updated_at: now_unix_secs,
         };
+
+        let aad = build_aad_hostlocal(&record)
+            .map_err(|err| anyhow!("build encrypted profile AAD: {err}"))?;
+        let key = derive_profile_encryption_key_v2(passphrase.as_bytes(), &salt, params)
+            .map_err(|err| anyhow!("derive encrypted profile key: {err}"))?;
+        let cipher = ChaCha20Poly1305::new((&key).into());
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: payload.as_bytes(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| anyhow!("encrypted profile encryption failure"))?;
+
+        let mut envelope = Vec::with_capacity(ENVELOPE_MIN_LEN + ciphertext.len());
+        envelope.push(ENCRYPTED_PROFILE_VERSION);
+        envelope.push(KDF_ID_ARGON2ID);
+        envelope.extend_from_slice(&params.m_cost().to_be_bytes());
+        envelope.extend_from_slice(&params.t_cost().to_be_bytes());
+        envelope.push(params.p_cost());
+        envelope.extend_from_slice(&nonce);
+        envelope.extend_from_slice(&ciphertext);
+
+        let ciphertext_path = PathBuf::from(&record.ciphertext_path);
+        if let Some(parent) = ciphertext_path.parent() {
+            #[cfg(unix)]
+            ensure_dir_restricted(parent, 0o700)
+                .with_context(|| format!("create {}", parent.display()))?;
+            #[cfg(not(unix))]
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        // Bucket C C.1/C.2: ciphertext envelope is the canonical secret-bearing
+        // file in the profile tree. Atomic write + 0o600 perms on Unix so an
+        // interrupted write never leaves a partial envelope on disk and the
+        // file is never group/other-readable, even under a relaxed umask.
+        #[cfg(unix)]
+        write_restricted_bytes_atomic(&ciphertext_path, &envelope, 0o600)
+            .with_context(|| format!("write {}", ciphertext_path.display()))?;
+        #[cfg(not(unix))]
+        fs::write(&ciphertext_path, &envelope)
+            .with_context(|| format!("write {}", ciphertext_path.display()))?;
+
         self.write_encrypted_profile(&record)?;
         Ok(record)
     }
@@ -471,23 +646,47 @@ impl FilesystemEncryptedProfileStore {
         record: &EncryptedProfileRecord,
         passphrase: &str,
     ) -> Result<String> {
-        let salt = hex::decode(&record.salt_hex).context("decode encrypted profile salt")?;
         let envelope = fs::read(&record.ciphertext_path)
             .with_context(|| format!("read {}", record.ciphertext_path))?;
-        if envelope.len() < 1 + 12 + 16 {
-            bail!("encrypted profile ciphertext is too short");
+        let parsed = ParsedEnvelope::parse(&envelope)?;
+
+        // salt from sidecar metadata — must match the AAD salt exactly.
+        let salt_bytes = hex::decode(&record.salt_hex).context("decode encrypted profile salt")?;
+        if salt_bytes.len() != AAD_SALT_LEN {
+            return Err(anyhow!(StateError::InvalidMetadata {
+                reason: "salt_hex does not decode to 16 bytes",
+            }));
         }
-        if envelope[0] != ENCRYPTED_PROFILE_VERSION {
-            bail!("unsupported encrypted profile version {}", envelope[0]);
-        }
-        let mut nonce = [0u8; 12];
-        nonce.copy_from_slice(&envelope[1..13]);
-        let key = derive_profile_encryption_key(passphrase, &salt)?;
-        let cipher = ChaCha20Poly1305::new((&key).into());
-        let plaintext = cipher
-            .decrypt(Nonce::from_slice(&nonce), &envelope[13..])
-            .map_err(|_| anyhow!("encrypted profile decryption failure"))?;
-        String::from_utf8(plaintext).context("encrypted profile plaintext is not utf8")
+        let mut salt = [0u8; KDF_SALT_LEN];
+        salt.copy_from_slice(&salt_bytes);
+
+        let key = derive_profile_encryption_key_v2(passphrase.as_bytes(), &salt, &parsed.params)
+            .map_err(|err| anyhow!(err))?;
+        let key = FileStoreKey::new(key);
+        decrypt_with_file_store_key(&parsed, record, &key)
+    }
+
+    /// Decrypt an encrypted profile envelope using a pre-derived
+    /// [`FileStoreKey`] instead of running Argon2id on the passphrase.
+    ///
+    /// Bucket C C.6 (`UnlockSession`): the daemon derives the key once at
+    /// startup and reuses it for every subsequent decrypt during the process
+    /// lifetime, saving the ~400-600 ms Argon2 cost per Sign / Ecdh / Wipe
+    /// operation that triggers a profile decrypt.
+    ///
+    /// The envelope's recorded Argon2 parameters and the record's salt are
+    /// still validated, but no KDF is run. If the supplied key does not match
+    /// the key the envelope was sealed with (e.g. wrong profile, wrong
+    /// passphrase), AEAD MAC verification fails and an error is returned.
+    pub fn decrypt_encrypted_profile_with_key(
+        &self,
+        record: &EncryptedProfileRecord,
+        key: &FileStoreKey,
+    ) -> Result<String> {
+        let envelope = fs::read(&record.ciphertext_path)
+            .with_context(|| format!("read {}", record.ciphertext_path))?;
+        let parsed = ParsedEnvelope::parse(&envelope)?;
+        decrypt_with_file_store_key(&parsed, record, key)
     }
 
     pub fn remove_encrypted_profile(&self, encrypted_profile_id: &str) -> Result<()> {
@@ -529,14 +728,6 @@ impl crate::EncryptedProfileStore for FilesystemEncryptedProfileStore {
     }
 }
 
-fn derive_profile_encryption_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
-    let mut key = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|error| anyhow!("derive profile encryption key: {error}"))?;
-    Ok(key)
-}
-
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))
@@ -544,10 +735,26 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
 
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
+        #[cfg(unix)]
+        ensure_dir_restricted(parent, 0o700)
+            .with_context(|| format!("create {}", parent.display()))?;
+        #[cfg(not(unix))]
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let raw = serde_json::to_string_pretty(value).context("serialize json")?;
-    fs::write(path, raw).with_context(|| format!("write {}", path.display()))
+    // Bucket C C.1/C.2: every JSON manifest in the profile tree
+    // (shell config, relay profile list, profile manifest, encrypted-profile
+    // metadata sidecar) is potentially secret-adjacent and must survive a
+    // crash mid-write. Atomic write + 0o600 on Unix.
+    #[cfg(unix)]
+    {
+        write_restricted_bytes_atomic(path, raw.as_bytes(), 0o600)
+            .with_context(|| format!("write {}", path.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, raw).with_context(|| format!("write {}", path.display()))
+    }
 }
 
 fn random_hex(bytes_len: usize) -> String {

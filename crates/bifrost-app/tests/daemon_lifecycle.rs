@@ -9,9 +9,14 @@ use bifrost_app::host::{
     run_resolved_daemon,
 };
 use bifrost_app::runtime::{AppOptions, ResolvedAppConfig};
+use bifrost_core::secret::DaemonToken;
 use bifrost_core::types::{GroupPackage, SharePackage};
 use frostr_utils::{CreateKeysetConfig, create_keyset};
 use tokio::time::sleep;
+
+fn token_with_byte(b: u8) -> DaemonToken {
+    DaemonToken::from_hex(&hex::encode([b; 32])).expect("test token hex")
+}
 
 fn temp_path(name: &str, suffix: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -59,16 +64,15 @@ async fn run_resolved_daemon_serves_status_diagnostics_and_shutdown() {
         temp_path("state", "bin"),
     );
     let socket_path = temp_path("control", "sock");
-    let token = "daemon-test-token".to_string();
     let transport = DaemonTransportConfig {
         socket_path: socket_path.clone(),
-        token: token.clone(),
+        token: token_with_byte(0x21),
     };
 
     let daemon = tokio::spawn(run_resolved_daemon(config.clone(), transport));
     wait_for_socket(&socket_path).await;
 
-    let client = DaemonClient::new(socket_path.clone(), token);
+    let client = DaemonClient::new(socket_path.clone(), token_with_byte(0x21));
     let status = client
         .request_ok(ControlCommand::Status)
         .await
@@ -104,16 +108,15 @@ async fn daemon_control_admin_commands_roundtrip() {
         temp_path("admin-state", "bin"),
     );
     let socket_path = temp_path("admin-control", "sock");
-    let token = "daemon-admin-token".to_string();
     let transport = DaemonTransportConfig {
         socket_path: socket_path.clone(),
-        token: token.clone(),
+        token: token_with_byte(0x22),
     };
 
     let daemon = tokio::spawn(run_resolved_daemon(config.clone(), transport));
     wait_for_socket(&socket_path).await;
 
-    let client = DaemonClient::new(socket_path.clone(), token);
+    let client = DaemonClient::new(socket_path.clone(), token_with_byte(0x22));
     let metadata = client
         .request_ok(ControlCommand::RuntimeMetadata)
         .await
@@ -157,16 +160,15 @@ async fn daemon_control_runtime_surfaces_roundtrip() {
         temp_path("runtime-state", "bin"),
     );
     let socket_path = temp_path("runtime-control", "sock");
-    let token = "daemon-runtime-token".to_string();
     let transport = DaemonTransportConfig {
         socket_path: socket_path.clone(),
-        token: token.clone(),
+        token: token_with_byte(0x23),
     };
 
     let daemon = tokio::spawn(run_resolved_daemon(config.clone(), transport));
     wait_for_socket(&socket_path).await;
 
-    let client = DaemonClient::new(socket_path.clone(), token);
+    let client = DaemonClient::new(socket_path.clone(), token_with_byte(0x23));
 
     let peer_status = client
         .request_ok(ControlCommand::PeerStatus)
