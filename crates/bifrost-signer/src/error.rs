@@ -14,6 +14,8 @@ pub enum SignerError {
     ReplayDetected(String),
     #[error("state corrupted: {0}")]
     StateCorrupted(String),
+    #[error("unsupported device state version: {0}")]
+    UnsupportedVersion(u32),
     #[error("unknown peer: {0}")]
     UnknownPeer(String),
     #[error("nonce unavailable")]

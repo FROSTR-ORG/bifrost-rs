@@ -44,7 +44,7 @@ pub fn share_from_payload(
         .ok_or_else(|| anyhow!("share secret does not match any member in the recovered group"))?;
     Ok(SharePackage {
         idx: member.idx,
-        seckey,
+        seckey: bifrost_core::secret::SharePrivateKey::new(seckey),
     })
 }
 
@@ -54,8 +54,8 @@ pub fn rotation_payload_from_share(
     label: String,
     relays: Vec<String>,
 ) -> Result<BfProfilePayload> {
-    let share_secret = hex::encode(share.seckey);
-    let local_pubkey = derive_member_pubkey_hex(share.seckey)?;
+    let share_secret = hex::encode(share.seckey.expose_bytes());
+    let local_pubkey = derive_member_pubkey_hex(*share.seckey.expose_bytes())?;
     Ok(BfProfilePayload {
         profile_id: derive_profile_id_for_share_secret(&share_secret)?,
         version: 1,
@@ -174,20 +174,18 @@ mod tests {
     use frostr_utils::{CreateKeysetConfig, create_keyset};
 
     fn sample_payload() -> BfProfilePayload {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Managed Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Managed Group", 2, 3)).expect("create keyset");
         let share = bundle.shares[1].clone();
         BfProfilePayload {
-            profile_id: derive_profile_id_for_share_secret(&hex::encode(share.seckey))
-                .expect("derive profile id"),
+            profile_id: derive_profile_id_for_share_secret(&hex::encode(
+                share.seckey.expose_bytes(),
+            ))
+            .expect("derive profile id"),
             version: 1,
             device: BfProfileDevice {
                 name: "Managed Device".to_string(),
-                share_secret: hex::encode(share.seckey),
+                share_secret: hex::encode(share.seckey.expose_bytes()),
                 manual_peer_policy_overrides: Vec::new(),
                 relays: vec!["wss://relay.example.test".to_string()],
             },

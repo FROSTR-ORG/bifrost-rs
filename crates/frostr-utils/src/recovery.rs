@@ -1,3 +1,4 @@
+use bifrost_core::secret::RecoveredSigningKey;
 use bifrost_core::types::Bytes32;
 use frost_secp256k1_tr_unofficial as frost;
 use frost_secp256k1_tr_unofficial::keys::EvenY;
@@ -20,7 +21,7 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
     for share in input.shares.iter().take(input.group.threshold as usize) {
         let id = frost::Identifier::try_from(share.idx)
             .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
-        let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+        let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
             .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
         let member = input
@@ -48,7 +49,7 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
         .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
     let signing_key = signing_key.into_even_y(None);
 
-    let derived_group_pk = verifying_key_to_group_pk(frost::VerifyingKey::from(&signing_key));
+    let derived_group_pk = verifying_key_to_group_pk(frost::VerifyingKey::from(&signing_key))?;
     if derived_group_pk != input.group.group_pk {
         return Err(FrostUtilsError::VerificationFailed(
             "recovered signing key does not match group public key".to_string(),
@@ -65,7 +66,9 @@ pub fn recover_key(input: &RecoverKeyInput) -> FrostUtilsResult<RecoveredKeyMate
     let mut signing_key32 = Bytes32::default();
     signing_key32.copy_from_slice(&bytes);
 
-    Ok(RecoveredKeyMaterial { signing_key32 })
+    Ok(RecoveredKeyMaterial {
+        signing_key32: RecoveredSigningKey::new(signing_key32),
+    })
 }
 
 fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
@@ -75,14 +78,19 @@ fn pubkey32_to_even_compressed(pubkey: [u8; 32]) -> [u8; 33] {
     out
 }
 
-fn verifying_key_to_group_pk(verifying_key: frost::VerifyingKey) -> [u8; 32] {
+fn verifying_key_to_group_pk(verifying_key: frost::VerifyingKey) -> FrostUtilsResult<Bytes32> {
+    let serialized = verifying_key
+        .serialize()
+        .map_err(|e| FrostUtilsError::Crypto(e.to_string()))?;
+    if serialized.len() != 33 {
+        return Err(FrostUtilsError::Crypto(format!(
+            "unexpected verifying key size: expected 33, got {}",
+            serialized.len()
+        )));
+    }
     let mut out = [0u8; 32];
-    out.copy_from_slice(
-        &verifying_key
-            .serialize()
-            .expect("secp256k1-tr verifying key serialization should succeed")[1..],
-    );
-    out
+    out.copy_from_slice(&serialized[1..]);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -93,35 +101,20 @@ mod tests {
 
     #[test]
     fn recover_key_with_threshold_shares() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let input = RecoverKeyInput {
             group: bundle.group,
             shares: bundle.shares.into_iter().take(2).collect(),
         };
         let recovered = recover_key(&input).expect("recover");
-        assert_ne!(recovered.signing_key32, [0u8; 32]);
+        assert_ne!(recovered.signing_key32.expose_bytes(), &[0u8; 32]);
     }
 
     #[test]
     fn recover_key_rejects_group_public_key_mismatch() {
-        let first = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
-        let second = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let first = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
+        let second = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let mismatched = RecoverKeyInput {
             group: second.group,
@@ -133,12 +126,7 @@ mod tests {
 
     #[test]
     fn recover_key_rejects_insufficient_or_unknown_shares() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         let insufficient = RecoverKeyInput {
             group: bundle.group.clone(),

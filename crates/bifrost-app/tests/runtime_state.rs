@@ -43,12 +43,7 @@ fn base_config() -> (
     bifrost_core::types::GroupPackage,
     bifrost_core::types::SharePackage,
 ) {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let share = bundle.shares[0].clone();
     let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
@@ -130,12 +125,7 @@ fn expand_tilde_uses_home_only_for_tilde_prefix() {
 
 #[test]
 fn resolve_config_loads_group_and_share_packages_from_disk() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group_path = temp_path("group", "json");
     let share_path = temp_path("share", "json");
     let state_path = temp_path("state", "bin");
@@ -170,12 +160,7 @@ fn resolve_config_loads_group_and_share_packages_from_disk() {
 #[test]
 fn load_share_supports_tilde_paths() {
     let _guard = home_env_lock().lock().expect("lock HOME env");
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let fake_home = temp_path("fake-home-share", "dir");
     let share_rel = "shares/member.json";
     let share_path = fake_home.join(share_rel);
@@ -211,7 +196,7 @@ fn load_or_init_signer_discards_volatile_state_after_dirty_restart_and_applies_p
     let now = 1_700_000_000;
     let peer = resolved.peers[0].clone();
 
-    let mut state = DeviceState::new(share.idx, share.seckey);
+    let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
     state.pending_operations.insert(
         "req-1".to_string(),
         PendingOperation {
@@ -247,7 +232,7 @@ fn load_or_init_signer_discards_volatile_state_after_dirty_restart_and_applies_p
 fn encrypted_store_roundtrip_and_state_health_report_clean_run() {
     let (resolved, _group, share) = base_config();
     let store = EncryptedFileStore::new(resolved.state_path.clone(), share.clone());
-    let mut state = DeviceState::new(share.idx, share.seckey);
+    let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
     state.request_seq = 42;
     store.save(&state).expect("save state");
 

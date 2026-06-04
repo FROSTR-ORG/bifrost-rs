@@ -26,9 +26,14 @@ mod logging;
 mod protocol;
 #[path = "host/types.rs"]
 mod types;
+#[path = "host/unlock.rs"]
+mod unlock;
 
 pub use client::DaemonClient;
-pub use daemon::run_resolved_daemon;
+pub use daemon::{
+    DaemonStartupError, log_incomplete_rotations, read_passphrase_from_stdin, run_resolved_daemon,
+    run_resolved_daemon_with_session,
+};
 pub use handlers::{execute_command, run_command};
 pub use logging::{default_log_filter, init_tracing};
 pub use protocol::{ControlCommand, ControlRequest, ControlResponse};
@@ -38,6 +43,7 @@ pub use types::{
     RuntimeMetadataPayload, RuntimeStatusPayload, ShutdownPayload, SignPayload, UpdatedPayload,
     WipedPayload,
 };
+pub use unlock::{UnlockError, UnlockSession};
 
 #[cfg(test)]
 pub(crate) use daemon::handle_control_stream;
@@ -51,6 +57,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use bifrost_codec::package::{encode_group_package_json, encode_share_package_json};
+    use bifrost_core::secret::DaemonToken;
     use bifrost_core::types::{GroupPackage, PeerPolicy, SharePackage};
     use bifrost_signer::{
         DeviceConfig, DeviceState, PendingOpContext, PendingOpType, PendingOperation, SigningDevice,
@@ -61,6 +68,18 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::runtime::{AppConfig, AppOptions, load_or_init_signer_resolved, resolve_config};
+
+    fn test_token() -> DaemonToken {
+        DaemonToken::from_hex(&hex::encode([0xAAu8; 32])).expect("test token hex")
+    }
+
+    fn expected_test_token() -> DaemonToken {
+        DaemonToken::from_hex(&hex::encode([0xCDu8; 32])).expect("expected test token hex")
+    }
+
+    fn wrong_test_token() -> DaemonToken {
+        DaemonToken::from_hex(&hex::encode([0x01u8; 32])).expect("wrong test token hex")
+    }
 
     struct MockRelayAdapter {
         inbound_rx: mpsc::UnboundedReceiver<Event>,
@@ -142,12 +161,8 @@ mod tests {
     }
 
     async fn host_fixture_with_state(state: DeviceState) -> HostFixture {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
         let signer = build_signer(&group, &share, state);
@@ -186,15 +201,15 @@ mod tests {
     }
 
     async fn host_live_fixture() -> (HostFixture, tokio::task::JoinHandle<()>) {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
-        let signer = build_signer(&group, &share, DeviceState::new(share.idx, share.seckey));
+        let signer = build_signer(
+            &group,
+            &share,
+            DeviceState::new(share.idx, *share.seckey.expose_bytes()),
+        );
         let store_path = temp_path("live-state", "bin");
         let store = EncryptedFileStore::new(store_path.clone(), share.clone());
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
@@ -208,7 +223,7 @@ mod tests {
                 build_signer(
                     &group,
                     member_share,
-                    DeviceState::new(member_share.idx, member_share.seckey),
+                    DeviceState::new(member_share.idx, *member_share.seckey.expose_bytes()),
                 )
             })
             .collect::<Vec<_>>();
@@ -269,12 +284,8 @@ mod tests {
     }
 
     fn host_config_fixture() -> HostConfigFixture {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group_path = temp_path("cfg-group", "json");
         let share_path = temp_path("cfg-share", "json");
         let state_path = temp_path("cfg-state", "bin");
@@ -338,7 +349,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-diag".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::RuntimeDiagnostics,
             },
         )
@@ -358,23 +369,25 @@ mod tests {
         let (mut client, mut server) = socket_pair(&socket_path).await;
         let mut shutdown_tx = None;
 
+        let token = expected_test_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
 
-        let invalid_request = serde_json::to_vec(&ControlRequest {
+        let invalid_request = ControlRequest {
             request_id: "req-auth".to_string(),
-            token: "wrong-token".to_string(),
+            token: wrong_test_token(),
             command: ControlCommand::Status,
-        })
+        }
+        .encode_wire()
         .expect("serialize request");
         client
             .write_all(&invalid_request)
@@ -396,12 +409,13 @@ mod tests {
         let socket_path = temp_path("control-bad", "sock");
         let (mut client, mut server) = socket_pair(&socket_path).await;
         let mut shutdown_tx = None;
+        let token = expected_test_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
@@ -426,23 +440,25 @@ mod tests {
         let (mut client, mut server) = socket_pair(&socket_path).await;
         let mut shutdown_tx = None;
 
+        let token = expected_test_token();
         let worker = tokio::spawn(async move {
             handle_control_stream(
                 &fixture.bridge,
                 &fixture.store,
                 &fixture.config,
-                "expected-token",
+                &token,
                 &mut server,
                 &mut shutdown_tx,
             )
             .await
         });
 
-        let request = serde_json::to_vec(&ControlRequest {
+        let request = ControlRequest {
             request_id: "req-status".to_string(),
-            token: "expected-token".to_string(),
+            token: expected_test_token(),
             command: ControlCommand::Status,
-        })
+        }
+        .encode_wire()
         .expect("serialize request");
         client.write_all(&request).await.expect("write request");
         client.shutdown().await.expect("shutdown client");
@@ -486,7 +502,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-wipe".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::WipeState,
             },
         )
@@ -509,7 +525,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-shutdown".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Shutdown,
             },
         )
@@ -531,7 +547,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-update-config".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::UpdateConfig {
                     config_patch_json: serde_json::json!({
                         "sign_timeout_secs": 55,
@@ -550,7 +566,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-read-config".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::ReadConfig,
             },
         )
@@ -564,7 +580,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-peer-status".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::PeerStatus,
             },
         )
@@ -577,7 +593,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-runtime-metadata".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::RuntimeMetadata,
             },
         )
@@ -597,7 +613,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-config-bad-json".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::UpdateConfig {
                     config_patch_json: "{".to_string(),
                 },
@@ -613,7 +629,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-sign-bad-hex".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Sign {
                     message_hex32: "abcd".to_string(),
                     timeout_secs: Some(1),
@@ -630,7 +646,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-policy-unknown-peer".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::SetPolicyOverride {
                     peer: "00".repeat(32),
                     policy_override_json: serde_json::json!({
@@ -661,7 +677,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-ecdh-bad-hex".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Ecdh {
                     pubkey_hex32: "abcd".to_string(),
                     timeout_secs: Some(1),
@@ -689,7 +705,7 @@ mod tests {
                 &fixture.config,
                 ControlRequest {
                     request_id: format!("req-ping-{peer}"),
-                    token: "token".to_string(),
+                    token: test_token(),
                     command: ControlCommand::Ping {
                         peer: peer.clone(),
                         timeout_secs: Some(5),
@@ -706,7 +722,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-onboard-live".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Onboard {
                     peer: target_peer.clone(),
                     timeout_secs: Some(5),
@@ -727,7 +743,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-sign-live".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Sign {
                     message_hex32: "aa".repeat(32),
                     timeout_secs: Some(5),
@@ -749,7 +765,7 @@ mod tests {
             &fixture.config,
             ControlRequest {
                 request_id: "req-ecdh-live".to_string(),
-                token: "token".to_string(),
+                token: test_token(),
                 command: ControlCommand::Ecdh {
                     pubkey_hex32: target_peer,
                     timeout_secs: Some(5),

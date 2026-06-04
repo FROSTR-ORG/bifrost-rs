@@ -63,7 +63,7 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
                 state_path = %state_path.display(),
                 "dirty restart detected; discarding volatile state"
             );
-            state.discard_volatile_for_dirty_restart(share.idx, share.seckey);
+            state.discard_volatile_for_dirty_restart(share.idx, *share.seckey.expose_bytes());
         } else {
             info!(
                 state_path = %state_path.display(),
@@ -72,7 +72,7 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
         }
         state
     } else {
-        DeviceState::new(share.idx, share.seckey)
+        DeviceState::new(share.idx, *share.seckey.expose_bytes())
     };
 
     let mut signer = SigningDevice::new(
@@ -143,12 +143,8 @@ mod tests {
 
     #[test]
     fn resolve_config_loads_packages_and_paths() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group_path = temp_path("group", "json");
         let share_path = temp_path("share", "json");
         let state_path = temp_path("state", "bin");
@@ -182,12 +178,8 @@ mod tests {
 
     #[test]
     fn load_or_init_signer_resolved_reuses_saved_state_and_policy() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
         let group = bundle.group.clone();
         let share = bundle.shares[0].clone();
         let peer_pubkey = hex::encode(&group.members[1].pubkey[1..]);
@@ -211,7 +203,7 @@ mod tests {
             options: AppOptions::default(),
         };
         let store = EncryptedFileStore::new(resolved.state_path.clone(), share.clone());
-        let mut state = DeviceState::new(share.idx, share.seckey);
+        let mut state = DeviceState::new(share.idx, *share.seckey.expose_bytes());
         state.request_seq = 42;
         state.pending_operations.insert(
             "req-1".to_string(),

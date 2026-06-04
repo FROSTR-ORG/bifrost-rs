@@ -16,3 +16,4 @@ frostr-utils = { path = "../frostr-utils" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+serde_json.workspace = true

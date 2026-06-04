@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use bifrost_core::secret::Passphrase;
 use frostr_utils::{
     BfProfileDevice, BfProfilePayload, decode_bfshare_package, parse_profile_backup_event,
 };
@@ -53,7 +54,7 @@ pub async fn recover_profile_from_bfshare_value(
     package_password: String,
     label: Option<String>,
     relay_profile: Option<String>,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     let (_preview, payload) =
         preview_bfshare_recovery(package_raw, package_password, label.clone()).await?;

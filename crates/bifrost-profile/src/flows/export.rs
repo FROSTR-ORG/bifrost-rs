@@ -3,11 +3,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use bifrost_codec::parse_share_package;
+use bifrost_core::secret::Passphrase;
 use frostr_utils::{
     BfOnboardPayload, BfSharePayload, encode_bfonboard_package, encode_bfprofile_package,
     encode_bfshare_package,
 };
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
     ProfileManifestStore, ProfilePaths, derive_member_pubkey_hex, load_shell_config_file,
     save_shell_config_file,
@@ -23,9 +26,13 @@ pub fn export_profile(
     paths: &ProfilePaths,
     profile_id: &str,
     out_dir: &Path,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<ProfileExportResult> {
     paths.ensure()?;
+    #[cfg(unix)]
+    ensure_dir_restricted(out_dir, 0o700)
+        .with_context(|| format!("create {}", out_dir.display()))?;
+    #[cfg(not(unix))]
     fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
     let group_path = out_dir.join("group.json");
@@ -34,6 +41,13 @@ pub fn export_profile(
     fs::copy(&profile.group_ref, &group_path)
         .with_context(|| format!("copy {} -> {}", profile.group_ref, group_path.display()))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, passphrase)?;
+    // Bucket C C.1/C.2: the raw share JSON is the plaintext FROST share for
+    // this member -- the single most secret-bearing file in the profile
+    // tree. Atomic write + 0o600 on Unix.
+    #[cfg(unix)]
+    write_restricted_bytes_atomic(&share_path, share_raw.as_bytes(), 0o600)
+        .with_context(|| format!("write {}", share_path.display()))?;
+    #[cfg(not(unix))]
     fs::write(&share_path, share_raw).with_context(|| format!("write {}", share_path.display()))?;
 
     Ok(ProfileExportResult {
@@ -48,7 +62,7 @@ pub fn export_profile_as_bfprofile(
     paths: &ProfilePaths,
     profile_id: &str,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -67,7 +81,7 @@ pub fn export_profile_as_bfshare(
     paths: &ProfilePaths,
     profile_id: &str,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -94,7 +108,7 @@ pub fn export_profile_as_bfonboard(
     recipient_share_path: &Path,
     relay_urls: Option<Vec<String>>,
     package_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
     out_path: Option<&Path>,
 ) -> Result<ProfilePackageExportResult> {
     let payload = profile_to_package_payload(paths, profile_id, passphrase)?;
@@ -108,7 +122,7 @@ pub fn export_profile_as_bfonboard(
     }
     let package = encode_bfonboard_package(
         &BfOnboardPayload {
-            share_secret: hex::encode(recipient_share.seckey),
+            share_secret: hex::encode(recipient_share.seckey.expose_bytes()),
             relays,
             peer_pk: derive_member_pubkey_hex(
                 crate::hex_to_bytes32(&payload.device.share_secret)
@@ -229,12 +243,8 @@ mod tests {
     fn import_sample_profile(paths: &ProfilePaths) -> String {
         paths.ensure().expect("ensure paths");
         write_relay_profile(paths);
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Export Test".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create keyset");
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Export Test", 2, 3)).expect("create keyset");
         let group_path = paths.imports_dir.join("group.json");
         let share_path = paths.imports_dir.join("share.json");
         fs::create_dir_all(&paths.imports_dir).expect("create imports dir");
@@ -255,7 +265,7 @@ mod tests {
             &share_path,
             Some("Alice".to_string()),
             Some("local".to_string()),
-            Some("encrypted-profile-pass".to_string()),
+            Some(Passphrase::new("encrypted-profile-pass".to_string())),
         )
         .expect("import profile");
         match result {
@@ -269,13 +279,9 @@ mod tests {
         let paths = test_paths("raw");
         let profile_id = import_sample_profile(&paths);
         let out_dir = paths.data_dir.join("raw-export");
-        let result = export_profile(
-            &paths,
-            &profile_id,
-            &out_dir,
-            Some("encrypted-profile-pass".into()),
-        )
-        .expect("export profile");
+        let pass = Passphrase::new("encrypted-profile-pass".into());
+        let result =
+            export_profile(&paths, &profile_id, &out_dir, Some(&pass)).expect("export profile");
         assert_eq!(result.profile_id, profile_id);
         assert!(Path::new(result.group_path.as_deref().expect("group path")).exists());
         assert!(Path::new(&result.share_path).exists());
@@ -285,11 +291,12 @@ mod tests {
     fn bfprofile_export_round_trips_into_import() {
         let paths = test_paths("bfprofile");
         let profile_id = import_sample_profile(&paths);
+        let pass = Passphrase::new("encrypted-profile-pass".to_string());
         let exported = export_profile_as_bfprofile(
             &paths,
             &profile_id,
             "package-pass".to_string(),
-            Some("encrypted-profile-pass".to_string()),
+            Some(&pass),
             None,
         )
         .expect("export bfprofile");
@@ -299,7 +306,7 @@ mod tests {
             "package-pass".to_string(),
             Some("Recovered".to_string()),
             Some("local".to_string()),
-            Some("encrypted-profile-pass".to_string()),
+            Some(Passphrase::new("encrypted-profile-pass".to_string())),
         )
         .expect("import bfprofile");
         match imported {

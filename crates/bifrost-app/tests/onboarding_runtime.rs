@@ -60,7 +60,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -78,12 +78,7 @@ fn temp_state_path(name: &str) -> PathBuf {
 }
 
 async fn complete_onboarding_fixture() -> (BootstrapImportResult, GroupPackage, SharePackage) {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let inviter_share = bundle.shares[1].clone();
@@ -94,7 +89,7 @@ async fn complete_onboarding_fixture() -> (BootstrapImportResult, GroupPackage, 
         .expect("inviter member");
 
     let package = BfOnboardPayload {
-        share_secret: hex::encode(local_share.seckey),
+        share_secret: hex::encode(local_share.seckey.expose_bytes()),
         relays: vec!["ws://mock-relay".to_string()],
         peer_pk: hex::encode(&inviter_peer.pubkey[1..]),
     };

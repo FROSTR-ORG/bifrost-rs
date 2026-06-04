@@ -6,6 +6,16 @@ use crate::wire::{
     PingPayloadWire, SignSessionPackageWire,
 };
 
+/// Hard ceiling on the raw JSON size of any bridge envelope we will
+/// attempt to parse. Enforced by [`decode_bridge_envelope`] before any
+/// `serde_json` work runs, so oversized inputs cannot force us to
+/// allocate past the input buffer.
+///
+/// Chosen to generously fit any legitimate envelope (a batched sign
+/// request with a full nonce bundle sits well under 20 KiB) while
+/// cutting off authenticated-DoS attempts from any group peer.
+pub const MAX_BRIDGE_ENVELOPE_BYTES: usize = 65_536;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BridgePayload {
@@ -32,9 +42,41 @@ pub fn encode_bridge_envelope(msg: &BridgeEnvelope) -> CodecResult<String> {
 }
 
 pub fn decode_bridge_envelope(raw: &str) -> CodecResult<BridgeEnvelope> {
+    if raw.len() > MAX_BRIDGE_ENVELOPE_BYTES {
+        return Err(CodecError::EnvelopeTooLarge);
+    }
     let envelope: BridgeEnvelope = serde_json::from_str(raw)?;
     validate_bridge_envelope(&envelope)?;
     Ok(envelope)
+}
+
+/// Per-field string cap for identifier/label fields (`kind`,
+/// `group_name`, `code`, `message`).
+const MAX_IDENTIFIER_FIELD_BYTES: usize = 1024;
+
+/// Per-field string cap for the hex `content` field carried in sign
+/// sessions. 32 KiB covers any realistic event payload while staying
+/// well under the envelope ceiling.
+const MAX_CONTENT_FIELD_BYTES: usize = 32 * 1024;
+
+fn check_identifier(field: &'static str, value: &str) -> CodecResult<()> {
+    if value.len() > MAX_IDENTIFIER_FIELD_BYTES {
+        return Err(CodecError::FieldTooLarge {
+            field,
+            limit: MAX_IDENTIFIER_FIELD_BYTES,
+        });
+    }
+    Ok(())
+}
+
+fn check_content(field: &'static str, value: &str) -> CodecResult<()> {
+    if value.len() > MAX_CONTENT_FIELD_BYTES {
+        return Err(CodecError::FieldTooLarge {
+            field,
+            limit: MAX_CONTENT_FIELD_BYTES,
+        });
+    }
+    Ok(())
 }
 
 fn validate_bridge_envelope(envelope: &BridgeEnvelope) -> CodecResult<()> {
@@ -43,6 +85,32 @@ fn validate_bridge_envelope(envelope: &BridgeEnvelope) -> CodecResult<()> {
     }
     if envelope.request_id.len() > 256 {
         return Err(CodecError::InvalidPayload("request_id exceeds max length"));
+    }
+    validate_payload_field_bounds(&envelope.payload)?;
+    Ok(())
+}
+
+fn validate_payload_field_bounds(payload: &BridgePayload) -> CodecResult<()> {
+    match payload {
+        BridgePayload::Error(err) => {
+            check_identifier("code", &err.code)?;
+            check_identifier("message", &err.message)?;
+        }
+        BridgePayload::SignRequest(session) => {
+            check_identifier("kind", &session.kind)?;
+            if let Some(content) = session.content.as_ref() {
+                check_content("content", content)?;
+            }
+        }
+        BridgePayload::OnboardResponse(response) => {
+            check_identifier("group_name", &response.group.group_name)?;
+        }
+        BridgePayload::PingRequest(_)
+        | BridgePayload::PingResponse(_)
+        | BridgePayload::OnboardRequest(_)
+        | BridgePayload::SignResponse(_)
+        | BridgePayload::EcdhRequest(_)
+        | BridgePayload::EcdhResponse(_) => {}
     }
     Ok(())
 }

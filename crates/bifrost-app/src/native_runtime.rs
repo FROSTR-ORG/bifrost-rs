@@ -5,24 +5,24 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_codec::wire::SharePackageWire;
+use bifrost_core::secret::{DaemonToken, Passphrase};
 use bifrost_profile::{
     EncryptedProfileStore, ProfileImportResult, ProfileManifest, ProfileManifestStore,
     ProfilePaths, ProfilePreview, RelayProfileStore, derive_profile_id_for_share_secret,
     finalize_rotation_update_import,
 };
 use frostr_utils::{BfProfileDevice, BfProfilePayload, decode_bfonboard_package};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
 use tokio::time::Duration;
 
-use crate::host::{DaemonClient, DaemonTransportConfig, ShutdownPayload};
+use crate::host::{DaemonClient, DaemonTransportConfig, ShutdownPayload, UnlockSession};
 use crate::onboarding::{
     BootstrapImportResult, complete_onboarding_package, persist_validated_onboarding_state,
 };
 use crate::runtime::{AppOptions, ResolvedAppConfig};
-
-const PROFILE_PASSPHRASE_ENV: &str = "IGLOO_SHELL_PROFILE_PASSPHRASE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonMetadata {
@@ -47,9 +47,7 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn profile_manifest_store(
-    paths: &ProfilePaths,
-) -> bifrost_profile::FilesystemProfileManifestStore {
+fn profile_manifest_store(paths: &ProfilePaths) -> bifrost_profile::FilesystemProfileManifestStore {
     bifrost_profile::FilesystemProfileManifestStore::new(&paths.profiles_dir)
 }
 
@@ -78,23 +76,24 @@ fn read_relay_profile(
 fn load_share_payload_with_passphrase(
     paths: &ProfilePaths,
     profile: &ProfileManifest,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<String> {
-    if let Ok(record) =
-        bifrost_profile::FilesystemEncryptedProfileStore::new(
-            &paths.encrypted_profiles_dir,
-            &paths.encrypted_profiles_dir,
-        )
-        .read_encrypted_profile(&profile.encrypted_profile_ref)
+    if let Ok(record) = bifrost_profile::FilesystemEncryptedProfileStore::new(
+        &paths.encrypted_profiles_dir,
+        &paths.encrypted_profiles_dir,
+    )
+    .read_encrypted_profile(&profile.encrypted_profile_ref)
     {
-        let passphrase = passphrase
-            .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
-            .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?;
+        // C.5: passphrase is provided in-process (e.g. read from stdin by the
+        // daemon child). Env-var fallback was removed — see PR10. The
+        // `IGLOO_SHELL_PROFILE_PASSPHRASE` env contract is gone from
+        // bifrost-rs; igloo-shell PR12 will follow.
+        let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
         return bifrost_profile::FilesystemEncryptedProfileStore::new(
             &paths.encrypted_profiles_dir,
             &paths.encrypted_profiles_dir,
         )
-        .decrypt_encrypted_profile(&record, &passphrase);
+        .decrypt_encrypted_profile(&record, passphrase.expose_secret());
     }
     fs::read_to_string(&profile.encrypted_profile_ref)
         .with_context(|| format!("read {}", profile.encrypted_profile_ref))
@@ -109,7 +108,7 @@ fn resolve_profile_peers_and_overrides(
     std::collections::HashMap<String, bifrost_core::types::PeerPolicyOverride>,
 )> {
     let document = bifrost_profile::parse_policy_overrides_doc(value)?;
-    let local_pubkey = bifrost_profile::derive_member_pubkey_hex(share.seckey)?;
+    let local_pubkey = bifrost_profile::derive_member_pubkey_hex(*share.seckey.expose_bytes())?;
     let peer_keys = group
         .members
         .iter()
@@ -186,9 +185,12 @@ fn preview_from_bootstrap_completion(
     source: &'static str,
     peer_pubkey: Option<String>,
 ) -> Result<ProfilePreview> {
-    let share_public_key = bifrost_profile::derive_member_pubkey_hex(completion.share.seckey)?;
+    let share_public_key =
+        bifrost_profile::derive_member_pubkey_hex(*completion.share.seckey.expose_bytes())?;
     Ok(ProfilePreview {
-        profile_id: derive_profile_id_for_share_secret(&hex::encode(completion.share.seckey))?,
+        profile_id: derive_profile_id_for_share_secret(&hex::encode(
+            completion.share.seckey.expose_bytes(),
+        ))?,
         label: label.unwrap_or_else(|| format!("Onboarded Device {}", completion.share.idx)),
         share_public_key,
         group_public_key: hex::encode(completion.group.group_pk),
@@ -224,8 +226,13 @@ pub fn resolve_profile_runtime(
     let group_raw = fs::read_to_string(&profile.group_ref)
         .with_context(|| format!("read {}", profile.group_ref))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, None)?;
-    let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
-    let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    // No passphrase passed: only succeeds for plaintext profile records
+    // (legacy file imports). Encrypted profiles must use
+    // `resolve_profile_runtime_for_passphrase`.
+    let group =
+        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share =
+        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
     let (peers, manual_policy_overrides) =
         resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
             .context("resolve peer policy overrides")?;
@@ -252,15 +259,17 @@ pub fn resolve_profile_runtime(
 pub fn resolve_profile_runtime_for_passphrase(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<(ProfileManifest, ResolvedAppConfig)> {
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
     let relay_profile = read_relay_profile(paths, &profile.relay_profile)?;
     let group_raw = fs::read_to_string(&profile.group_ref)
         .with_context(|| format!("read {}", profile.group_ref))?;
     let share_raw = load_share_payload_with_passphrase(paths, &profile, passphrase)?;
-    let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
-    let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    let group =
+        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share =
+        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
     let (peers, manual_policy_overrides) =
         resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
             .context("resolve peer policy overrides")?;
@@ -283,6 +292,87 @@ pub fn resolve_profile_runtime_for_passphrase(
     ))
 }
 
+/// Variant of [`resolve_profile_runtime_for_passphrase`] that consumes the
+/// `Passphrase` to construct an [`UnlockSession`] (Bucket C C.6) and uses the
+/// session's cached key to decrypt the profile envelope.
+///
+/// Returns the resolved config alongside the session — the daemon caller
+/// should hold the session for the process's lifetime so subsequent
+/// profile-envelope decrypts (e.g. for Wipe / Rotate / rekey flows) reuse the
+/// cached [`bifrost_core::secret::FileStoreKey`] instead of re-running
+/// Argon2id (which costs ~400-600 ms per call with default params).
+///
+/// For profiles whose `encrypted_profile_ref` points to a legacy plaintext
+/// file (no `EncryptedProfileRecord` sidecar exists), no `UnlockSession` is
+/// constructed and the function returns `Ok((profile, config, None))`. The
+/// caller can pattern-match on the `Option<UnlockSession>` to detect this
+/// legacy path.
+pub fn resolve_profile_runtime_with_unlock_session(
+    paths: &ProfilePaths,
+    profile_id: &str,
+    passphrase: Option<Passphrase>,
+) -> Result<(ProfileManifest, ResolvedAppConfig, Option<UnlockSession>)> {
+    let profile = profile_manifest_store(paths).read_profile(profile_id)?;
+    let relay_profile = read_relay_profile(paths, &profile.relay_profile)?;
+    let group_raw = fs::read_to_string(&profile.group_ref)
+        .with_context(|| format!("read {}", profile.group_ref))?;
+
+    // Try to read the encrypted-profile sidecar; if present, build an
+    // UnlockSession and decrypt via the cached key. If absent, fall back to
+    // the legacy plaintext path.
+    let encrypted_store = bifrost_profile::FilesystemEncryptedProfileStore::new(
+        &paths.encrypted_profiles_dir,
+        &paths.encrypted_profiles_dir,
+    );
+    let (share_raw, unlock_session) =
+        match encrypted_store.read_encrypted_profile(&profile.encrypted_profile_ref) {
+            Ok(record) => {
+                let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
+                // `UnlockSession::new` consumes the passphrase (zeroized on drop)
+                // and validates the derived key against the supplied record.
+                let session = UnlockSession::new(passphrase, profile_id.to_string(), &record)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                // Use the session's cached key for the actual decrypt — this is
+                // the hot path for any subsequent re-decrypt the caller triggers.
+                let share_raw = session
+                    .decrypt_profile(&record)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                (share_raw, Some(session))
+            }
+            Err(_) => {
+                let share_raw = fs::read_to_string(&profile.encrypted_profile_ref)
+                    .with_context(|| format!("read {}", profile.encrypted_profile_ref))?;
+                (share_raw, None)
+            }
+        };
+
+    let group =
+        bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
+    let share =
+        bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+    let (peers, manual_policy_overrides) =
+        resolve_profile_peers_and_overrides(&group, &share, profile.policy_overrides.clone())
+            .context("resolve peer policy overrides")?;
+    let options: AppOptions = if profile.runtime_options.is_null() {
+        AppOptions::default()
+    } else {
+        serde_json::from_value(profile.runtime_options.clone()).context("parse runtime options")?
+    };
+    Ok((
+        profile.clone(),
+        ResolvedAppConfig {
+            group,
+            share,
+            state_path: PathBuf::from(&profile.state_path),
+            relays: relay_profile.relays,
+            peers,
+            manual_policy_overrides,
+            options,
+        },
+        unlock_session,
+    ))
+}
+
 pub fn read_daemon_metadata(paths: &ProfilePaths, profile_id: &str) -> Result<DaemonMetadata> {
     let path = paths.daemon_metadata_path(profile_id);
     if !path.exists() {
@@ -299,10 +389,17 @@ pub fn write_daemon_metadata(
 ) -> Result<()> {
     let path = paths.daemon_metadata_path(profile_id);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        bifrost_profile::fs_guard::ensure_dir_restricted(parent, 0o700)
+            .with_context(|| format!("ensure {}", parent.display()))?;
     }
-    fs::write(&path, serde_json::to_vec_pretty(metadata)?)
-        .with_context(|| format!("write {}", path.display()))
+    // C.4: `daemon.json` carries the secret control-socket token. Route the
+    // write through `fs_guard::write_restricted_bytes_atomic` so the final
+    // file lands atomically with 0o600 perms even under a relaxed inherited
+    // umask.
+    let bytes = serde_json::to_vec_pretty(metadata)?;
+    bifrost_profile::fs_guard::write_restricted_bytes_atomic(&path, &bytes, 0o600)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 pub fn remove_daemon_metadata(paths: &ProfilePaths, profile_id: &str) -> Result<()> {
@@ -317,11 +414,15 @@ pub fn daemon_log_path(paths: &ProfilePaths, profile_id: &str) -> PathBuf {
     paths.daemon_log_path(profile_id)
 }
 
+/// Build a fresh `DaemonTransportConfig` for `profile`. The token is a
+/// random [`DaemonToken`] from the OS RNG — the previous deterministic
+/// `daemon-{id}-{ts}` form has been replaced as part of C.4.
 pub fn build_daemon_transport(profile: &ProfileManifest) -> DaemonTransportConfig {
     let socket_path = shorten_unix_socket_path(&profile.daemon_socket_path, &profile.id);
+    let mut rng = OsRng;
     DaemonTransportConfig {
         socket_path,
-        token: format!("daemon-{}-{}", profile.id, now_unix_secs()),
+        token: DaemonToken::new_random(&mut rng),
     }
 }
 
@@ -329,11 +430,13 @@ pub fn build_daemon_transport(profile: &ProfileManifest) -> DaemonTransportConfi
 pub async fn start_profile_daemon_with_passphrase(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<DaemonMetadata> {
+    use std::io::Write;
+
     paths.ensure()?;
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
-    let _ = load_share_payload_with_passphrase(paths, &profile, passphrase.clone())?;
+    let _ = load_share_payload_with_passphrase(paths, &profile, passphrase.as_ref())?;
     let transport = build_daemon_transport(&profile);
     let log_path = paths.daemon_log_path(profile_id);
     if let Some(parent) = log_path.parent() {
@@ -348,32 +451,60 @@ pub async fn start_profile_daemon_with_passphrase(
     let stderr = stdout.try_clone().context("clone daemon log handle")?;
     let exe = std::env::current_exe().context("resolve current executable")?;
     let mut command = Command::new(exe);
+    // C.4: stop passing `--token` on argv. The daemon child reads its
+    // expected token from `daemon.json` (written below before the child
+    // becomes ready). TODO(PR12): igloo-shell's `__daemon-run` argv parser
+    // must drop the `--token` argument and load the token from
+    // `daemon.json` keyed by `--profile`.
+    //
+    // C.5: stop setting `IGLOO_SHELL_PROFILE_PASSPHRASE` in the child env;
+    // the passphrase is written to stdin instead. TODO(PR12): igloo-shell's
+    // `__daemon-run` startup path must read its passphrase from stdin.
     command
         .arg("__daemon-run")
         .arg("--profile")
         .arg(profile_id)
         .arg("--socket-path")
         .arg(&transport.socket_path)
-        .arg("--token")
-        .arg(&transport.token)
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    if let Some(passphrase) = &passphrase {
-        command.env(PROFILE_PASSPHRASE_ENV, passphrase);
-    }
+        .stderr(Stdio::from(stderr))
+        .stdin(Stdio::piped());
     let mut child = command.spawn().context("spawn profile daemon")?;
+
+    // Pipe the passphrase to the child over stdin. We send a newline-
+    // terminated UTF-8 line and then close stdin; the child's read_line
+    // call returns immediately on EOF. Even when the caller did not
+    // provide a passphrase (legacy plaintext profile), we still close the
+    // pipe so the child does not hang waiting on stdin.
+    if let Some(mut child_stdin) = child.stdin.take() {
+        if let Some(passphrase) = passphrase.as_ref() {
+            child_stdin
+                .write_all(passphrase.expose_bytes())
+                .context("write passphrase to daemon stdin")?;
+            child_stdin
+                .write_all(b"\n")
+                .context("write passphrase newline to daemon stdin")?;
+        }
+        // Dropping `child_stdin` closes the pipe.
+        drop(child_stdin);
+    }
+    // `passphrase` is dropped here, zeroizing its buffer.
+    drop(passphrase);
 
     let metadata = DaemonMetadata {
         profile_id: profile_id.to_string(),
         pid: child.id(),
         socket_path: transport.socket_path.display().to_string(),
-        token: transport.token.clone(),
+        token: transport.token.to_hex(),
         log_path: log_path.display().to_string(),
         started_at: now_unix_secs(),
     };
     write_daemon_metadata(paths, profile_id, &metadata)?;
 
-    let client = DaemonClient::new(PathBuf::from(&metadata.socket_path), metadata.token.clone());
+    let client = DaemonClient::new(
+        PathBuf::from(&metadata.socket_path),
+        transport.token.clone_secret(),
+    );
     let mut last_error = None;
     for _ in 0..50 {
         match client.runtime_metadata().await {
@@ -409,7 +540,8 @@ pub async fn stop_profile_daemon_typed(
     profile_id: &str,
 ) -> Result<ShutdownPayload> {
     let metadata = read_daemon_metadata(paths, profile_id)?;
-    let client = DaemonClient::new(PathBuf::from(metadata.socket_path), metadata.token);
+    let token = DaemonToken::from_hex(&metadata.token).context("parse daemon.json token")?;
+    let client = DaemonClient::new(PathBuf::from(metadata.socket_path), token);
     let result = client.shutdown().await?;
     remove_daemon_metadata(paths, profile_id)?;
     Ok(result)
@@ -426,13 +558,15 @@ pub async fn import_profile_from_onboarding_value(
     package_raw: &str,
     label: Option<String>,
     relay_profile: Option<String>,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
     onboarding_password: Option<String>,
 ) -> Result<ProfileImportResult> {
     paths.ensure()?;
-    let password = onboarding_password
-        .or_else(|| std::env::var("IGLOO_SHELL_ONBOARDING_PASSWORD").ok())
-        .ok_or_else(|| anyhow!("onboarding package password not provided; set IGLOO_SHELL_ONBOARDING_PASSWORD"))?;
+    // C.5: `IGLOO_SHELL_ONBOARDING_PASSWORD` env fallback removed in PR12b.
+    // Callers must supply the onboarding password explicitly; igloo-shell
+    // reads it via stdin or a TTY prompt.
+    let password =
+        onboarding_password.ok_or_else(|| anyhow!("onboarding package password not provided"))?;
     let decoded = decode_bfonboard_package(package_raw, password.as_str())
         .context("decode bfonboard package")?;
     let completion = complete_onboarding_package(decoded, Duration::from_secs(30)).await?;
@@ -444,7 +578,10 @@ pub async fn import_profile_from_onboarding_value(
     )?;
     finalize_connected_onboarding_import(
         paths,
-        ConnectedOnboardingImport { preview, completion },
+        ConnectedOnboardingImport {
+            preview,
+            completion,
+        },
         label,
         relay_profile,
         passphrase,
@@ -464,7 +601,10 @@ pub async fn connect_onboarding_package_preview(
         "bfonboard",
         Some(completion.peer_pubkey.clone()),
     )?;
-    Ok(ConnectedOnboardingImport { preview, completion })
+    Ok(ConnectedOnboardingImport {
+        preview,
+        completion,
+    })
 }
 
 pub fn finalize_connected_onboarding_import(
@@ -472,7 +612,7 @@ pub fn finalize_connected_onboarding_import(
     connection: ConnectedOnboardingImport,
     label: Option<String>,
     relay_profile: Option<String>,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     paths.ensure()?;
     let relay_profile_id = profile_domain(paths).ensure_onboarding_relay_profile(
@@ -484,20 +624,20 @@ pub fn finalize_connected_onboarding_import(
     let share_raw =
         serde_json::to_string_pretty(&SharePackageWire::from(connection.completion.share.clone()))
             .context("serialize onboarded share package")?;
-    let share_record =
-        bifrost_profile::FilesystemEncryptedProfileStore::new(
-            &paths.encrypted_profiles_dir,
-            &paths.encrypted_profiles_dir,
-        )
-        .store_encrypted_profile(
-            "share_package",
-            "bfonboard_import",
-            &share_raw,
-            &passphrase
-                .or_else(|| std::env::var(PROFILE_PASSPHRASE_ENV).ok())
-                .ok_or_else(|| anyhow!("passphrase not provided; set {PROFILE_PASSPHRASE_ENV}"))?,
-            now_unix_secs(),
-        )?;
+    // C.5: env-var fallback removed; caller provides `Passphrase` directly.
+    let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
+    let share_record = bifrost_profile::FilesystemEncryptedProfileStore::new(
+        &paths.encrypted_profiles_dir,
+        &paths.encrypted_profiles_dir,
+    )
+    .store_encrypted_profile(
+        "share_package",
+        "bfonboard_import",
+        &share_raw,
+        passphrase.expose_secret(),
+        now_unix_secs(),
+    )?;
+    drop(passphrase);
 
     let imported = profile_domain(paths).finalize_onboarding_import(
         &connection.completion.group,
@@ -511,23 +651,27 @@ pub fn finalize_connected_onboarding_import(
     let encrypted_profile = imported.encrypted_profile;
     fs::create_dir_all(paths.profile_state_dir(&profile.id))
         .with_context(|| format!("create {}", paths.profile_state_dir(&profile.id).display()))?;
-    let diagnostics =
-        match persist_validated_onboarding_state(Path::new(&profile.state_path), &connection.completion) {
-            Ok(report) => report,
-            Err(error) => {
-                let _ = fs::remove_file(&profile.group_ref);
-                let _ = bifrost_profile::remove_encrypted_profile(paths, &encrypted_profile.id);
-                let _ = fs::remove_dir_all(paths.profile_state_dir(&profile.id));
-                return Err(error);
-            }
-        };
+    let diagnostics = match persist_validated_onboarding_state(
+        Path::new(&profile.state_path),
+        &connection.completion,
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            let _ = fs::remove_file(&profile.group_ref);
+            let _ = bifrost_profile::remove_encrypted_profile(paths, &encrypted_profile.id);
+            let _ = fs::remove_dir_all(paths.profile_state_dir(&profile.id));
+            return Err(error);
+        }
+    };
     profile_manifest_store(paths).write_profile(&profile)?;
     profile_domain(paths).touch_last_used_profile(&profile.id)?;
 
     Ok(ProfileImportResult::ProfileCreated {
         profile,
         encrypted_profile,
-        diagnostics: Some(serde_json::to_value(diagnostics).context("serialize onboarding diagnostics")?),
+        diagnostics: Some(
+            serde_json::to_value(diagnostics).context("serialize onboarding diagnostics")?,
+        ),
         warnings: Vec::new(),
     })
 }
@@ -537,34 +681,38 @@ pub async fn apply_rotation_update_from_bfonboard_value(
     target_profile_id: &str,
     package_raw: &str,
     onboarding_password: String,
-    passphrase: Option<String>,
+    passphrase: Option<Passphrase>,
 ) -> Result<ProfileImportResult> {
     let target = profile_manifest_store(paths).read_profile(target_profile_id)?;
     let connection = connect_onboarding_package_preview(package_raw, onboarding_password).await?;
 
     let target_payload = {
         let relay_profile = read_relay_profile(paths, &target.relay_profile)?;
-        let share_raw = load_share_payload_with_passphrase(paths, &target, passphrase.clone())?;
+        let share_raw = load_share_payload_with_passphrase(paths, &target, passphrase.as_ref())?;
         let group_raw = fs::read_to_string(&target.group_ref)
             .with_context(|| format!("read {}", target.group_ref))?;
-        let group = bifrost_codec::parse_group_package(&group_raw).context("parse profile group package")?;
-        let share = bifrost_codec::parse_share_package(&share_raw).context("parse profile share package")?;
+        let group = bifrost_codec::parse_group_package(&group_raw)
+            .context("parse profile group package")?;
+        let share = bifrost_codec::parse_share_package(&share_raw)
+            .context("parse profile share package")?;
         let (_peers, manual_policy_overrides) =
             resolve_profile_peers_and_overrides(&group, &share, target.policy_overrides.clone())
                 .context("resolve peer policy overrides")?;
         let manual_peer_policy_overrides = manual_policy_overrides
             .iter()
-            .map(|(pubkey, policy_override)| frostr_utils::BfManualPeerPolicyOverride {
-                pubkey: pubkey.clone(),
-                policy: frostr_utils::core_peer_policy_override_to_bf(policy_override),
-            })
+            .map(
+                |(pubkey, policy_override)| frostr_utils::BfManualPeerPolicyOverride {
+                    pubkey: pubkey.clone(),
+                    policy: frostr_utils::core_peer_policy_override_to_bf(policy_override),
+                },
+            )
             .collect::<Vec<_>>();
         BfProfilePayload {
             profile_id: target.id.clone(),
             version: 1,
             device: BfProfileDevice {
                 name: target.label.clone(),
-                share_secret: hex::encode(share.seckey),
+                share_secret: hex::encode(share.seckey.expose_bytes()),
                 manual_peer_policy_overrides,
                 relays: relay_profile.relays,
             },
@@ -577,11 +725,13 @@ pub async fn apply_rotation_update_from_bfonboard_value(
         version: 1,
         device: BfProfileDevice {
             name: target.label.clone(),
-            share_secret: hex::encode(connection.completion.share.seckey),
+            share_secret: hex::encode(connection.completion.share.seckey.expose_bytes()),
             manual_peer_policy_overrides: Vec::new(),
             relays: connection.completion.relays.clone(),
         },
-        group_package: bifrost_codec::wire::GroupPackageWire::from(connection.completion.group.clone()),
+        group_package: bifrost_codec::wire::GroupPackageWire::from(
+            connection.completion.group.clone(),
+        ),
     };
 
     finalize_rotation_update_import(

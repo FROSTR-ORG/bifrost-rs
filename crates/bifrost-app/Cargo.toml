@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+thiserror.workspace = true
 bincode = "1"
 base64.workspace = true
 chacha20.workspace = true
@@ -33,3 +34,6 @@ bifrost-codec = { path = "../bifrost-codec" }
 bifrost-profile = { path = "../bifrost-profile" }
 bifrost-signer = { path = "../bifrost-signer" }
 frostr-utils = { path = "../frostr-utils" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

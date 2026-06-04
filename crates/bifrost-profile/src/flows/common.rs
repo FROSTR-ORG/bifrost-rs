@@ -4,19 +4,20 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use bifrost_codec::{parse_group_package, parse_share_package, wire::GroupPackageWire};
+use bifrost_core::secret::Passphrase;
 use bifrost_core::types::{GroupPackage, PeerPolicyOverride, SharePackage};
 use frostr_utils::{
     BfManualPeerPolicyOverride, BfProfileDevice, BfProfilePayload, core_peer_policy_override_to_bf,
 };
 
+#[cfg(unix)]
+use crate::fs_guard::{ensure_dir_restricted, write_restricted_bytes_atomic};
 use crate::{
     EncryptedProfileRecord, FilesystemEncryptedProfileStore, FilesystemProfileDomain,
     FilesystemProfileManifestStore, FilesystemRelayProfileStore, PolicyOverridesDocument,
     ProfileManifest, ProfileManifestStore, ProfilePaths, RelayProfile, RelayProfileStore,
     derive_member_pubkey_hex, parse_policy_overrides_doc,
 };
-
-const PROFILE_PASSPHRASE_ENV: &str = "IGLOO_SHELL_PROFILE_PASSPHRASE";
 
 pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
@@ -51,13 +52,6 @@ pub(crate) fn profile_domain(paths: &ProfilePaths) -> FilesystemProfileDomain {
     )
 }
 
-pub(crate) fn resolve_secret(value: Option<String>, env_name: &str, label: &str) -> Result<String> {
-    if let Some(value) = value {
-        return Ok(value);
-    }
-    std::env::var(env_name).with_context(|| format!("{label} not provided; set {env_name}"))
-}
-
 pub(crate) fn read_relay_profile(
     paths: &ProfilePaths,
     relay_profile_id: &str,
@@ -69,19 +63,25 @@ pub(crate) fn read_relay_profile(
         .ok_or_else(|| anyhow!("unknown relay profile {relay_profile_id}"))
 }
 
+/// Decrypt an encrypted profile record using a caller-supplied passphrase.
+///
+/// Bucket C C.5: callers must supply the passphrase explicitly. The previous
+/// `IGLOO_SHELL_PROFILE_PASSPHRASE` env-var fallback was removed in PR12b
+/// — every host entry point now collects the passphrase via stdin or a TTY
+/// prompt and threads it through as a `Passphrase` value.
 pub(crate) fn decrypt_encrypted_profile(
     paths: &ProfilePaths,
     record: &EncryptedProfileRecord,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<String> {
-    let passphrase = resolve_secret(passphrase, PROFILE_PASSPHRASE_ENV, "passphrase")?;
-    encrypted_profile_store(paths).decrypt_encrypted_profile(record, &passphrase)
+    let passphrase = passphrase.ok_or_else(|| anyhow!("passphrase not provided"))?;
+    encrypted_profile_store(paths).decrypt_encrypted_profile(record, passphrase.expose_secret())
 }
 
 pub(crate) fn load_share_payload_with_passphrase(
     paths: &ProfilePaths,
     profile: &ProfileManifest,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<String> {
     if let Ok(record) = super::read_encrypted_profile(paths, &profile.encrypted_profile_ref) {
         return decrypt_encrypted_profile(paths, &record, passphrase);
@@ -142,7 +142,7 @@ pub(crate) fn resolve_profile_peers_and_overrides(
     value: serde_json::Value,
 ) -> Result<(Vec<String>, HashMap<String, PeerPolicyOverride>)> {
     let document = parse_policy_overrides_doc(value)?;
-    let local_pubkey = derive_member_pubkey_hex(share.seckey)?;
+    let local_pubkey = derive_member_pubkey_hex(*share.seckey.expose_bytes())?;
     let peer_keys = group
         .members
         .iter()
@@ -164,7 +164,7 @@ pub(crate) fn resolve_profile_peers_and_overrides(
 pub(crate) fn profile_to_package_payload(
     paths: &ProfilePaths,
     profile_id: &str,
-    passphrase: Option<String>,
+    passphrase: Option<&Passphrase>,
 ) -> Result<BfProfilePayload> {
     let profile = profile_manifest_store(paths).read_profile(profile_id)?;
     let relay_profile = read_relay_profile(paths, &profile.relay_profile)?;
@@ -188,7 +188,7 @@ pub(crate) fn profile_to_package_payload(
         version: 1,
         device: BfProfileDevice {
             name: profile.label,
-            share_secret: hex::encode(share.seckey),
+            share_secret: hex::encode(share.seckey.expose_bytes()),
             manual_peer_policy_overrides,
             relays: relay_profile.relays,
         },
@@ -199,8 +199,21 @@ pub(crate) fn profile_to_package_payload(
 pub(crate) fn write_package_output(out_path: Option<&Path>, package: &str) -> Result<()> {
     if let Some(path) = out_path {
         if let Some(parent) = path.parent() {
+            #[cfg(unix)]
+            ensure_dir_restricted(parent, 0o700)
+                .with_context(|| format!("create {}", parent.display()))?;
+            #[cfg(not(unix))]
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
+        // Bucket C C.1/C.2: bfprofile / bfshare / bfonboard packages hold the
+        // share's encrypted secret material plus the operator-chosen package
+        // password's KDF params. The package is itself encrypted, but a
+        // 0o600 perm bit on the on-disk artifact avoids unnecessary
+        // mode leakage when the operator hands the file off to another host.
+        #[cfg(unix)]
+        write_restricted_bytes_atomic(path, package.as_bytes(), 0o600)
+            .with_context(|| format!("write {}", path.display()))?;
+        #[cfg(not(unix))]
         fs::write(path, package).with_context(|| format!("write {}", path.display()))?;
     }
     Ok(())

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bifrost_bridge_tokio::BridgeConfig;
+use bifrost_core::secret::DaemonToken;
 use bifrost_signer::{
     DeviceConfig, DeviceStatus, PeerStatus, RuntimeMetadata, RuntimeReadiness, RuntimeStatusSummary,
 };
@@ -16,7 +17,7 @@ pub struct LogOptions {
     pub debug: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum HostCommand {
     Sign {
         message_hex32: String,
@@ -32,7 +33,10 @@ pub enum HostCommand {
     },
     Listen {
         control_socket: Option<PathBuf>,
-        control_token: Option<String>,
+        /// Expected token used to authenticate inbound control requests.
+        /// Held as a [`DaemonToken`] so the constant-time compare path is
+        /// shared with the daemon-spawned control socket.
+        control_token: Option<DaemonToken>,
     },
     Status,
     StateHealth,
@@ -74,10 +78,17 @@ pub enum HostCommandResult {
     Listen,
 }
 
-#[derive(Debug, Clone)]
+/// Resolved transport configuration for the daemon control socket.
+///
+/// `token` is a [`DaemonToken`] (zeroize-on-drop, constant-time compare).
+/// The type does not derive `Clone` on purpose — both the daemon side
+/// (canonical expected token) and the client side need an owned token, but
+/// every shared copy must go through [`DaemonToken::clone_secret`] or
+/// equivalent explicit machinery so it is grep-able for auditors.
+#[derive(Debug)]
 pub struct DaemonTransportConfig {
     pub socket_path: PathBuf,
-    pub token: String,
+    pub token: DaemonToken,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

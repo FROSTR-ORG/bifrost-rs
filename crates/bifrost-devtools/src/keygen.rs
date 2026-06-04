@@ -94,12 +94,8 @@ pub fn run_keygen_command(args: &[String]) -> Result<()> {
     let out_path = PathBuf::from(out_dir);
     fs::create_dir_all(&out_path).with_context(|| format!("create {}", out_path.display()))?;
 
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name,
-        threshold,
-        count,
-    })
-    .map_err(|e| anyhow!("create keyset: {e}"))?;
+    let bundle = create_keyset(CreateKeysetConfig::new(group_name, threshold, count))
+        .map_err(|e| anyhow!("create keyset: {e}"))?;
     let group = bundle.group;
     let share_packages = bundle.shares;
     let members = group.members.clone();

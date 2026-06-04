@@ -10,7 +10,8 @@ pub fn create_ecdh_package(
     share: &SharePackage,
     ecdh_pks: &[Bytes32],
 ) -> CoreResult<EcdhPackage> {
-    let sk = SecretKey::from_slice(&share.seckey).map_err(|_| CoreError::InvalidScalar)?;
+    let sk =
+        SecretKey::from_slice(share.seckey.expose_bytes()).map_err(|_| CoreError::InvalidScalar)?;
     let scalar = *sk.to_nonzero_scalar().as_ref();
     let mut entries = Vec::with_capacity(ecdh_pks.len());
 
@@ -61,7 +62,8 @@ pub fn combine_ecdh_packages(pkgs: &[EcdhPackage], ecdh_pk: Bytes32) -> CoreResu
 }
 
 pub fn local_pubkey_from_share(share: &SharePackage) -> CoreResult<Bytes32> {
-    let sk = SecretKey::from_slice(&share.seckey).map_err(|_| CoreError::InvalidScalar)?;
+    let sk =
+        SecretKey::from_slice(share.seckey.expose_bytes()).map_err(|_| CoreError::InvalidScalar)?;
     let ep = sk.public_key().to_encoded_point(false);
     let x = ep.x().ok_or(CoreError::InvalidPubkey)?;
     let mut out = [0u8; 32];
@@ -91,7 +93,7 @@ mod tests {
     fn local_pubkey_derives() {
         let share = SharePackage {
             idx: 1,
-            seckey: [11; 32],
+            seckey: crate::secret::SharePrivateKey::new([11; 32]),
         };
         let pk = local_pubkey_from_share(&share).expect("pubkey");
         assert_eq!(pk.len(), 32);

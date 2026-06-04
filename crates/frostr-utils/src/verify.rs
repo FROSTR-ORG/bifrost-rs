@@ -49,7 +49,7 @@ pub fn verify_group_config(group: &GroupPackage) -> FrostUtilsResult<()> {
 pub fn verify_share(share: &SharePackage, group: &GroupPackage) -> FrostUtilsResult<()> {
     let identifier = frost::Identifier::try_from(share.idx)
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
-    let signing_share = frost::keys::SigningShare::deserialize(&share.seckey)
+    let signing_share = frost::keys::SigningShare::deserialize(share.seckey.expose_bytes())
         .map_err(|e| FrostUtilsError::VerificationFailed(e.to_string()))?;
 
     let member = group
@@ -151,59 +151,43 @@ mod tests {
 
     #[test]
     fn verify_keyset_accepts_valid_bundle() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
         let report = verify_keyset(&bundle).expect("verify");
         assert_eq!(report.verified_shares, 3);
     }
 
     #[test]
     fn verify_share_rejects_tamper() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
-        let mut tampered = bundle.shares[0].clone();
-        tampered.seckey[0] ^= 0x01;
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
+        let tampered_seckey = {
+            let mut bytes = *bundle.shares[0].seckey.expose_bytes();
+            bytes[0] ^= 0x01;
+            bifrost_core::secret::SharePrivateKey::new(bytes)
+        };
+        let tampered = SharePackage {
+            idx: bundle.shares[0].idx,
+            seckey: tampered_seckey,
+        };
         assert!(verify_share(&tampered, &bundle.group).is_err());
     }
 
     #[test]
     fn verify_group_config_rejects_invalid_threshold_and_duplicates() {
-        let mut bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let mut bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
 
         bundle.group.threshold = 4;
         assert!(verify_group_config(&bundle.group).is_err());
 
-        let mut bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let mut bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
         bundle.group.members[1].idx = bundle.group.members[0].idx;
         assert!(verify_group_config(&bundle.group).is_err());
     }
 
     #[test]
     fn verify_keyset_rejects_share_count_mismatch_and_missing_share_member() {
-        let bundle = create_keyset(CreateKeysetConfig {
-            group_name: "Test Group".to_string(),
-            threshold: 2,
-            count: 3,
-        })
-        .expect("create");
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create");
         let short_bundle = crate::types::KeysetBundle {
             group: bundle.group.clone(),
             shares: bundle.shares[..2].to_vec(),

@@ -1,15 +1,22 @@
+pub mod argon2_params;
 pub mod errors;
 pub mod keyset;
+pub mod package_aad;
 pub mod profile_packages;
 pub mod protocol;
 pub mod recovery;
 pub mod types;
 pub mod verify;
 
+pub use argon2_params::{
+    ARGON2_MAX_M_COST, ARGON2_MIN_M_COST, ARGON2_MIN_P_COST, ARGON2_MIN_T_COST, Argon2Params,
+    PACKAGE_KDF_OUTPUT_LEN, PACKAGE_KDF_SALT_LEN, ParamsError, derive_package_encryption_key_v2,
+};
 pub use errors::{FrostUtilsError, FrostUtilsResult};
 pub use keyset::{create_keyset, rotate_keyset_dealer};
+pub use package_aad::{AAD_PACKAGE_DOMAIN_SEPARATOR, build_aad_package};
 pub use profile_packages::{
-    BF_PACKAGE_IV_BYTES, BF_PACKAGE_PBKDF2_ITERATIONS, BF_PACKAGE_SALT_BYTES, BF_PACKAGE_VERSION,
+    BF_PACKAGE_SALT_BYTES, BF_PACKAGE_VERSION, BF_PACKAGE_XCHACHA_NONCE_BYTES,
     BfManualPeerPolicyOverride, BfMethodPolicyOverride, BfOnboardPayload, BfPeerPolicyOverride,
     BfPolicyOverrideValue, BfProfileDevice, BfProfilePayload, BfSharePayload,
     EncryptedProfileBackup, EncryptedProfileBackupDevice, PREFIX_BFONBOARD, PREFIX_BFPROFILE,

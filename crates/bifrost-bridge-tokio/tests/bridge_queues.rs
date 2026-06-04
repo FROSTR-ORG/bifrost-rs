@@ -50,7 +50,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -58,12 +58,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 
 #[tokio::test]
 async fn outbound_queue_overflow_fails_round() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 5,
-        count: 6,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 5, 6)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let target_ecdh: [u8; 32] = group.members[1].pubkey[1..]

@@ -58,7 +58,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
         group.clone(),
         share.clone(),
         peers,
-        DeviceState::new(share.idx, share.seckey),
+        DeviceState::new(share.idx, *share.seckey.expose_bytes()),
         DeviceConfig::default(),
     )
     .expect("build signer")
@@ -66,12 +66,7 @@ fn build_signer(group: &GroupPackage, share: &SharePackage) -> SigningDevice {
 
 #[tokio::test]
 async fn ecdh_round_fails_on_invalid_locked_peer_response() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 3,
-        count: 4,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 3, 4)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let local_signer = build_signer(&group, &local_share);
@@ -79,7 +74,8 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
         .try_into()
         .expect("xonly target");
     let event_kind = DeviceConfig::default().event_kind as u16;
-    let local_secret = SecretKey::from_slice(&local_share.seckey).expect("local secret");
+    let local_secret =
+        SecretKey::from_slice(local_share.seckey.expose_bytes()).expect("local secret");
     let local_keys = Keys::new(local_secret.clone());
 
     let mut peer_signers = bundle
@@ -129,7 +125,8 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
                     }),
                 };
                 let malformed_plain = encode_bridge_envelope(&malformed).expect("encode envelope");
-                let peer_secret = SecretKey::from_slice(&share.seckey).expect("peer secret");
+                let peer_secret =
+                    SecretKey::from_slice(share.seckey.expose_bytes()).expect("peer secret");
                 let peer_keys = Keys::new(peer_secret.clone());
                 let encrypted = nip44::encrypt(
                     &peer_secret,
@@ -175,12 +172,7 @@ async fn ecdh_round_fails_on_invalid_locked_peer_response() {
 
 #[tokio::test]
 async fn inbound_duplicate_event_is_processed_once() {
-    let bundle = create_keyset(CreateKeysetConfig {
-        group_name: "Test Group".to_string(),
-        threshold: 2,
-        count: 3,
-    })
-    .expect("create keyset");
+    let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("create keyset");
     let group = bundle.group.clone();
     let local_share = bundle.shares[0].clone();
     let remote_share = bundle.shares[1].clone();
