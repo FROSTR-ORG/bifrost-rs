@@ -13,26 +13,19 @@ use bifrost_signer::{
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfOnboardPayload, BfProfilePayload, BfSharePayload, CreateKeysetConfig,
-    EncryptedProfileBackup, PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE,
-    PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair, RecoverKeyInput,
+    PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE, ProfilePackagePair, RecoverKeyInput,
     RotateKeysetRequest, build_onboard_request_event as rust_build_onboard_request_event,
-    build_profile_backup_event as rust_build_profile_backup_event,
-    create_encrypted_profile_backup as rust_create_encrypted_profile_backup,
     create_keyset as rust_create_keyset,
     create_profile_package_pair as rust_create_profile_package_pair,
     decode_bfonboard_package as rust_decode_bfonboard_package,
     decode_bfprofile_package as rust_decode_bfprofile_package,
     decode_bfshare_package as rust_decode_bfshare_package,
-    decrypt_profile_backup_content as rust_decrypt_profile_backup_content,
-    derive_profile_backup_conversation_key as rust_derive_profile_backup_conversation_key,
     derive_profile_id_from_share_pubkey as rust_derive_profile_id_from_share_pubkey,
     derive_profile_id_from_share_secret as rust_derive_profile_id_from_share_secret,
     encode_bfonboard_package as rust_encode_bfonboard_package,
     encode_bfprofile_package as rust_encode_bfprofile_package,
     encode_bfshare_package as rust_encode_bfshare_package,
-    encrypt_profile_backup_content as rust_encrypt_profile_backup_content,
-    generate_opaque_request_id as rust_generate_opaque_request_id,
-    parse_profile_backup_event as rust_parse_profile_backup_event, recover_key as rust_recover_key,
+    generate_opaque_request_id as rust_generate_opaque_request_id, recover_key as rust_recover_key,
     rotate_keyset_dealer as rust_rotate_keyset_dealer,
 };
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -661,16 +654,6 @@ pub fn bfprofile_prefix() -> String {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn profile_backup_event_kind() -> u16 {
-    PROFILE_BACKUP_EVENT_KIND
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn profile_backup_key_domain() -> String {
-    PROFILE_BACKUP_KEY_DOMAIN.to_string()
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn encode_bfshare_package(payload_json: String, password: String) -> HostResult<String> {
     let payload: BfSharePayload =
         serde_json::from_str(&payload_json).map_err(|e| to_host_error(e.to_string()))?;
@@ -909,66 +892,6 @@ pub fn derive_group_id(group_json: String) -> HostResult<String> {
         .map_err(|e: CodecError| to_host_error(e.to_string()))?;
     let group_id = get_group_id(&group).map_err(|e| to_host_error(e.to_string()))?;
     Ok(hex::encode(group_id))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn create_encrypted_profile_backup(profile_json: String) -> HostResult<String> {
-    let profile: BfProfilePayload =
-        serde_json::from_str(&profile_json).map_err(|e| to_host_error(e.to_string()))?;
-    let backup =
-        rust_create_encrypted_profile_backup(&profile).map_err(|e| to_host_error(e.to_string()))?;
-    serde_json::to_string(&backup).map_err(|e| to_host_error(e.to_string()))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn derive_profile_backup_conversation_key_hex(share_secret: String) -> HostResult<String> {
-    let key = rust_derive_profile_backup_conversation_key(&share_secret)
-        .map_err(|e| to_host_error(e.to_string()))?;
-    Ok(hex::encode(key))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn encrypt_profile_backup_content(
-    backup_json: String,
-    share_secret: String,
-) -> HostResult<String> {
-    let backup: EncryptedProfileBackup =
-        serde_json::from_str(&backup_json).map_err(|e| to_host_error(e.to_string()))?;
-    rust_encrypt_profile_backup_content(&backup, &share_secret)
-        .map_err(|e| to_host_error(e.to_string()))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn decrypt_profile_backup_content(
-    ciphertext: String,
-    share_secret: String,
-) -> HostResult<String> {
-    let backup = rust_decrypt_profile_backup_content(&ciphertext, &share_secret)
-        .map_err(|e| to_host_error(e.to_string()))?;
-    serde_json::to_string(&backup).map_err(|e| to_host_error(e.to_string()))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn build_profile_backup_event(
-    share_secret: String,
-    backup_json: String,
-    created_at_seconds: Option<u32>,
-) -> HostResult<String> {
-    let backup: EncryptedProfileBackup =
-        serde_json::from_str(&backup_json).map_err(|e| to_host_error(e.to_string()))?;
-    let event =
-        rust_build_profile_backup_event(&share_secret, &backup, created_at_seconds.map(u64::from))
-            .map_err(|e| to_host_error(e.to_string()))?;
-    serde_json::to_string(&event).map_err(|e| to_host_error(e.to_string()))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn parse_profile_backup_event(event_json: String, share_secret: String) -> HostResult<String> {
-    let event: Event =
-        serde_json::from_str(&event_json).map_err(|e| to_host_error(e.to_string()))?;
-    let backup = rust_parse_profile_backup_event(&event, &share_secret)
-        .map_err(|e| to_host_error(e.to_string()))?;
-    serde_json::to_string(&backup).map_err(|e| to_host_error(e.to_string()))
 }
 
 fn build_core(

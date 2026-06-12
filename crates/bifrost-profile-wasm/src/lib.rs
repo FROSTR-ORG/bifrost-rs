@@ -5,25 +5,16 @@ use bifrost_profile::{
 };
 use frostr_utils::{
     BF_PACKAGE_VERSION, BfManualPeerPolicyOverride, BfOnboardPayload, BfProfileDevice,
-    BfProfilePayload, BfSharePayload, EncryptedProfileBackup, EncryptedProfileBackupDevice,
-    PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE, PROFILE_BACKUP_EVENT_KIND,
-    PROFILE_BACKUP_KEY_DOMAIN, ProfilePackagePair,
-    build_profile_backup_event as rust_build_profile_backup_event,
-    create_encrypted_profile_backup as rust_create_encrypted_profile_backup,
-    create_profile_package_pair as rust_create_profile_package_pair,
+    BfProfilePayload, BfSharePayload, PREFIX_BFONBOARD, PREFIX_BFPROFILE, PREFIX_BFSHARE,
+    ProfilePackagePair, create_profile_package_pair as rust_create_profile_package_pair,
     decode_bfonboard_package as rust_decode_bfonboard_package,
     decode_bfprofile_package as rust_decode_bfprofile_package,
     decode_bfshare_package as rust_decode_bfshare_package,
-    decrypt_profile_backup_content as rust_decrypt_profile_backup_content,
-    derive_profile_backup_conversation_key as rust_derive_profile_backup_conversation_key,
     derive_profile_id_from_share_pubkey as rust_derive_profile_id_from_share_pubkey,
     encode_bfonboard_package as rust_encode_bfonboard_package,
     encode_bfprofile_package as rust_encode_bfprofile_package,
     encode_bfshare_package as rust_encode_bfshare_package,
-    encrypt_profile_backup_content as rust_encrypt_profile_backup_content,
-    parse_profile_backup_event as rust_parse_profile_backup_event,
 };
-use nostr::Event;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -84,24 +75,6 @@ struct BrowserProfilePackagePayload {
     profile_id: String,
     version: u8,
     device: BrowserProfilePackageDevice,
-    group_package: BrowserGroupPackage,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserEncryptedProfileBackupDevice {
-    name: String,
-    share_public_key: String,
-    #[serde(default)]
-    manual_peer_policy_overrides: Vec<BfManualPeerPolicyOverride>,
-    relays: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserEncryptedProfileBackup {
-    version: u8,
-    device: BrowserEncryptedProfileBackupDevice,
     group_package: BrowserGroupPackage,
 }
 
@@ -228,32 +201,6 @@ fn payload_profile_from_browser(payload: BrowserProfilePackagePayload) -> BfProf
     }
 }
 
-fn browser_backup_from_payload(backup: &EncryptedProfileBackup) -> BrowserEncryptedProfileBackup {
-    BrowserEncryptedProfileBackup {
-        version: backup.version,
-        device: BrowserEncryptedProfileBackupDevice {
-            name: backup.device.name.clone(),
-            share_public_key: backup.device.share_public_key.clone(),
-            manual_peer_policy_overrides: backup.device.manual_peer_policy_overrides.clone(),
-            relays: backup.device.relays.clone(),
-        },
-        group_package: browser_group_from_wire(&backup.group_package),
-    }
-}
-
-fn payload_backup_from_browser(backup: BrowserEncryptedProfileBackup) -> EncryptedProfileBackup {
-    EncryptedProfileBackup {
-        version: backup.version,
-        device: EncryptedProfileBackupDevice {
-            name: backup.device.name,
-            share_public_key: backup.device.share_public_key,
-            manual_peer_policy_overrides: backup.device.manual_peer_policy_overrides,
-            relays: backup.device.relays,
-        },
-        group_package: wire_group_from_browser(backup.group_package),
-    }
-}
-
 fn browser_pair_from_payload(pair: &ProfilePackagePair) -> BrowserProfilePackagePair {
     BrowserProfilePackagePair {
         profile_string: pair.profile_string.clone(),
@@ -286,16 +233,6 @@ pub fn bfonboard_prefix() -> String {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn bfprofile_prefix() -> String {
     PREFIX_BFPROFILE.to_string()
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn profile_backup_event_kind() -> u16 {
-    PROFILE_BACKUP_EVENT_KIND
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn profile_backup_key_domain() -> String {
-    PROFILE_BACKUP_KEY_DOMAIN.to_string()
 }
 
 pub fn derive_profile_id_from_share_secret_export(share_secret: &str) -> HostResult<String> {
@@ -429,125 +366,6 @@ pub fn create_profile_package_pair(payload_json: &str, password: &str) -> HostRe
     create_profile_package_pair_json(payload_json, password)
 }
 
-pub fn create_encrypted_profile_backup_json(profile_json: &str) -> HostResult<String> {
-    let profile = payload_profile_from_browser(parse_json(profile_json, "bfprofile payload")?);
-    let backup = rust_create_encrypted_profile_backup(&profile)
-        .map_err(|error| to_host_error(error.to_string()))?;
-    to_json(
-        &browser_backup_from_payload(&backup),
-        "encrypted profile backup",
-    )
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn create_encrypted_profile_backup(profile_json: &str) -> HostResult<String> {
-    create_encrypted_profile_backup_json(profile_json)
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn derive_profile_backup_conversation_key_hex(share_secret: &str) -> HostResult<String> {
-    let key = rust_derive_profile_backup_conversation_key(share_secret)
-        .map_err(|error| to_host_error(error.to_string()))?;
-    Ok(hex::encode(key))
-}
-
-pub fn encrypt_profile_backup_content_json(
-    backup_json: &str,
-    share_secret: &str,
-) -> HostResult<String> {
-    let backup = payload_backup_from_browser(parse_json(backup_json, "encrypted profile backup")?);
-    rust_encrypt_profile_backup_content(&backup, share_secret)
-        .map_err(|error| to_host_error(error.to_string()))
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn encrypt_profile_backup_content(backup_json: &str, share_secret: &str) -> HostResult<String> {
-    encrypt_profile_backup_content_json(backup_json, share_secret)
-}
-
-pub fn decrypt_profile_backup_content_json(
-    ciphertext: &str,
-    share_secret: &str,
-) -> HostResult<String> {
-    let backup = rust_decrypt_profile_backup_content(ciphertext, share_secret)
-        .map_err(|error| to_host_error(error.to_string()))?;
-    to_json(
-        &browser_backup_from_payload(&backup),
-        "encrypted profile backup",
-    )
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn decrypt_profile_backup_content(ciphertext: &str, share_secret: &str) -> HostResult<String> {
-    decrypt_profile_backup_content_json(ciphertext, share_secret)
-}
-
-pub fn build_profile_backup_event_json(
-    share_secret: &str,
-    backup_json: &str,
-    created_at_seconds: Option<u32>,
-) -> HostResult<String> {
-    let backup = payload_backup_from_browser(parse_json(backup_json, "encrypted profile backup")?);
-    let event =
-        rust_build_profile_backup_event(share_secret, &backup, created_at_seconds.map(u64::from))
-            .map_err(|error| to_host_error(error.to_string()))?;
-    to_json(&event, "profile backup event")
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn build_profile_backup_event(
-    share_secret: &str,
-    backup_json: &str,
-    created_at_seconds: Option<u32>,
-) -> HostResult<String> {
-    build_profile_backup_event_json(share_secret, backup_json, created_at_seconds)
-}
-
-pub fn parse_profile_backup_event_json(event_json: &str, share_secret: &str) -> HostResult<String> {
-    let event: Event = parse_json(event_json, "profile backup event")?;
-    let backup = rust_parse_profile_backup_event(&event, share_secret)
-        .map_err(|error| to_host_error(error.to_string()))?;
-    to_json(
-        &browser_backup_from_payload(&backup),
-        "encrypted profile backup",
-    )
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn parse_profile_backup_event(event_json: &str, share_secret: &str) -> HostResult<String> {
-    parse_profile_backup_event_json(event_json, share_secret)
-}
-
-pub fn recover_profile_from_share_and_backup_json(
-    share_json: &str,
-    backup_json: &str,
-) -> HostResult<String> {
-    let share: BrowserSharePackagePayload = parse_json(share_json, "bfshare payload")?;
-    let backup: BrowserEncryptedProfileBackup =
-        parse_json(backup_json, "encrypted profile backup")?;
-    let profile = BrowserProfilePackagePayload {
-        profile_id: derive_profile_id_for_share_secret(&share.share_secret)
-            .map_err(|error| to_host_error(error.to_string()))?,
-        version: backup.version,
-        device: BrowserProfilePackageDevice {
-            name: backup.device.name,
-            share_secret: share.share_secret,
-            manual_peer_policy_overrides: backup.device.manual_peer_policy_overrides,
-            relays: backup.device.relays,
-        },
-        group_package: backup.group_package,
-    };
-    to_json(&profile, "recovered profile payload")
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn recover_profile_from_share_and_backup(
-    share_json: &str,
-    backup_json: &str,
-) -> HostResult<String> {
-    recover_profile_from_share_and_backup_json(share_json, backup_json)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,24 +471,11 @@ mod tests {
         assert_eq!(bfshare_prefix(), "bfshare");
         assert_eq!(bfonboard_prefix(), "bfonboard");
         assert_eq!(bfprofile_prefix(), "bfprofile");
-        assert_eq!(profile_backup_event_kind(), 10_000);
-        assert_eq!(profile_backup_key_domain(), "frostr-profile-backup/v1");
 
         let payload = sample_profile_payload();
-        let backup_json = create_encrypted_profile_backup_json(
-            &serde_json::to_string(&payload).expect("serialize"),
-        )
-        .expect("create backup");
-        let backup: BrowserEncryptedProfileBackup =
-            serde_json::from_str(&backup_json).expect("parse backup");
-
         let from_secret = derive_profile_id_from_share_secret_export(&payload.device.share_secret)
             .expect("profile id from secret");
-        let from_pubkey =
-            derive_profile_id_from_share_pubkey_export(&backup.device.share_public_key)
-                .expect("profile id from share pubkey");
         assert_eq!(from_secret, payload.profile_id);
-        assert_eq!(from_pubkey, payload.profile_id);
     }
 
     #[test]
@@ -717,64 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn backup_wrappers_round_trip() {
-        let payload = sample_profile_payload();
-        let payload_json = serde_json::to_string(&payload).expect("serialize payload");
-        let backup_json =
-            create_encrypted_profile_backup_json(&payload_json).expect("create backup json");
-        let backup: BrowserEncryptedProfileBackup =
-            serde_json::from_str(&backup_json).expect("parse backup");
-        assert_eq!(backup.device.name, payload.device.name);
-
-        let key_hex = derive_profile_backup_conversation_key_hex(&payload.device.share_secret)
-            .expect("derive backup conversation key");
-        assert_eq!(key_hex.len(), 64);
-
-        let ciphertext =
-            encrypt_profile_backup_content_json(&backup_json, &payload.device.share_secret)
-                .expect("encrypt backup");
-        let decrypted_json =
-            decrypt_profile_backup_content_json(&ciphertext, &payload.device.share_secret)
-                .expect("decrypt backup");
-        let decrypted: BrowserEncryptedProfileBackup =
-            serde_json::from_str(&decrypted_json).expect("parse decrypted backup");
-        assert_eq!(decrypted, backup);
-
-        let event_json = build_profile_backup_event_json(
-            &payload.device.share_secret,
-            &backup_json,
-            Some(1_700_000_000),
-        )
-        .expect("build event");
-        let reparsed_json =
-            parse_profile_backup_event_json(&event_json, &payload.device.share_secret)
-                .expect("parse event");
-        let reparsed: BrowserEncryptedProfileBackup =
-            serde_json::from_str(&reparsed_json).expect("parse reparsed backup");
-        assert_eq!(reparsed, backup);
-    }
-
-    #[test]
-    fn recover_profile_from_share_and_backup_rebuilds_browser_payload() {
-        let payload = sample_profile_payload();
-        let backup_json = create_encrypted_profile_backup_json(
-            &serde_json::to_string(&payload).expect("serialize"),
-        )
-        .expect("create backup");
-        let share_json = serde_json::to_string(&BrowserSharePackagePayload {
-            share_secret: payload.device.share_secret.clone(),
-            relays: payload.device.relays.clone(),
-        })
-        .expect("serialize share");
-        let recovered_json =
-            recover_profile_from_share_and_backup_json(&share_json, &backup_json).expect("recover");
-        let recovered: BrowserProfilePackagePayload =
-            serde_json::from_str(&recovered_json).expect("parse recovered profile");
-        assert_eq!(recovered.profile_id, payload.profile_id);
-        assert_eq!(recovered.device.share_secret, payload.device.share_secret);
-    }
-
-    #[test]
     fn malformed_json_and_wrong_password_return_host_errors() {
         let parse_error =
             encode_bfprofile_package_json("{", "test-password").expect_err("invalid json");
@@ -790,27 +537,5 @@ mod tests {
                 || decode_error.contains("decrypt")
                 || decode_error.contains("Invalid")
         );
-    }
-
-    #[test]
-    fn parse_profile_backup_event_rejects_malformed_payload_content() {
-        let payload = sample_profile_payload();
-        let payload_json = serde_json::to_string(&payload).expect("serialize payload");
-        let backup_json =
-            create_encrypted_profile_backup_json(&payload_json).expect("create backup json");
-        let event_json = build_profile_backup_event_json(
-            &payload.device.share_secret,
-            &backup_json,
-            Some(1_700_000_000),
-        )
-        .expect("build event");
-        let mut event: serde_json::Value =
-            serde_json::from_str(&event_json).expect("parse event json");
-        event["content"] = serde_json::Value::String("{}".to_string());
-        let malformed_event_json = serde_json::to_string(&event).expect("serialize event");
-        let error =
-            parse_profile_backup_event_json(&malformed_event_json, &payload.device.share_secret)
-                .expect_err("invalid backup event payload");
-        assert!(error.contains("backup") || error.contains("decrypt") || error.contains("Invalid"));
     }
 }
