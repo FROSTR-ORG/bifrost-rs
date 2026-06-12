@@ -22,16 +22,12 @@ pub use config::{
     FallbackUnlockMode, KeyringPreference, RelayProfile, ShellConfig, validate_relay_profile,
 };
 pub use flows::{
-    ProfileBackupPublishResult, ProfileExportResult, ProfileImportResult,
-    ProfilePackageExportResult, RotationIntent, RotationKind, RotationStep, StagedOnboardingImport,
-    delete_intent, export_profile, export_profile_as_bfonboard, export_profile_as_bfprofile,
-    export_profile_as_bfshare, finalize_rotation_update_import,
-    import_profile_from_bfprofile_value, import_profile_from_files, preview_bfprofile_value,
-    remove_encrypted_profile, remove_profile, scan_rotation_intents, write_intent,
-};
-#[cfg(feature = "native-relay")]
-pub use flows::{
-    preview_bfshare_recovery, publish_profile_backup, recover_profile_from_bfshare_value,
+    ProfileExportResult, ProfileImportResult, ProfilePackageExportResult, RotationIntent,
+    RotationKind, RotationStep, StagedOnboardingImport, delete_intent, export_profile,
+    export_profile_as_bfonboard, export_profile_as_bfprofile, export_profile_as_bfshare,
+    finalize_rotation_update_import, import_profile_from_bfprofile_value,
+    import_profile_from_files, preview_bfprofile_value, remove_encrypted_profile, remove_profile,
+    scan_rotation_intents, write_intent,
 };
 pub use kdf::{KDF_OUTPUT_LEN, KDF_SALT_LEN, derive_profile_encryption_key_v2};
 pub use models::{EncryptedProfileRecord, ProfileManifest, ProfilePreview, build_profile_manifest};

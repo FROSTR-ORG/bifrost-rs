@@ -6,8 +6,7 @@ use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 use bech32::{Checksum, Fe32};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use hmac::{Hmac, Mac};
-use nostr::{Event, EventBuilder, Keys, Kind, SecretKey, Timestamp};
+use nostr::{Keys, SecretKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,8 +28,6 @@ pub const BF_PACKAGE_VERSION: u8 = 2;
 pub const BF_PACKAGE_SALT_BYTES: usize = 16;
 /// XChaCha20Poly1305 nonce length in raw bytes (24-byte native nonce).
 pub const BF_PACKAGE_XCHACHA_NONCE_BYTES: usize = 24;
-pub const PROFILE_BACKUP_EVENT_KIND: u16 = 10_000;
-pub const PROFILE_BACKUP_KEY_DOMAIN: &str = "frostr-profile-backup/v1";
 pub const PROFILE_ID_DOMAIN: &str = "frostr:profile-id:v1";
 pub const PREFIX_BFSHARE: &str = "bfshare";
 pub const PREFIX_BFONBOARD: &str = "bfonboard";
@@ -38,8 +35,6 @@ pub const PREFIX_BFPROFILE: &str = "bfprofile";
 
 const KDF_MARKER_ARGON2ID: &str = "argon2id";
 const AEAD_MARKER_XCHACHA20POLY1305: &str = "xchacha20poly1305";
-
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -105,22 +100,6 @@ pub struct BfProfilePayload {
     pub profile_id: String,
     pub version: u8,
     pub device: BfProfileDevice,
-    pub group_package: GroupPackageWire,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EncryptedProfileBackupDevice {
-    pub name: String,
-    pub share_public_key: String,
-    #[serde(default)]
-    pub manual_peer_policy_overrides: Vec<BfManualPeerPolicyOverride>,
-    pub relays: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EncryptedProfileBackup {
-    pub version: u8,
-    pub device: EncryptedProfileBackupDevice,
     pub group_package: GroupPackageWire,
 }
 
@@ -235,22 +214,6 @@ pub fn create_profile_package_pair(
     })
 }
 
-pub fn create_encrypted_profile_backup(
-    payload: &BfProfilePayload,
-) -> FrostUtilsResult<EncryptedProfileBackup> {
-    let normalized = normalize_profile_payload(payload)?;
-    Ok(EncryptedProfileBackup {
-        version: normalized.version,
-        device: EncryptedProfileBackupDevice {
-            name: normalized.device.name,
-            share_public_key: derive_share_public_key_hex(&normalized.device.share_secret)?,
-            manual_peer_policy_overrides: normalized.device.manual_peer_policy_overrides,
-            relays: normalized.device.relays,
-        },
-        group_package: normalized.group_package,
-    })
-}
-
 pub fn derive_profile_id_from_share_pubkey(share_pubkey_hex: &str) -> FrostUtilsResult<String> {
     let normalized = normalize_hex32(share_pubkey_hex, "share public key")?;
     let mut hasher = Sha256::new();
@@ -262,82 +225,6 @@ pub fn derive_profile_id_from_share_pubkey(share_pubkey_hex: &str) -> FrostUtils
 pub fn derive_profile_id_from_share_secret(share_secret: &str) -> FrostUtilsResult<String> {
     let share_pubkey = derive_share_public_key_hex(share_secret)?;
     derive_profile_id_from_share_pubkey(&share_pubkey)
-}
-
-pub fn derive_profile_backup_conversation_key(share_secret: &str) -> FrostUtilsResult<[u8; 32]> {
-    let share_secret = normalize_hex32(share_secret, "share secret")?;
-    hmac_sha256(
-        PROFILE_BACKUP_KEY_DOMAIN.as_bytes(),
-        &hex::decode(&share_secret).expect("hex32"),
-    )
-}
-
-pub fn encrypt_profile_backup_content(
-    backup: &EncryptedProfileBackup,
-    share_secret: &str,
-) -> FrostUtilsResult<String> {
-    let normalized = normalize_profile_backup(backup)?;
-    let conversation_key = derive_profile_backup_conversation_key(share_secret)?;
-    let plaintext = serde_json::to_string(&normalized)
-        .map_err(|e| FrostUtilsError::Codec(format!("serialize backup payload: {e}")))?;
-    encrypt_nip44_compatible_payload(&conversation_key, &plaintext)
-}
-
-pub fn decrypt_profile_backup_content(
-    ciphertext: &str,
-    share_secret: &str,
-) -> FrostUtilsResult<EncryptedProfileBackup> {
-    let conversation_key = derive_profile_backup_conversation_key(share_secret)?;
-    let plaintext = decrypt_nip44_compatible_payload(&conversation_key, ciphertext)?;
-    let backup: EncryptedProfileBackup = serde_json::from_str(&plaintext).map_err(|_| {
-        FrostUtilsError::InvalidInput("Invalid encrypted profile backup.".to_string())
-    })?;
-    normalize_profile_backup(&backup)
-}
-
-pub fn build_profile_backup_event(
-    share_secret: &str,
-    backup: &EncryptedProfileBackup,
-    created_at: Option<u64>,
-) -> FrostUtilsResult<Event> {
-    let share_secret = normalize_hex32(share_secret, "share secret")?;
-    let secret = secret_key_from_hex(&share_secret)?;
-    let keys = Keys::new(secret);
-    let content = encrypt_profile_backup_content(backup, &share_secret)?;
-    let mut builder = EventBuilder::new(Kind::Custom(PROFILE_BACKUP_EVENT_KIND), content);
-    if let Some(created_at) = created_at {
-        builder = builder.custom_created_at(Timestamp::from(created_at));
-    }
-    builder
-        .sign_with_keys(&keys)
-        .map_err(|e| FrostUtilsError::Crypto(format!("sign backup event: {e}")))
-}
-
-pub fn parse_profile_backup_event(
-    event: &Event,
-    share_secret: &str,
-) -> FrostUtilsResult<EncryptedProfileBackup> {
-    if event.kind != Kind::Custom(PROFILE_BACKUP_EVENT_KIND) {
-        return Err(FrostUtilsError::WrongPackageMode(format!(
-            "expected kind {PROFILE_BACKUP_EVENT_KIND}, got {}",
-            event.kind.as_u16()
-        )));
-    }
-    let share_secret = normalize_hex32(share_secret, "share secret")?;
-    let expected_pubkey = Keys::new(secret_key_from_hex(&share_secret)?).public_key();
-    if event.pubkey != expected_pubkey {
-        return Err(FrostUtilsError::VerificationFailed(
-            "backup event author does not match the provided share secret".to_string(),
-        ));
-    }
-    let backup = decrypt_profile_backup_content(&event.content, &share_secret)?;
-    let expected_share_pubkey = derive_share_public_key_hex(&share_secret)?;
-    if backup.device.share_public_key != expected_share_pubkey {
-        return Err(FrostUtilsError::VerificationFailed(
-            "encrypted profile backup does not match the provided share".to_string(),
-        ));
-    }
-    Ok(backup)
 }
 
 fn normalize_share_payload(payload: &BfSharePayload) -> FrostUtilsResult<BfSharePayload> {
@@ -392,37 +279,6 @@ fn normalize_profile_payload(payload: &BfProfilePayload) -> FrostUtilsResult<BfP
         ));
     }
     Ok(normalized)
-}
-
-fn normalize_profile_backup(
-    backup: &EncryptedProfileBackup,
-) -> FrostUtilsResult<EncryptedProfileBackup> {
-    let device_name = backup.device.name.trim();
-    if device_name.is_empty() {
-        return Err(FrostUtilsError::InvalidInput(
-            "backup device name must be non-empty".to_string(),
-        ));
-    }
-    let group_package = normalize_group_package(&backup.group_package)?;
-    Ok(EncryptedProfileBackup {
-        version: if backup.version == 0 {
-            BF_PACKAGE_VERSION
-        } else {
-            backup.version
-        },
-        device: EncryptedProfileBackupDevice {
-            name: device_name.to_string(),
-            share_public_key: normalize_hex32(&backup.device.share_public_key, "share public key")?,
-            manual_peer_policy_overrides: backup
-                .device
-                .manual_peer_policy_overrides
-                .iter()
-                .map(normalize_manual_peer_policy_override)
-                .collect::<FrostUtilsResult<Vec<_>>>()?,
-            relays: normalize_relays(&backup.device.relays)?,
-        },
-        group_package,
-    })
 }
 
 fn normalize_manual_peer_policy_override(
@@ -911,57 +767,9 @@ fn secret_key_from_hex(hex32: &str) -> FrostUtilsResult<SecretKey> {
         .map_err(|e| FrostUtilsError::InvalidInput(format!("invalid share secret: {e}")))
 }
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> FrostUtilsResult<[u8; 32]> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
-        .map_err(|e| FrostUtilsError::Crypto(format!("HMAC init failed: {e}")))?;
-    mac.update(data);
-    let bytes = mac.finalize().into_bytes();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn encrypt_nip44_compatible_payload(
-    conversation_key: &[u8; 32],
-    plaintext: &str,
-) -> FrostUtilsResult<String> {
-    let mut nonce32 = [0u8; 32];
-    OsRng.fill_bytes(&mut nonce32);
-    bifrost_core::nip44::encrypt_under_conversation_key(conversation_key, &nonce32, plaintext)
-        .map_err(cipher_error)
-}
-
-fn decrypt_nip44_compatible_payload(
-    conversation_key: &[u8; 32],
-    payload: &str,
-) -> FrostUtilsResult<String> {
-    bifrost_core::nip44::decrypt_under_conversation_key(conversation_key, payload)
-        .map_err(cipher_error)
-}
-
-/// Map `bifrost_core::nip44::CipherError` onto the crate's native error
-/// type. Cipher-level failures collapse to `DecryptionFailed` to keep the
-/// pre-consolidation caller contract; structural / input errors surface
-/// as `Crypto` / `InvalidInput` so the underlying diagnostic is not lost.
-fn cipher_error(e: bifrost_core::nip44::CipherError) -> FrostUtilsError {
-    use bifrost_core::nip44::CipherError;
-    match e {
-        CipherError::InvalidVersion
-        | CipherError::PayloadTooShort
-        | CipherError::MacMismatch
-        | CipherError::BadUtf8 => FrostUtilsError::DecryptionFailed,
-        CipherError::BadBase64(msg) => {
-            FrostUtilsError::Codec(format!("invalid backup base64: {msg}"))
-        }
-        CipherError::BadLength(msg) => FrostUtilsError::InvalidInput(msg),
-        CipherError::Crypto(msg) => FrostUtilsError::Crypto(msg),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD_NO_PAD;
 
     fn sample_profile() -> BfProfilePayload {
         let device = BfProfileDevice {
@@ -1062,18 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_encrypt_decrypt_round_trip() {
-        let profile = sample_profile();
-        let backup = create_encrypted_profile_backup(&profile).expect("backup");
-        let ciphertext =
-            encrypt_profile_backup_content(&backup, &profile.device.share_secret).expect("encrypt");
-        let decrypted = decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret)
-            .expect("decrypt");
-        assert_eq!(decrypted, backup);
-    }
-
-    #[test]
-    fn odd_parity_member_pubkeys_survive_profile_and_backup_round_trips() {
+    fn odd_parity_member_pubkeys_survive_profile_round_trips() {
         let profile = sample_profile();
         let expected_pubkeys = profile
             .group_package
@@ -1097,32 +894,6 @@ mod tests {
             .map(|member| member.pubkey.clone())
             .collect::<Vec<_>>();
         assert_eq!(decoded_pubkeys, expected_pubkeys);
-
-        let backup = create_encrypted_profile_backup(&profile).expect("backup");
-        let ciphertext =
-            encrypt_profile_backup_content(&backup, &profile.device.share_secret).expect("encrypt");
-        let decrypted = decrypt_profile_backup_content(&ciphertext, &profile.device.share_secret)
-            .expect("decrypt");
-        let backup_pubkeys = decrypted
-            .group_package
-            .members
-            .iter()
-            .map(|member| member.pubkey.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(backup_pubkeys, expected_pubkeys);
-    }
-
-    #[test]
-    fn build_and_parse_backup_event_round_trip() {
-        let profile = sample_profile();
-        let backup = create_encrypted_profile_backup(&profile).expect("backup");
-        let event =
-            build_profile_backup_event(&profile.device.share_secret, &backup, Some(1_700_000_000))
-                .expect("build event");
-        assert_eq!(event.kind, Kind::Custom(PROFILE_BACKUP_EVENT_KIND));
-        let parsed =
-            parse_profile_backup_event(&event, &profile.device.share_secret).expect("parse");
-        assert_eq!(parsed, backup);
     }
 
     #[test]
@@ -1134,30 +905,5 @@ mod tests {
         let encoded = encode_bfshare_package(&payload, "secret").expect("encode");
         let err = decode_bfshare_package(&encoded, "wrong").expect_err("wrong password must fail");
         matches!(err, FrostUtilsError::DecryptionFailed);
-    }
-
-    /// Flip a single bit in the MAC tag at four probed positions on a
-    /// profile-backup payload and confirm `decrypt_nip44_compatible_payload`
-    /// rejects every tampered variant. Guards the constant-time MAC compare.
-    #[test]
-    fn decrypt_nip44_compatible_payload_rejects_mac_mismatch_at_every_probed_position() {
-        let conversation_key = [0xABu8; 32];
-        let ciphertext = encrypt_nip44_compatible_payload(&conversation_key, "mac-probe-backup")
-            .expect("encrypt");
-        let bytes = STANDARD_NO_PAD
-            .decode(ciphertext.as_bytes())
-            .expect("decode payload");
-        let mac_start = bytes.len() - 32;
-
-        let probes: &[(usize, u8)] = &[(0, 0x80), (16, 0x01), (31, 0x40), (0, 0x01)];
-        for &(offset, mask) in probes {
-            let mut tampered = bytes.clone();
-            tampered[mac_start + offset] ^= mask;
-            let encoded = STANDARD_NO_PAD.encode(&tampered);
-            let err = decrypt_nip44_compatible_payload(&conversation_key, &encoded).expect_err(
-                &format!("mac flip at offset {offset:#x} mask {mask:#x} must fail"),
-            );
-            assert!(matches!(err, FrostUtilsError::DecryptionFailed));
-        }
     }
 }

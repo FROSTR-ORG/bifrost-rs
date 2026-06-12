@@ -18,16 +18,14 @@ pub use package_aad::{AAD_PACKAGE_DOMAIN_SEPARATOR, build_aad_package};
 pub use profile_packages::{
     BF_PACKAGE_SALT_BYTES, BF_PACKAGE_VERSION, BF_PACKAGE_XCHACHA_NONCE_BYTES,
     BfManualPeerPolicyOverride, BfMethodPolicyOverride, BfOnboardPayload, BfPeerPolicyOverride,
-    BfPolicyOverrideValue, BfProfileDevice, BfProfilePayload, BfSharePayload,
-    EncryptedProfileBackup, EncryptedProfileBackupDevice, PREFIX_BFONBOARD, PREFIX_BFPROFILE,
-    PREFIX_BFSHARE, PROFILE_BACKUP_EVENT_KIND, PROFILE_BACKUP_KEY_DOMAIN, PROFILE_ID_DOMAIN,
-    ProfilePackagePair, bf_method_policy_override_to_core, bf_policy_override_to_core,
-    build_profile_backup_event, core_method_policy_override_to_bf, core_peer_policy_override_to_bf,
-    create_encrypted_profile_backup, create_profile_package_pair, decode_bfonboard_package,
-    decode_bfprofile_package, decode_bfshare_package, decrypt_profile_backup_content,
-    derive_profile_backup_conversation_key, derive_profile_id_from_share_pubkey,
+    BfPolicyOverrideValue, BfProfileDevice, BfProfilePayload, BfSharePayload, PREFIX_BFONBOARD,
+    PREFIX_BFPROFILE, PREFIX_BFSHARE, PROFILE_ID_DOMAIN, ProfilePackagePair,
+    bf_method_policy_override_to_core, bf_policy_override_to_core,
+    core_method_policy_override_to_bf, core_peer_policy_override_to_bf,
+    create_profile_package_pair, decode_bfonboard_package, decode_bfprofile_package,
+    decode_bfshare_package, derive_profile_id_from_share_pubkey,
     derive_profile_id_from_share_secret, encode_bfonboard_package, encode_bfprofile_package,
-    encode_bfshare_package, encrypt_profile_backup_content, parse_profile_backup_event,
+    encode_bfshare_package,
 };
 pub use protocol::{
     build_onboard_request_event, decode_onboard_response_event, ecdh_create_from_share,

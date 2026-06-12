@@ -45,11 +45,3 @@ pub struct ProfilePackageExportResult {
     pub out_path: Option<String>,
     pub package: String,
 }
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProfileBackupPublishResult {
-    pub profile_id: String,
-    pub relays: Vec<String>,
-    pub event_id: String,
-    pub author_pubkey: String,
-}
