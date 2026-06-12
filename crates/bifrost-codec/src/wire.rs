@@ -145,6 +145,9 @@ pub struct PingPayloadWire {
     pub advertised_nonces: Vec<DerivedPublicNonceWire>,
     pub held_peer_nonce_codes: Vec<String>,
     pub policy_profile: Option<PeerScopedPolicyProfileWire>,
+    /// Hex of the sender's nonce-pool generation. Empty/absent on legacy peers.
+    #[serde(default)]
+    pub nonce_pool_generation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -645,11 +648,18 @@ impl TryFrom<PingPayloadWire> for PingPayload {
             .map(|code| hexbytes::decode(&code))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let nonce_pool_generation = if value.nonce_pool_generation.is_empty() {
+            bifrost_core::nonce::UNKNOWN_POOL_GENERATION
+        } else {
+            hexbytes::decode(&value.nonce_pool_generation)?
+        };
+
         Ok(Self {
             version: value.version,
             advertised_nonces,
             held_peer_nonce_codes,
             policy_profile: value.policy_profile.map(TryInto::try_into).transpose()?,
+            nonce_pool_generation,
         })
     }
 }
@@ -669,6 +679,13 @@ impl From<PingPayload> for PingPayloadWire {
                 .map(|code| hexbytes::encode(&code))
                 .collect(),
             policy_profile: value.policy_profile.map(Into::into),
+            nonce_pool_generation: if value.nonce_pool_generation
+                == bifrost_core::nonce::UNKNOWN_POOL_GENERATION
+            {
+                String::new()
+            } else {
+                hexbytes::encode(&value.nonce_pool_generation)
+            },
         }
     }
 }
@@ -1017,6 +1034,7 @@ mod tests {
             }],
             held_peer_nonce_codes: vec![[4u8; 32], [5u8; 32]],
             policy_profile: None,
+            nonce_pool_generation: [9u8; 32],
         };
         let wire = PingPayloadWire::from(payload.clone());
         let decoded = PingPayload::try_from(wire).expect("decode");
@@ -1030,6 +1048,7 @@ mod tests {
             advertised_nonces: Vec::new(),
             held_peer_nonce_codes: Vec::new(),
             policy_profile: None,
+            nonce_pool_generation: String::new(),
         };
         let err: crate::error::CodecError =
             TryInto::<PingPayload>::try_into(wire).expect_err("must reject legacy version");

@@ -240,6 +240,11 @@ fn gen_ping(rng: &mut Rng) -> PingPayloadWire {
         } else {
             Some(gen_policy_profile(rng))
         },
+        nonce_pool_generation: if rng.bool() {
+            String::new()
+        } else {
+            field(rng, 32)
+        },
     }
 }
 

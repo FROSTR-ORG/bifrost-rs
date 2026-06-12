@@ -165,7 +165,7 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
-    pub const VERSION: u32 = 6;
+    pub const VERSION: u32 = 7;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
         let mut nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
@@ -270,6 +270,10 @@ pub struct PeerNonceInventoryObservation {
     #[serde(default)]
     pub held_codes: Vec<Bytes32>,
     pub updated_at: u64,
+    /// The peer's nonce-pool generation as last advertised. A change means the
+    /// peer reset its outgoing pool, so the nonces we hold from it are dead.
+    #[serde(default)]
+    pub peer_generation: Bytes32,
 }
 
 #[derive(Debug, Clone)]
@@ -1860,6 +1864,8 @@ impl SigningDevice {
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
                     })?;
+                let peer_generation = ping.nonce_pool_generation;
+                self.reconcile_peer_generation(&sender, sender_idx, peer_generation);
                 if !ping.advertised_nonces.is_empty() {
                     self.state
                         .nonce_pool
@@ -1869,6 +1875,7 @@ impl SigningDevice {
                     &sender,
                     sender_idx,
                     ping.held_peer_nonce_codes,
+                    peer_generation,
                     now,
                 );
                 if let Some(profile) = ping.policy_profile {
@@ -2168,6 +2175,8 @@ impl SigningDevice {
                     .get(sender)
                     .copied()
                     .ok_or_else(|| SignerError::UnknownPeer(sender.to_string()))?;
+                let peer_generation = ping.nonce_pool_generation;
+                self.reconcile_peer_generation(sender, sender_idx, peer_generation);
                 if !ping.advertised_nonces.is_empty() {
                     self.state
                         .nonce_pool
@@ -2177,6 +2186,7 @@ impl SigningDevice {
                     sender,
                     sender_idx,
                     ping.held_peer_nonce_codes,
+                    peer_generation,
                     now,
                 );
                 if let Some(profile) = ping.policy_profile {
@@ -2464,11 +2474,34 @@ impl SigningDevice {
             < self.state.nonce_pool.config().min_threshold
     }
 
+    /// Detect a peer that reset its outgoing nonce pool: if its advertised
+    /// generation differs from the one we last recorded, the public nonces we
+    /// hold from it are dead — discard them so we don't reference a nonce the
+    /// peer can no longer honor. No-op on first contact (no recorded generation)
+    /// or when either side is the all-zero "unknown" generation (legacy peers).
+    fn reconcile_peer_generation(&mut self, peer: &str, peer_idx: u16, generation: Bytes32) {
+        if generation == bifrost_core::nonce::UNKNOWN_POOL_GENERATION {
+            return;
+        }
+        let reset = self
+            .state
+            .remote_nonce_inventory_observations
+            .get(peer)
+            .map(|observation| observation.peer_generation)
+            .is_some_and(|previous| {
+                previous != bifrost_core::nonce::UNKNOWN_POOL_GENERATION && previous != generation
+            });
+        if reset {
+            self.state.nonce_pool.clear_incoming(peer_idx);
+        }
+    }
+
     fn store_remote_nonce_inventory_observation(
         &mut self,
         peer: &str,
         peer_idx: u16,
         held_codes: Vec<Bytes32>,
+        generation: Bytes32,
         updated_at: u64,
     ) {
         let current_codes = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx);
@@ -2484,6 +2517,7 @@ impl SigningDevice {
             PeerNonceInventoryObservation {
                 held_codes: normalized_codes,
                 updated_at,
+                peer_generation: generation,
             },
         );
     }
@@ -2538,6 +2572,7 @@ impl SigningDevice {
             advertised_nonces: self.advertised_nonces_for_peer(peer, peer_idx)?,
             held_peer_nonce_codes: self.state.nonce_pool.incoming_nonce_codes(peer_idx),
             policy_profile: Some(self.local_policy_profile_for(peer)?),
+            nonce_pool_generation: self.state.nonce_pool.generation(),
         })
     }
 
@@ -2673,6 +2708,107 @@ mod tests {
             shares,
             local_share,
         }
+    }
+
+    fn first_peer(fixture: &Fixture) -> (String, u16) {
+        let member = fixture
+            .group
+            .members
+            .iter()
+            .find(|member| member.idx != fixture.local_share.idx)
+            .expect("a peer member");
+        (hex::encode(&member.pubkey[1..]), member.idx)
+    }
+
+    fn dummy_nonce(code: u8) -> DerivedPublicNonce {
+        DerivedPublicNonce {
+            binder_pn: [1u8; 33],
+            hidden_pn: [2u8; 33],
+            code: [code; 32],
+        }
+    }
+
+    #[test]
+    fn reconcile_peer_generation_discards_stale_nonces_on_change() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, peer_idx) = first_peer(&fixture);
+
+        // First advertisement (generation g1): store the peer's nonces + record g1.
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_idx, vec![dummy_nonce(1), dummy_nonce(2)]);
+        fixture.signer.store_remote_nonce_inventory_observation(
+            &peer,
+            peer_idx,
+            Vec::new(),
+            [0x11u8; 32],
+            100,
+        );
+        assert_eq!(
+            fixture
+                .signer
+                .state
+                .nonce_pool
+                .peer_stats(peer_idx)
+                .incoming_available,
+            2
+        );
+
+        // Same generation again → nonces are kept.
+        fixture
+            .signer
+            .reconcile_peer_generation(&peer, peer_idx, [0x11u8; 32]);
+        assert_eq!(
+            fixture
+                .signer
+                .state
+                .nonce_pool
+                .peer_stats(peer_idx)
+                .incoming_available,
+            2
+        );
+
+        // A new generation means the peer reset its outgoing pool — the nonces we
+        // hold from it are dead and must be discarded.
+        fixture
+            .signer
+            .reconcile_peer_generation(&peer, peer_idx, [0x22u8; 32]);
+        assert_eq!(
+            fixture
+                .signer
+                .state
+                .nonce_pool
+                .peer_stats(peer_idx)
+                .incoming_available,
+            0
+        );
+    }
+
+    #[test]
+    fn reconcile_peer_generation_keeps_nonces_on_first_contact() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, peer_idx) = first_peer(&fixture);
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_idx, vec![dummy_nonce(5)]);
+
+        // No generation recorded yet → first contact must not discard anything.
+        fixture
+            .signer
+            .reconcile_peer_generation(&peer, peer_idx, [0x33u8; 32]);
+        assert_eq!(
+            fixture
+                .signer
+                .state
+                .nonce_pool
+                .peer_stats(peer_idx)
+                .incoming_available,
+            1
+        );
     }
 
     fn share_for_peer(group: &GroupPackage, shares: &[SharePackage], peer: &str) -> SharePackage {
@@ -3475,6 +3611,7 @@ mod tests {
                 advertised_nonces: Vec::new(),
                 held_peer_nonce_codes: Vec::new(),
                 policy_profile: None,
+                nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
             })),
         };
         let err = fixture

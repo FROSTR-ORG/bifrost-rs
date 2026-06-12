@@ -455,6 +455,11 @@ pub struct PingPayload {
     #[serde(with = "serde_fixed_array::vec_bytes32")]
     pub held_peer_nonce_codes: Vec<Bytes32>,
     pub policy_profile: Option<PeerScopedPolicyProfile>,
+    /// The sender's nonce-pool generation; a change signals the sender reset its
+    /// outgoing pool, so the receiver discards the nonces it holds from it. Absent
+    /// on legacy peers (defaults to the all-zero "unknown" generation).
+    #[serde(default, with = "serde_fixed_array::bytes32")]
+    pub nonce_pool_generation: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +520,7 @@ mod tests {
                 request: MethodPolicy::default(),
                 respond: MethodPolicy::default(),
             }),
+            nonce_pool_generation: [13u8; 32],
         };
         let onboard = OnboardResponse {
             group: GroupPackage {

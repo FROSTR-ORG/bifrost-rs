@@ -27,6 +27,21 @@ impl Default for NoncePoolConfig {
     }
 }
 
+/// A random per-pool identity, minted fresh on every fresh [`NoncePool::new`] and
+/// preserved across serialize/restore. Peers track the generation they last saw
+/// from each peer; when it changes, the peer reset its outgoing pool, so any
+/// nonces held from it are dead and must be discarded. Lets the protocol
+/// self-heal from a signer restart (relaunch/reload) without persisting secrets.
+pub fn random_pool_generation() -> Bytes32 {
+    let mut generation = [0u8; 32];
+    OsRng.fill_bytes(&mut generation);
+    generation
+}
+
+/// The "unknown / legacy" generation: a peer advertising this (or a receiver
+/// that has not recorded one) is treated as not-yet-known, never as a reset.
+pub const UNKNOWN_POOL_GENERATION: Bytes32 = [0u8; 32];
+
 /// Purely-public nonce book-keeping. The FROST signing secret that seeds
 /// nonce generation is held separately in `DeviceSecrets::nonce_pool_secret`
 /// and passed into [`NoncePool::generate_for_peer`] at call time.
@@ -34,6 +49,8 @@ impl Default for NoncePoolConfig {
 pub struct NoncePool {
     our_idx: u16,
     config: NoncePoolConfig,
+    #[serde(default = "random_pool_generation")]
+    generation: Bytes32,
     outgoing_public: HashMap<u16, HashMap<Bytes32, DerivedPublicNonce>>,
     outgoing_secret: HashMap<u16, HashMap<Bytes32, frost::round1::SigningNonces>>,
     spent_outgoing: HashMap<u16, HashSet<Bytes32>>,
@@ -54,11 +71,28 @@ impl NoncePool {
         Self {
             our_idx,
             config,
+            generation: random_pool_generation(),
             outgoing_public: HashMap::new(),
             outgoing_secret: HashMap::new(),
             spent_outgoing: HashMap::new(),
             incoming: HashMap::new(),
             incoming_order: HashMap::new(),
+        }
+    }
+
+    /// This pool's generation id — advertised to peers so they can detect a reset.
+    pub fn generation(&self) -> Bytes32 {
+        self.generation
+    }
+
+    /// Discard every nonce received from `peer_idx` (its outgoing pool reset, so
+    /// the public commitments we hold are dead). Outgoing/spent are untouched.
+    pub fn clear_incoming(&mut self, peer_idx: u16) {
+        if let Some(map) = self.incoming.get_mut(&peer_idx) {
+            map.clear();
+        }
+        if let Some(order) = self.incoming_order.get_mut(&peer_idx) {
+            order.clear();
         }
     }
 
@@ -404,6 +438,76 @@ mod tests {
         let stats = pool.peer_stats(2);
         assert!(stats.incoming_available > 0);
         assert!(stats.outgoing_available > 0);
+    }
+
+    #[test]
+    fn clear_incoming_discards_received_nonces() {
+        let mut pool = NoncePool::new(1, NoncePoolConfig::default());
+        pool.init_peer(2);
+        pool.store_incoming(
+            2,
+            vec![
+                DerivedPublicNonce {
+                    binder_pn: [1u8; 33],
+                    hidden_pn: [2u8; 33],
+                    code: [10u8; 32],
+                },
+                DerivedPublicNonce {
+                    binder_pn: [3u8; 33],
+                    hidden_pn: [4u8; 33],
+                    code: [11u8; 32],
+                },
+            ],
+        );
+        assert_eq!(pool.peer_stats(2).incoming_available, 2);
+
+        pool.clear_incoming(2);
+
+        assert_eq!(pool.peer_stats(2).incoming_available, 0);
+        assert!(pool.consume_incoming(2).is_none());
+    }
+
+    #[test]
+    fn fresh_pools_get_distinct_stable_generations() {
+        let a = NoncePool::new(1, NoncePoolConfig::default());
+        let b = NoncePool::new(1, NoncePoolConfig::default());
+        assert_ne!(
+            a.generation(),
+            b.generation(),
+            "two fresh pools must mint distinct generations"
+        );
+        assert_eq!(a.generation(), a.generation(), "generation is stable");
+        assert_ne!(a.generation(), UNKNOWN_POOL_GENERATION);
+    }
+
+    #[test]
+    fn generation_survives_serialize_roundtrip() {
+        let pool = NoncePool::new(1, NoncePoolConfig::default());
+        let generation = pool.generation();
+        let encoded = serde_json::to_string(&pool).expect("encode");
+        let restored: NoncePool = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(
+            restored.generation(),
+            generation,
+            "restore must preserve the generation (no spurious reset)"
+        );
+    }
+
+    #[test]
+    fn legacy_pool_without_generation_defaults_to_fresh() {
+        // A pool serialized before the generation field existed deserializes with a
+        // freshly-minted generation (treated as a reset), never the all-zero unknown.
+        let legacy = serde_json::json!({
+            "our_idx": 1,
+            "config": NoncePoolConfig::default(),
+            "outgoing_public": {},
+            "outgoing_secret": {},
+            "spent_outgoing": {},
+            "incoming": {},
+            "incoming_order": {},
+        });
+        let restored: NoncePool = serde_json::from_value(legacy).expect("decode legacy");
+        assert_ne!(restored.generation(), UNKNOWN_POOL_GENERATION);
     }
 
     #[test]
