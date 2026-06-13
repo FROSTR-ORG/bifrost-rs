@@ -388,6 +388,15 @@ pub struct MethodPolicy {
 }
 
 impl Default for MethodPolicy {
+    // Permissive by default: every method is allowed for group members. This is
+    // a deliberate, settled product decision (2026-06-13), not an oversight.
+    // FROSTR's security boundary is the t-of-n threshold itself — peers are
+    // already vetted threshold participants admitted at onboarding — so per-peer
+    // method gating is an optional tightening, not the primary control. A
+    // restrictive default would block signing/onboarding out of the box and push
+    // operators toward disabling protections wholesale. Operators narrow this via
+    // manual per-peer overrides (see PeerPolicyOverride); see the "Default Peer
+    // Permissions" note in docs/PROTOCOL.md.
     fn default() -> Self {
         Self {
             echo: true,
