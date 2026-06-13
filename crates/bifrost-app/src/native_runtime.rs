@@ -207,31 +207,95 @@ fn preview_from_bootstrap_completion(
 /// into a secure, short, per-user runtime directory.
 pub const SUN_PATH_BUDGET: usize = 100;
 
-/// Resolve a secure, short, per-user runtime directory for control sockets.
+/// A secure runtime directory and whether the caller must still create it.
+///
+/// `Existing` dirs are OS-managed (`XDG_RUNTIME_DIR`, `/run/user/$UID`) and are
+/// used as-is; `HomeFallback` must be created `0o700` by the impure caller.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SecureRuntimeDir {
+    Existing(PathBuf),
+    HomeFallback(PathBuf),
+}
+
+/// Pure secure-runtime-dir precedence, factored out of [`secure_runtime_dir`] so
+/// the policy is testable without mutating process env or probing the real FS.
 ///
 /// Order: `XDG_RUNTIME_DIR` (systemd, 0o700 tmpfs) → `/run/user/$UID` → a
 /// `0o700` `~/.igloo-shell/run` fallback for hosts that have neither (macOS,
 /// non-systemd). Never `/tmp`: a world-writable socket directory is a
-/// deliberate non-goal (Bucket C C.4).
+/// deliberate non-goal (Bucket C C.4). `run_user_dir` is `Some` only when the
+/// caller has confirmed `/run/user/$UID` exists and is a directory.
+#[cfg(unix)]
+fn select_secure_runtime_dir(
+    xdg_runtime_dir: Option<&str>,
+    run_user_dir: Option<PathBuf>,
+    home: Option<&str>,
+) -> Option<SecureRuntimeDir> {
+    if let Some(dir) = xdg_runtime_dir.filter(|d| !d.is_empty()) {
+        return Some(SecureRuntimeDir::Existing(PathBuf::from(dir)));
+    }
+    if let Some(dir) = run_user_dir {
+        return Some(SecureRuntimeDir::Existing(dir));
+    }
+    let home = home.filter(|h| !h.is_empty())?;
+    Some(SecureRuntimeDir::HomeFallback(
+        PathBuf::from(home).join(".igloo-shell").join("run"),
+    ))
+}
+
+/// Resolve a secure, short, per-user runtime directory for control sockets.
+///
+/// Probes the live environment, defers the precedence decision to
+/// [`select_secure_runtime_dir`], then materializes the `~/.igloo-shell/run`
+/// fallback `0o700` when that branch is chosen.
 #[cfg(unix)]
 fn secure_runtime_dir() -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
-        && !dir.is_empty()
-    {
-        return Some(PathBuf::from(dir));
-    }
     let uid = unsafe { libc::getuid() };
     let run_user = PathBuf::from(format!("/run/user/{uid}"));
-    if run_user.is_dir() {
-        return Some(run_user);
+    let run_user_dir = run_user.is_dir().then_some(run_user);
+    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+    let home = std::env::var("HOME").ok();
+
+    match select_secure_runtime_dir(xdg.as_deref(), run_user_dir, home.as_deref())? {
+        SecureRuntimeDir::Existing(dir) => Some(dir),
+        SecureRuntimeDir::HomeFallback(dir) => {
+            fs::create_dir_all(&dir).ok()?;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+            Some(dir)
+        }
     }
-    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
-    let dir = PathBuf::from(home).join(".igloo-shell").join("run");
-    fs::create_dir_all(&dir).ok()?;
-    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-    Some(dir)
+}
+
+/// Per-profile control-socket file name, deterministic in `profile_id` so the
+/// daemon (bind) and clients (connect) derive the same path.
+#[cfg(unix)]
+fn socket_file_name(profile_id: &str) -> String {
+    let digest = sha2::Sha256::digest(profile_id.as_bytes());
+    let short = hex::encode(&digest[..6]);
+    format!("igloo-shell-{short}.sock")
+}
+
+/// Pure relocation core for [`shorten_unix_socket_path`]: given the already
+/// resolved secure dir (if any), pick the path to bind/connect. Returns the
+/// original path when it already fits, when no secure dir is available, or when
+/// even the relocated candidate would still exceed the budget — in every such
+/// case the caller surfaces the bind error rather than silently using an
+/// insecure location.
+#[cfg(unix)]
+fn relocate_over_budget(path: PathBuf, profile_id: &str, secure_dir: Option<PathBuf>) -> PathBuf {
+    if path.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
+        return path;
+    }
+    if let Some(dir) = secure_dir {
+        let candidate = dir.join(socket_file_name(profile_id));
+        if candidate.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
+            return candidate;
+        }
+    }
+    path
 }
 
 /// Relocate an over-long control-socket path into a secure short runtime dir,
@@ -243,20 +307,13 @@ pub fn shorten_unix_socket_path(raw_path: &str, profile_id: &str) -> PathBuf {
     let path = PathBuf::from(raw_path);
     #[cfg(unix)]
     {
-        if path.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
-            return path;
-        }
-        let digest = sha2::Sha256::digest(profile_id.as_bytes());
-        let short = hex::encode(&digest[..6]);
-        let file_name = format!("igloo-shell-{short}.sock");
-        if let Some(dir) = secure_runtime_dir() {
-            let candidate = dir.join(&file_name);
-            if candidate.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
-                return candidate;
-            }
-        }
+        relocate_over_budget(path, profile_id, secure_runtime_dir())
     }
-    path
+    #[cfg(not(unix))]
+    {
+        let _ = profile_id;
+        path
+    }
 }
 
 pub fn resolve_profile_runtime(
@@ -785,4 +842,173 @@ pub async fn apply_rotation_update_from_bfonboard_value(
         rotated_payload,
         passphrase,
     )
+}
+
+#[cfg(all(test, unix))]
+mod socket_path_tests {
+    use super::{
+        SUN_PATH_BUDGET, SecureRuntimeDir, relocate_over_budget, select_secure_runtime_dir,
+        shorten_unix_socket_path, socket_file_name,
+    };
+    use std::path::PathBuf;
+
+    fn over_budget_path() -> String {
+        // A control-socket path comfortably past the budget.
+        format!("/{}/control.sock", "x".repeat(SUN_PATH_BUDGET + 16))
+    }
+
+    #[test]
+    fn under_budget_path_passes_through_untouched() {
+        let raw = "/run/user/1000/igloo-shell.sock";
+        assert!(raw.len() < SUN_PATH_BUDGET);
+        // Even with a secure dir available, a fitting path is never relocated.
+        let got = relocate_over_budget(
+            PathBuf::from(raw),
+            "profile-a",
+            Some(PathBuf::from("/run/user/1000")),
+        );
+        assert_eq!(got, PathBuf::from(raw));
+    }
+
+    #[test]
+    fn over_budget_path_relocates_into_secure_dir() {
+        let dir = PathBuf::from("/run/user/1000");
+        let got = relocate_over_budget(
+            PathBuf::from(over_budget_path()),
+            "profile-a",
+            Some(dir.clone()),
+        );
+        assert_eq!(got, dir.join(socket_file_name("profile-a")));
+        assert!(got.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET);
+    }
+
+    #[test]
+    fn relocation_is_deterministic_per_profile() {
+        let dir = PathBuf::from("/run/user/1000");
+        let a1 = relocate_over_budget(
+            PathBuf::from(over_budget_path()),
+            "profile-a",
+            Some(dir.clone()),
+        );
+        let a2 = relocate_over_budget(
+            PathBuf::from(over_budget_path()),
+            "profile-a",
+            Some(dir.clone()),
+        );
+        let b = relocate_over_budget(
+            PathBuf::from(over_budget_path()),
+            "profile-b",
+            Some(dir.clone()),
+        );
+        assert_eq!(
+            a1, a2,
+            "same profile -> same socket path (bind/connect agree)"
+        );
+        assert_ne!(a1, b, "different profile -> different socket path");
+    }
+
+    #[test]
+    fn over_budget_path_without_secure_dir_returns_original() {
+        // No secure dir available -> keep the original so the caller surfaces the
+        // bind error instead of silently choosing an insecure location.
+        let raw = over_budget_path();
+        let got = relocate_over_budget(PathBuf::from(&raw), "profile-a", None);
+        assert_eq!(got, PathBuf::from(&raw));
+    }
+
+    #[test]
+    fn over_budget_path_with_unusable_secure_dir_returns_original() {
+        // A secure dir so long the relocated candidate still busts the budget.
+        let long_dir = PathBuf::from(format!("/{}", "d".repeat(SUN_PATH_BUDGET)));
+        let raw = over_budget_path();
+        let got = relocate_over_budget(PathBuf::from(&raw), "profile-a", Some(long_dir));
+        assert_eq!(got, PathBuf::from(&raw));
+    }
+
+    #[test]
+    fn socket_file_name_shape() {
+        let name = socket_file_name("profile-a");
+        assert!(name.starts_with("igloo-shell-"));
+        assert!(name.ends_with(".sock"));
+        // 12 hex chars (6 bytes of sha256) between prefix and suffix.
+        assert_eq!(name.len(), "igloo-shell-".len() + 12 + ".sock".len());
+    }
+
+    #[test]
+    fn xdg_runtime_dir_wins() {
+        let got = select_secure_runtime_dir(
+            Some("/run/user/1000"),
+            Some(PathBuf::from("/run/user/1000")),
+            Some("/home/op"),
+        );
+        assert_eq!(
+            got,
+            Some(SecureRuntimeDir::Existing(PathBuf::from("/run/user/1000")))
+        );
+    }
+
+    #[test]
+    fn empty_xdg_falls_through_to_run_user() {
+        let got = select_secure_runtime_dir(
+            Some(""),
+            Some(PathBuf::from("/run/user/1000")),
+            Some("/home/op"),
+        );
+        assert_eq!(
+            got,
+            Some(SecureRuntimeDir::Existing(PathBuf::from("/run/user/1000")))
+        );
+    }
+
+    #[test]
+    fn home_fallback_when_xdg_and_run_user_absent() {
+        // macOS / non-systemd: neither XDG_RUNTIME_DIR nor /run/user/$UID.
+        let got = select_secure_runtime_dir(None, None, Some("/home/op"));
+        assert_eq!(
+            got,
+            Some(SecureRuntimeDir::HomeFallback(PathBuf::from(
+                "/home/op/.igloo-shell/run"
+            )))
+        );
+    }
+
+    #[test]
+    fn empty_home_is_rejected() {
+        assert_eq!(select_secure_runtime_dir(None, None, Some("")), None);
+    }
+
+    #[test]
+    fn no_secure_dir_when_everything_absent() {
+        assert_eq!(select_secure_runtime_dir(None, None, None), None);
+    }
+
+    #[test]
+    fn never_resolves_into_tmp() {
+        // No branch of the precedence policy may yield a /tmp directory.
+        for choice in [
+            select_secure_runtime_dir(Some("/run/user/1000"), None, None),
+            select_secure_runtime_dir(None, Some(PathBuf::from("/run/user/1000")), None),
+            select_secure_runtime_dir(None, None, Some("/home/op")),
+        ] {
+            let dir = match choice {
+                Some(SecureRuntimeDir::Existing(d)) | Some(SecureRuntimeDir::HomeFallback(d)) => d,
+                None => continue,
+            };
+            assert!(
+                !dir.starts_with("/tmp"),
+                "secure runtime dir must never be under /tmp: {dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shorten_passes_through_fitting_path() {
+        // End-to-end through the public API: a short path is returned verbatim
+        // regardless of the live environment.
+        let raw = "/run/user/1000/igloo-shell.sock";
+        assert_eq!(
+            shorten_unix_socket_path(raw, "profile-a"),
+            PathBuf::from(raw)
+        );
+    }
 }
