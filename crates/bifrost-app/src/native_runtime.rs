@@ -202,15 +202,58 @@ fn preview_from_bootstrap_completion(
     })
 }
 
-fn shorten_unix_socket_path(raw_path: &str, profile_id: &str) -> PathBuf {
+/// Maximum usable `sun_path` length, kept well under the 108-byte Linux /
+/// 104-byte BSD limit. Control-socket paths at or above this are relocated
+/// into a secure, short, per-user runtime directory.
+pub const SUN_PATH_BUDGET: usize = 100;
+
+/// Resolve a secure, short, per-user runtime directory for control sockets.
+///
+/// Order: `XDG_RUNTIME_DIR` (systemd, 0o700 tmpfs) → `/run/user/$UID` → a
+/// `0o700` `~/.igloo-shell/run` fallback for hosts that have neither (macOS,
+/// non-systemd). Never `/tmp`: a world-writable socket directory is a
+/// deliberate non-goal (Bucket C C.4).
+#[cfg(unix)]
+fn secure_runtime_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir));
+    }
+    let uid = unsafe { libc::getuid() };
+    let run_user = PathBuf::from(format!("/run/user/{uid}"));
+    if run_user.is_dir() {
+        return Some(run_user);
+    }
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
+    let dir = PathBuf::from(home).join(".igloo-shell").join("run");
+    fs::create_dir_all(&dir).ok()?;
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    Some(dir)
+}
+
+/// Relocate an over-long control-socket path into a secure short runtime dir,
+/// keyed deterministically by `profile_id` so the daemon (bind) and clients
+/// (connect) derive the same path. Returns the original path when it already
+/// fits, or when no secure short dir is available (the caller then surfaces the
+/// bind error rather than silently using an insecure location).
+pub fn shorten_unix_socket_path(raw_path: &str, profile_id: &str) -> PathBuf {
     let path = PathBuf::from(raw_path);
     #[cfg(unix)]
     {
-        let raw_len = path.as_os_str().to_string_lossy().len();
-        if raw_len >= 96 {
-            let digest = sha2::Sha256::digest(profile_id.as_bytes());
-            let short = hex::encode(&digest[..6]);
-            return std::env::temp_dir().join(format!("igloo-shell-{short}.sock"));
+        if path.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
+            return path;
+        }
+        let digest = sha2::Sha256::digest(profile_id.as_bytes());
+        let short = hex::encode(&digest[..6]);
+        let file_name = format!("igloo-shell-{short}.sock");
+        if let Some(dir) = secure_runtime_dir() {
+            let candidate = dir.join(&file_name);
+            if candidate.as_os_str().to_string_lossy().len() < SUN_PATH_BUDGET {
+                return candidate;
+            }
         }
     }
     path
