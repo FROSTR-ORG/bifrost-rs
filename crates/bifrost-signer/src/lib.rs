@@ -33,7 +33,7 @@ pub use error::{Result, SignerError};
 use event_io::{build_signed_event, event_content, event_kind, event_pubkey_xonly};
 use util::{
     decode_32, decode_member_index, decode_member_pubkey, decode_pubkey32, is_valid_pubkey32_hex,
-    now_unix_secs, random_request_id, shuffle_strings,
+    now_unix_millis, now_unix_secs, random_request_id, shuffle_strings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -162,10 +162,25 @@ pub struct DeviceState {
     pub request_seq: u64,
     pub last_active: u64,
     pub version: u32,
+    /// Runtime-only telemetry (never persisted — excluded from
+    /// [`DeviceStatePersisted`], like the ECDH cache). Reset on every restore;
+    /// rebuilds from live traffic.
+    ///
+    /// Millisecond send time of each in-flight PING op, keyed by request id, so a
+    /// later response can compute round-trip latency. Removed when the op
+    /// completes / expires / fails.
+    pub op_started_ms: HashMap<String, u64>,
+    /// Bounded ring of recent PING round-trip latencies (ms) per peer pubkey.
+    pub rtt_samples_ms: HashMap<String, VecDeque<u64>>,
+    /// Bounded ring of `(ts, held_count)` nonce-inventory samples per peer pubkey.
+    pub nonce_history: HashMap<String, VecDeque<(u64, u32)>>,
 }
 
 impl DeviceState {
     pub const VERSION: u32 = 7;
+    /// Bound on per-peer telemetry rings (RTT samples, nonce-history points).
+    const RTT_SAMPLE_WINDOW: usize = 16;
+    const NONCE_HISTORY_WINDOW: usize = 32;
 
     pub fn new(group_member_idx: u16, share_seckey: [u8; 32]) -> Self {
         let mut nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
@@ -184,6 +199,9 @@ impl DeviceState {
             request_seq: 1,
             last_active: now_unix_secs(),
             version: Self::VERSION,
+            op_started_ms: HashMap::new(),
+            rtt_samples_ms: HashMap::new(),
+            nonce_history: HashMap::new(),
         }
     }
 
@@ -196,6 +214,9 @@ impl DeviceState {
         self.nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
         self.pending_operations.clear();
         self.remote_nonce_inventory_observations.clear();
+        self.op_started_ms.clear();
+        self.rtt_samples_ms.clear();
+        self.nonce_history.clear();
         self.last_active = now_unix_secs();
     }
 
@@ -217,7 +238,57 @@ impl DeviceState {
             request_seq: persisted.request_seq,
             last_active: persisted.last_active,
             version: persisted.version,
+            op_started_ms: HashMap::new(),
+            rtt_samples_ms: HashMap::new(),
+            nonce_history: HashMap::new(),
         }
+    }
+
+    /// Record a PING round-trip latency sample for a peer, bounded to the most
+    /// recent [`RTT_SAMPLE_WINDOW`](Self::RTT_SAMPLE_WINDOW) samples.
+    fn record_rtt_sample(&mut self, peer: &str, rtt_ms: u64) {
+        let ring = self.rtt_samples_ms.entry(peer.to_string()).or_default();
+        ring.push_back(rtt_ms);
+        while ring.len() > Self::RTT_SAMPLE_WINDOW {
+            ring.pop_front();
+        }
+    }
+
+    /// Append a nonce-held observation for a peer, bounded to the most recent
+    /// [`NONCE_HISTORY_WINDOW`](Self::NONCE_HISTORY_WINDOW) points.
+    fn record_nonce_history(&mut self, peer: &str, ts: u64, held: u32) {
+        let ring = self.nonce_history.entry(peer.to_string()).or_default();
+        ring.push_back((ts, held));
+        while ring.len() > Self::NONCE_HISTORY_WINDOW {
+            ring.pop_front();
+        }
+    }
+
+    /// `(last, rolling_mean)` PING latency in ms for a peer, or `(None, None)`
+    /// when no samples have been collected yet.
+    fn latency_summary(&self, peer: &str) -> (Option<u64>, Option<u64>) {
+        match self.rtt_samples_ms.get(peer) {
+            Some(ring) if !ring.is_empty() => {
+                let sum: u64 = ring.iter().sum();
+                (ring.back().copied(), Some(sum / ring.len() as u64))
+            }
+            _ => (None, None),
+        }
+    }
+
+    /// The peer's bounded nonce-held history, oldest first.
+    fn nonce_history_points(&self, peer: &str) -> Vec<NonceHistoryPoint> {
+        self.nonce_history
+            .get(peer)
+            .map(|ring| {
+                ring.iter()
+                    .map(|(ts, held)| NonceHistoryPoint {
+                        ts: *ts,
+                        held: *held,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -399,6 +470,15 @@ pub struct RuntimeMetadata {
     pub peers: Vec<String>,
 }
 
+/// A single sample in a peer's nonce-held history, for the dashboard sparkline.
+/// `held` is the count of our outgoing nonce codes the peer reported holding at
+/// `ts` (a PING-response observation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NonceHistoryPoint {
+    pub ts: u64,
+    pub held: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerStatus {
     pub idx: u16,
@@ -410,7 +490,21 @@ pub struct PeerStatus {
     pub outgoing_available: usize,
     pub outgoing_spent: usize,
     pub can_sign: bool,
+    /// Capable of ECDH right now: online and the effective policy permits an
+    /// outbound ECDH request to this peer.
+    pub can_ecdh: bool,
+    /// Capable of PING right now: online and the effective policy permits an
+    /// outbound ping to this peer.
+    pub can_ping: bool,
     pub should_send_nonces: bool,
+    /// Most recent PING round-trip latency to this peer, in milliseconds.
+    /// `None` until at least one ping has completed.
+    pub last_response_latency_ms: Option<u64>,
+    /// Rolling-window mean of recent PING round-trip latencies, in milliseconds.
+    pub avg_latency_ms: Option<u64>,
+    /// Bounded recent history of the peer's held nonce count (for the sparkline),
+    /// oldest first.
+    pub nonce_history: Vec<NonceHistoryPoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -963,6 +1057,11 @@ impl SigningDevice {
                 let online = last_seen
                     .map(|seen| now.saturating_sub(seen) <= Self::PEER_ONLINE_GRACE_SECS)
                     .unwrap_or(false);
+                // Capability badges mirror the readiness pattern (online + the
+                // effective outbound policy for the method); `can_sign` stays
+                // nonce-availability based, as before.
+                let policy = self.effective_policy_for_peer(peer);
+                let (last_response_latency_ms, avg_latency_ms) = self.state.latency_summary(peer);
                 Some(PeerStatus {
                     idx,
                     pubkey: peer.clone(),
@@ -973,7 +1072,12 @@ impl SigningDevice {
                     outgoing_available: stats.outgoing_available,
                     outgoing_spent: stats.outgoing_spent,
                     can_sign: stats.can_sign,
+                    can_ecdh: online && policy.request.ecdh,
+                    can_ping: online && policy.request.ping,
                     should_send_nonces: self.peer_needs_nonce_refill(peer, idx),
+                    last_response_latency_ms,
+                    avg_latency_ms,
+                    nonce_history: self.state.nonce_history_points(peer),
                 })
             })
             .collect::<Vec<_>>();
@@ -1536,6 +1640,11 @@ impl SigningDevice {
                 context: PendingOpContext::PingRequest,
             },
         );
+        // Telemetry: stamp the ms send time so the ping response can compute
+        // round-trip latency. Cleared when the op completes / expires / fails.
+        self.state
+            .op_started_ms
+            .insert(request_id.clone(), now_unix_millis());
 
         let envelope = BridgeEnvelope {
             request_id,
@@ -1683,6 +1792,9 @@ impl SigningDevice {
                 true
             }
         });
+        for failure in &stale {
+            self.state.op_started_ms.remove(&failure.request_id);
+        }
         stale
     }
 
@@ -1818,6 +1930,7 @@ impl SigningDevice {
         failed_peer: Option<String>,
     ) {
         if let Some(op) = self.state.pending_operations.remove(request_id) {
+            self.state.op_started_ms.remove(request_id);
             self.failures.push_back(OperationFailure {
                 request_id: request_id.to_string(),
                 op_type: op.op_type,
@@ -2210,6 +2323,12 @@ impl SigningDevice {
                 if let Some(profile) = ping.policy_profile {
                     self.store_remote_scoped_policy(sender, profile)?;
                 }
+                // Telemetry: record this ping's round-trip latency (ms). An op that
+                // began before a restore has no start stamp, so its sample is skipped.
+                if let Some(started_ms) = self.state.op_started_ms.get(&request_id).copied() {
+                    self.state
+                        .record_rtt_sample(sender, now_unix_millis().saturating_sub(started_ms));
+                }
                 completion = Some(CompletedOperation::Ping {
                     request_id: request_id.clone(),
                     peer: sender.to_string(),
@@ -2351,6 +2470,7 @@ impl SigningDevice {
 
         if should_complete {
             self.state.pending_operations.remove(&request_id);
+            self.state.op_started_ms.remove(&request_id);
             if let Some(done) = completion {
                 self.completions.push_back(done);
             }
@@ -2530,6 +2650,9 @@ impl SigningDevice {
             .collect::<Vec<_>>();
         normalized_codes.sort_unstable();
         normalized_codes.dedup();
+        // Telemetry: sample the held-nonce count for the dashboard sparkline.
+        self.state
+            .record_nonce_history(peer, updated_at, normalized_codes.len() as u32);
         self.state.remote_nonce_inventory_observations.insert(
             peer.to_string(),
             PeerNonceInventoryObservation {
@@ -3058,6 +3181,91 @@ mod tests {
         assert!(status.known);
         assert!(status.online);
         assert!(status.last_seen.is_some());
+        // Capability badges: online + permissive default policy → both capable.
+        assert!(status.can_ping);
+        assert!(status.can_ecdh);
+        // No telemetry recorded yet.
+        assert!(status.last_response_latency_ms.is_none());
+        assert!(status.avg_latency_ms.is_none());
+        assert!(status.nonce_history.is_empty());
+    }
+
+    #[test]
+    fn peer_status_capability_badges_are_false_when_offline() {
+        // A fixture peer with no recorded `last_seen` is offline, so its ECDH/PING
+        // capability badges are false even though the default policy permits them.
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer status");
+
+        assert!(!status.online);
+        assert!(!status.can_ping);
+        assert!(!status.can_ecdh);
+    }
+
+    #[test]
+    fn peer_status_projects_recorded_latency_and_nonce_history() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), now_unix_secs());
+
+        // Two RTT samples → last is the newest, avg is the rolling mean.
+        fixture.signer.state.record_rtt_sample(&peer, 100);
+        fixture.signer.state.record_rtt_sample(&peer, 300);
+        fixture.signer.state.record_nonce_history(&peer, 1_700, 5);
+        fixture.signer.state.record_nonce_history(&peer, 1_701, 7);
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer status");
+
+        assert_eq!(status.last_response_latency_ms, Some(300));
+        assert_eq!(status.avg_latency_ms, Some(200));
+        assert_eq!(status.nonce_history.len(), 2);
+        assert_eq!(status.nonce_history[0].ts, 1_700);
+        assert_eq!(status.nonce_history[0].held, 5);
+        assert_eq!(status.nonce_history[1].held, 7);
+    }
+
+    #[test]
+    fn telemetry_rings_are_bounded() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+
+        for i in 0..(DeviceState::RTT_SAMPLE_WINDOW as u64 + 20) {
+            fixture.signer.state.record_rtt_sample(&peer, i);
+        }
+        for i in 0..(DeviceState::NONCE_HISTORY_WINDOW as u64 + 20) {
+            fixture
+                .signer
+                .state
+                .record_nonce_history(&peer, i, i as u32);
+        }
+
+        assert_eq!(
+            fixture.signer.state.rtt_samples_ms[&peer].len(),
+            DeviceState::RTT_SAMPLE_WINDOW
+        );
+        assert_eq!(
+            fixture.signer.state.nonce_history[&peer].len(),
+            DeviceState::NONCE_HISTORY_WINDOW
+        );
+        // The oldest samples were evicted: newest RTT is the last pushed value.
+        let (last, _) = fixture.signer.state.latency_summary(&peer);
+        assert_eq!(last, Some(DeviceState::RTT_SAMPLE_WINDOW as u64 + 19));
     }
 
     #[test]
