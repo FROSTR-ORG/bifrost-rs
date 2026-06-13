@@ -249,10 +249,13 @@ fn hkdf_expand_sha256(prk: &[u8], info: &[u8], len: usize) -> Result<Vec<u8>, Ci
     Ok(okm)
 }
 
+/// Derived NIP-44 message keys: (ChaCha20 key, ChaCha20 nonce, HMAC key).
+type MessageKeys = ([u8; 32], [u8; 12], [u8; 32]);
+
 fn get_message_keys(
     conversation_key: &[u8; 32],
     nonce32: &[u8; 32],
-) -> Result<([u8; 32], [u8; 12], [u8; 32]), CipherError> {
+) -> Result<MessageKeys, CipherError> {
     let keys = hkdf_expand_sha256(conversation_key, nonce32, 76)?;
     let mut chacha_key = [0u8; 32];
     let mut chacha_nonce = [0u8; 12];

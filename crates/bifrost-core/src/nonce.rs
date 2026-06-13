@@ -344,7 +344,7 @@ impl NoncePool {
             return Vec::new();
         };
         let mut nonces = map.values().cloned().collect::<Vec<_>>();
-        nonces.sort_by(|a, b| a.code.cmp(&b.code));
+        nonces.sort_by_key(|nonce| nonce.code);
         nonces
     }
 

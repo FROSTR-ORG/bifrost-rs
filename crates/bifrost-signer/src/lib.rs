@@ -1279,7 +1279,25 @@ impl SigningDevice {
                 }
             }
         } else {
-            self.handle_inbound_request(envelope, sender)?
+            // Classify the op type from the request payload BEFORE handling, so a
+            // handler error (e.g. a sign/ecdh nonce miss) surfaces a correctly-typed
+            // failure. Propagating `?` here would let the router blind-label it as a
+            // ping (it can't decrypt the envelope to know better).
+            let op_type = inbound_op_type(&envelope.payload);
+            let request_id = envelope.request_id.clone();
+            match self.handle_inbound_request(envelope, sender.clone()) {
+                Ok(outbound) => outbound,
+                Err(err) => {
+                    self.failures.push_back(OperationFailure {
+                        request_id,
+                        op_type,
+                        code: OperationFailureCode::PeerRejected,
+                        message: err.to_string(),
+                        failed_peer: Some(sender),
+                    });
+                    Vec::new()
+                }
+            }
         };
 
         self.state.last_active = now;
@@ -2006,7 +2024,7 @@ impl SigningDevice {
                 );
                 let served_request_id = response.request_id.clone();
                 let served_peer = sender.clone();
-                let outbound = self.encrypt_for_peers(&[sender.clone()], &response)?;
+                let outbound = self.encrypt_for_peers(std::slice::from_ref(&sender), &response)?;
                 self.note_onboarding_status(
                     &sender,
                     OnboardingStatusStage::HandshakeCompleted,
@@ -2647,6 +2665,22 @@ impl SigningDevice {
         let id = random_request_id();
         self.state.request_seq = self.state.request_seq.saturating_add(1);
         id
+    }
+}
+
+/// Map an inbound bridge payload to the operation type it belongs to, so a
+/// failure handling it is reported under the correct op type rather than a
+/// generic ping. Responses are mapped to their request family.
+fn inbound_op_type(payload: &BridgePayload) -> PendingOpType {
+    match payload {
+        BridgePayload::SignRequest(_) | BridgePayload::SignResponse(_) => PendingOpType::Sign,
+        BridgePayload::EcdhRequest(_) | BridgePayload::EcdhResponse(_) => PendingOpType::Ecdh,
+        BridgePayload::OnboardRequest(_) | BridgePayload::OnboardResponse(_) => {
+            PendingOpType::Onboard
+        }
+        BridgePayload::PingRequest(_)
+        | BridgePayload::PingResponse(_)
+        | BridgePayload::Error(_) => PendingOpType::Ping,
     }
 }
 
@@ -3517,6 +3551,52 @@ mod tests {
             .handle_inbound_request(response, sender)
             .expect_err("orphan response must fail");
         assert!(matches!(err, SignerError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn inbound_request_failure_reports_true_op_type_not_ping() {
+        // Regression: a failed inbound request must surface under its real op
+        // type. Previously process_event propagated the error to the router,
+        // which blind-labeled every inbound failure as a ping. Drive a request
+        // the local signer rejects (onboard, unsupported version) end-to-end
+        // through process_event and assert the recorded failure is onboard-typed.
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer_pubkey, _) = first_peer(&fixture);
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer_pubkey);
+        let peer = build_peer_signer(&fixture.group, &peer_share);
+
+        let envelope = BridgeEnvelope {
+            request_id: "req-onboard-bad-version".to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::OnboardRequest(OnboardRequestWire {
+                version: 2,
+                nonces: vec![DerivedPublicNonceWire {
+                    binder_pn: hex::encode([4u8; 33]),
+                    hidden_pn: hex::encode([5u8; 33]),
+                    code: hex::encode([6u8; 32]),
+                }],
+            }),
+        };
+        let event = peer
+            .encrypt_for_peer(fixture.signer.local_pubkey32(), &envelope)
+            .expect("encrypt onboard request to local");
+
+        let effects = fixture
+            .signer
+            .apply(SignerInput::ProcessEvent { event })
+            .expect("process_event records the failure instead of erroring out");
+
+        assert_eq!(
+            effects.failures.len(),
+            1,
+            "expected exactly one typed failure"
+        );
+        assert!(
+            matches!(effects.failures[0].op_type, PendingOpType::Onboard),
+            "inbound onboard failure must be reported as onboard, not ping; got {:?}",
+            effects.failures[0].op_type
+        );
+        assert!(effects.outbound.is_empty());
     }
 
     #[test]
