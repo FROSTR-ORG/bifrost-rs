@@ -151,6 +151,18 @@ impl DaemonClient {
             .await
     }
 
+    pub async fn resolve_approval(
+        &self,
+        request_id: String,
+        approved: bool,
+    ) -> Result<UpdatedPayload> {
+        self.request_ok_typed(ControlCommand::ResolveApproval {
+            request_id,
+            approved,
+        })
+        .await
+    }
+
     pub async fn update_config(&self, config_patch_json: String) -> Result<UpdatedPayload> {
         self.request_ok_typed(ControlCommand::UpdateConfig { config_patch_json })
             .await

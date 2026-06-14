@@ -69,6 +69,14 @@ pub enum ControlCommand {
         policy_override_json: String,
     },
     ClearPeerPolicyOverrides,
+    ResolveApproval {
+        // The control request is `#[serde(flatten)]`ed onto a wrapper that
+        // already has its own `request_id`; rename the wire key so the two don't
+        // collide (the Rust field stays `request_id` for the bridge call).
+        #[serde(rename = "approval_request_id")]
+        request_id: String,
+        approved: bool,
+    },
     Ping {
         peer: String,
         timeout_secs: Option<u64>,
@@ -131,6 +139,38 @@ mod tests {
         assert_eq!(decoded.request_id, "req-roundtrip");
         assert_eq!(decoded.token, token_with_byte(0x42));
         assert!(matches!(decoded.command, ControlCommand::Status));
+    }
+
+    #[test]
+    fn resolve_approval_wire_round_trip_keeps_both_request_ids() {
+        // ResolveApproval carries its own request_id; the wrapper flattens the
+        // command, so the wire key is renamed (approval_request_id) to avoid
+        // colliding with the wrapper's request_id. Guard that collision.
+        let request = ControlRequest {
+            request_id: "wrapper-id".to_string(),
+            token: token_with_byte(0x11),
+            command: ControlCommand::ResolveApproval {
+                request_id: "parked-id".to_string(),
+                approved: true,
+            },
+        };
+        let bytes = request.encode_wire().expect("encode wire");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("parse json");
+        assert_eq!(value["request_id"], "wrapper-id");
+        assert_eq!(value["approval_request_id"], "parked-id");
+
+        let decoded = ControlRequest::decode_wire(&bytes).expect("decode wire");
+        assert_eq!(decoded.request_id, "wrapper-id");
+        match decoded.command {
+            ControlCommand::ResolveApproval {
+                request_id,
+                approved,
+            } => {
+                assert_eq!(request_id, "parked-id");
+                assert!(approved);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]

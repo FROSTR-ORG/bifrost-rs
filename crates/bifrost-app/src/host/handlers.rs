@@ -342,6 +342,7 @@ pub(crate) async fn execute_control_payload(
         command @ (ControlCommand::Status
         | ControlCommand::SetPolicyOverride { .. }
         | ControlCommand::ClearPeerPolicyOverrides
+        | ControlCommand::ResolveApproval { .. }
         | ControlCommand::ReadConfig
         | ControlCommand::UpdateConfig { .. }
         | ControlCommand::WipeState
@@ -698,6 +699,28 @@ mod tests {
         assert_eq!(updated.0, "req-clear-overrides");
         assert_eq!(
             updated.1.into_value(),
+            serde_json::json!({ "updated": true })
+        );
+
+        // Resolving an unknown approval id is a no-op success (the signer drops it).
+        let resolved = execute_control_payload(
+            &fixture.bridge,
+            &fixture.config,
+            ControlRequest {
+                request_id: "req-resolve-approval".to_string(),
+                token: bifrost_core::secret::DaemonToken::from_hex(&hex::encode([0xAAu8; 32]))
+                    .expect("test token hex"),
+                command: ControlCommand::ResolveApproval {
+                    request_id: "no-such-approval".to_string(),
+                    approved: true,
+                },
+            },
+        )
+        .await
+        .expect("resolve approval");
+        assert_eq!(resolved.0, "req-resolve-approval");
+        assert_eq!(
+            resolved.1.into_value(),
             serde_json::json!({ "updated": true })
         );
 

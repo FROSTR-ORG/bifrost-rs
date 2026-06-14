@@ -43,6 +43,19 @@ pub(super) async fn execute_admin_command(
                 false,
             ))
         }
+        ControlCommand::ResolveApproval {
+            request_id,
+            approved,
+        } => {
+            bridge
+                .resolve_approval(request_id, approved)
+                .await
+                .map_err(|e| anyhow!(e.to_string()))?;
+            Ok((
+                ControlResultPayload::Updated(UpdatedPayload { updated: true }),
+                false,
+            ))
+        }
         ControlCommand::ReadConfig => {
             let config = bridge
                 .read_config()
