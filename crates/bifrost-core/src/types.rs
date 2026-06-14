@@ -345,6 +345,12 @@ pub enum PolicyOverrideValue {
     Unset,
     Allow,
     Deny,
+    /// Defer the decision to the operator: inbound requests for this
+    /// peer+method are parked in the runtime approval queue until the operator
+    /// resolves them. Capability-allowed for readiness purposes (see
+    /// `apply_override_value` in `bifrost-signer`); only the inbound respond
+    /// path treats it specially.
+    Ask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

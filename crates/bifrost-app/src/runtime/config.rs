@@ -46,6 +46,8 @@ pub struct AppOptions {
     pub ping_timeout_secs: u64,
     #[serde(default = "default_onboard_timeout")]
     pub onboard_timeout_secs: u64,
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout_secs: u64,
     #[serde(default = "default_request_ttl")]
     pub request_ttl_secs: u64,
     #[serde(default = "default_max_future_skew_secs")]
@@ -118,6 +120,7 @@ impl Default for AppOptions {
             ecdh_timeout_secs: default_ecdh_timeout(),
             ping_timeout_secs: default_ping_timeout(),
             onboard_timeout_secs: default_onboard_timeout(),
+            approval_timeout_secs: default_approval_timeout(),
             request_ttl_secs: default_request_ttl(),
             max_future_skew_secs: default_max_future_skew_secs(),
             request_cache_limit: default_request_cache_limit(),
@@ -152,6 +155,9 @@ fn default_ping_timeout() -> u64 {
 }
 fn default_onboard_timeout() -> u64 {
     30
+}
+fn default_approval_timeout() -> u64 {
+    300
 }
 fn default_request_ttl() -> u64 {
     300

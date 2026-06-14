@@ -165,6 +165,7 @@ fn map_policy_value(value: frostr_utils::BfPolicyOverrideValue) -> PolicyOverrid
         frostr_utils::BfPolicyOverrideValue::Unset => PolicyOverrideValue::Unset,
         frostr_utils::BfPolicyOverrideValue::Allow => PolicyOverrideValue::Allow,
         frostr_utils::BfPolicyOverrideValue::Deny => PolicyOverrideValue::Deny,
+        frostr_utils::BfPolicyOverrideValue::Ask => PolicyOverrideValue::Ask,
     }
 }
 

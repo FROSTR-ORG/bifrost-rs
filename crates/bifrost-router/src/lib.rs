@@ -74,10 +74,25 @@ impl Default for BridgeConfig {
 
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
-    Sign { message: [u8; 32] },
-    Ecdh { pubkey: [u8; 32] },
-    Ping { peer: String },
-    Onboard { peer: String },
+    Sign {
+        message: [u8; 32],
+    },
+    Ecdh {
+        pubkey: [u8; 32],
+    },
+    Ping {
+        peer: String,
+    },
+    Onboard {
+        peer: String,
+    },
+    /// Resolve a parked approval (the `Ask` policy disposition). Unlike the
+    /// others this does not start a tracked operation — it replays or rejects a
+    /// previously-received inbound request and emits its response.
+    ResolveApproval {
+        request_id: String,
+        approved: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -183,12 +198,31 @@ impl BridgeCore {
         &mut self,
         cmd: BridgeCommand,
     ) -> std::result::Result<String, BridgeCoreError> {
+        // Approval resolution starts no tracked operation and has no request id to
+        // return; replay/reject and dispatch its response, then report a sentinel.
+        if let BridgeCommand::ResolveApproval {
+            request_id,
+            approved,
+        } = cmd
+        {
+            let effects = self
+                .signer
+                .apply(SignerInput::ResolveApproval {
+                    request_id,
+                    approved,
+                })
+                .map_err(|err| BridgeCoreError::Internal(err.to_string()))?;
+            self.dispatch_effects(effects, None);
+            return Ok("resolve-approval".to_string());
+        }
+
         let op_type = pending_type_for_command(&cmd);
         let input = match cmd {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
             BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
+            BridgeCommand::ResolveApproval { .. } => unreachable!("handled above"),
         };
 
         match self.signer.apply(input) {
@@ -431,12 +465,36 @@ impl BridgeCore {
     }
 
     fn process_command(&mut self, cmd: BridgeCommand) {
+        // Approval resolution is not a tracked operation: replay/reject a parked
+        // inbound request and dispatch its response through the normal pipeline.
+        if let BridgeCommand::ResolveApproval {
+            request_id,
+            approved,
+        } = cmd
+        {
+            match self.signer.apply(SignerInput::ResolveApproval {
+                request_id,
+                approved,
+            }) {
+                Ok(effects) => self.dispatch_effects(effects, None),
+                Err(err) => self.failures.push_back(OperationFailure {
+                    request_id: "resolve-approval".to_string(),
+                    op_type: PendingOpType::Sign,
+                    code: OperationFailureCode::PeerRejected,
+                    message: err.to_string(),
+                    failed_peer: None,
+                }),
+            }
+            return;
+        }
+
         let op_type = pending_type_for_command(&cmd);
         let input = match cmd {
             BridgeCommand::Sign { message } => SignerInput::BeginSign { message },
             BridgeCommand::Ecdh { pubkey } => SignerInput::BeginEcdh { pubkey },
             BridgeCommand::Ping { peer } => SignerInput::BeginPing { peer },
             BridgeCommand::Onboard { peer } => SignerInput::BeginOnboard { peer },
+            BridgeCommand::ResolveApproval { .. } => unreachable!("handled above"),
         };
 
         match self.signer.apply(input) {
@@ -636,6 +694,9 @@ fn pending_type_for_command(command: &BridgeCommand) -> PendingOpType {
         BridgeCommand::Ecdh { .. } => PendingOpType::Ecdh,
         BridgeCommand::Ping { .. } => PendingOpType::Ping,
         BridgeCommand::Onboard { .. } => PendingOpType::Onboard,
+        // Not a tracked operation — callers special-case it before this is
+        // reached. Labelled generically only to keep the mapping total.
+        BridgeCommand::ResolveApproval { .. } => PendingOpType::Sign,
     }
 }
 

@@ -143,6 +143,11 @@ enum BridgeCommand {
     ClearPolicyOverrides {
         reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
     },
+    ResolveApproval {
+        request_id: String,
+        approved: bool,
+        reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
+    },
     WipeState {
         reply: oneshot::Sender<std::result::Result<(), BridgeError>>,
     },
@@ -321,6 +326,16 @@ impl Bridge {
                             BridgeCommand::ClearPolicyOverrides { reply } => {
                                 core.clear_policy_overrides();
                                 let _ = reply.send(Ok(()));
+                            }
+                            BridgeCommand::ResolveApproval { request_id, approved, reply } => {
+                                // Replay/reject a parked approval; outbound (the deferred
+                                // response) is dispatched into the core queue and drained
+                                // by the loop's outbound pump like any other command.
+                                let result = core
+                                    .submit_command(RouterCommand::ResolveApproval { request_id, approved })
+                                    .map(|_| ())
+                                    .map_err(|e| BridgeError::Internal(e.to_string()));
+                                let _ = reply.send(result);
                             }
                             BridgeCommand::WipeState { reply } => {
                                 core.wipe_state();
@@ -590,6 +605,23 @@ impl Bridge {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(BridgeCommand::ClearPolicyOverrides { reply: tx })
+            .await
+            .map_err(|_| BridgeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| BridgeError::CommandChannelClosed)?
+    }
+
+    pub async fn resolve_approval(
+        &self,
+        request_id: String,
+        approved: bool,
+    ) -> std::result::Result<(), BridgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::ResolveApproval {
+                request_id,
+                approved,
+                reply: tx,
+            })
             .await
             .map_err(|_| BridgeError::CommandChannelClosed)?;
         rx.await.map_err(|_| BridgeError::CommandChannelClosed)?

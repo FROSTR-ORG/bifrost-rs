@@ -174,6 +174,11 @@ pub struct DeviceState {
     pub rtt_samples_ms: HashMap<String, VecDeque<u64>>,
     /// Bounded ring of `(ts, held_count)` nonce-inventory samples per peer pubkey.
     pub nonce_history: HashMap<String, VecDeque<(u64, u32)>>,
+    /// Runtime-only queue of inbound requests parked awaiting an operator
+    /// decision (the `Ask` policy disposition). Keyed by request id. Never
+    /// persisted — on restore the queue starts empty and parked peers re-send
+    /// (or their own op times out). Resolved via [`SignerInput::ResolveApproval`].
+    pub pending_approvals: HashMap<String, PendingApproval>,
 }
 
 impl DeviceState {
@@ -202,6 +207,7 @@ impl DeviceState {
             op_started_ms: HashMap::new(),
             rtt_samples_ms: HashMap::new(),
             nonce_history: HashMap::new(),
+            pending_approvals: HashMap::new(),
         }
     }
 
@@ -217,6 +223,7 @@ impl DeviceState {
         self.op_started_ms.clear();
         self.rtt_samples_ms.clear();
         self.nonce_history.clear();
+        self.pending_approvals.clear();
         self.last_active = now_unix_secs();
     }
 
@@ -241,6 +248,7 @@ impl DeviceState {
             op_started_ms: HashMap::new(),
             rtt_samples_ms: HashMap::new(),
             nonce_history: HashMap::new(),
+            pending_approvals: HashMap::new(),
         }
     }
 
@@ -399,12 +407,23 @@ pub fn finalize_onboarding_bootstrap_seed(
     Ok(state)
 }
 
+/// Default approval-queue retention: long enough for an operator to notice and
+/// decide, well beyond the peer-response timeouts.
+fn default_approval_timeout_secs() -> u64 {
+    300
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceConfig {
     pub sign_timeout_secs: u64,
     pub ecdh_timeout_secs: u64,
     pub ping_timeout_secs: u64,
     pub onboard_timeout_secs: u64,
+    /// How long an inbound request parked by the `Ask` disposition stays in the
+    /// approval queue before it is silently dropped. Generous (operator-facing)
+    /// relative to the peer-response timeouts above.
+    #[serde(default = "default_approval_timeout_secs")]
+    pub approval_timeout_secs: u64,
     pub request_ttl_secs: u64,
     pub max_future_skew_secs: u64,
     pub request_cache_limit: usize,
@@ -438,6 +457,7 @@ impl Default for DeviceConfig {
             ecdh_timeout_secs: 30,
             ping_timeout_secs: 15,
             onboard_timeout_secs: 30,
+            approval_timeout_secs: default_approval_timeout_secs(),
             request_ttl_secs: 300,
             max_future_skew_secs: 30,
             request_cache_limit: 2048,
@@ -538,6 +558,10 @@ pub struct RuntimeStatusSummary {
     #[serde(default)]
     pub onboarding_statuses: Vec<OnboardingStatus>,
     pub pending_operations: Vec<PendingOperation>,
+    /// Inbound requests parked awaiting an operator decision (the `Ask` policy
+    /// disposition). Empty unless a peer+method is set to `Ask`.
+    #[serde(default)]
+    pub pending_approvals: Vec<PendingApprovalSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -583,6 +607,38 @@ pub enum PendingOpType {
     Ecdh,
     Ping,
     Onboard,
+}
+
+/// An inbound request parked awaiting an operator decision (the `Ask` policy
+/// disposition). Runtime-only; holds the decrypted envelope so the request can
+/// be re-dispatched verbatim once approved. See [`SignerInput::ResolveApproval`].
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    pub peer: String,
+    pub method: String,
+    pub envelope: BridgeEnvelope,
+    pub queued_at: u64,
+    pub expires_at: u64,
+}
+
+/// Serializable projection of a [`PendingApproval`] for `runtime_status()`.
+/// Excludes the envelope payload (operators decide on peer + method, not on the
+/// raw request bytes).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingApprovalSummary {
+    pub request_id: String,
+    pub peer: String,
+    pub method: String,
+    pub queued_at: u64,
+    pub expires_at: u64,
+}
+
+/// Outcome of the inbound policy check (see `inbound_disposition`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InboundDisposition {
+    Allow,
+    Deny,
+    Ask,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -680,6 +736,13 @@ pub enum SignerInput {
         request_id: String,
         code: OperationFailureCode,
         message: String,
+    },
+    /// Resolve a parked approval (the `Ask` disposition). `approved` re-dispatches
+    /// the stored request and emits its response; otherwise the requester gets an
+    /// `operator_denied` error. A no-op if the request id is no longer queued.
+    ResolveApproval {
+        request_id: String,
+        approved: bool,
     },
 }
 
@@ -964,6 +1027,11 @@ impl SigningDevice {
             PolicyOverrideValue::Unset => default,
             PolicyOverrideValue::Allow => true,
             PolicyOverrideValue::Deny => false,
+            // "Ask" is capability-allowed for readiness/`can_sign`: the peer may
+            // act, just interactively. The deferral is enforced separately in
+            // `inbound_disposition`, which reads the raw override before this
+            // bool collapse.
+            PolicyOverrideValue::Ask => true,
         }
     }
 
@@ -1045,6 +1113,42 @@ impl SigningDevice {
         }
     }
 
+    /// Raw local `respond` override value for a method, before the bool collapse.
+    /// Lets `inbound_disposition` see `Ask` (which `apply_override_value` flattens
+    /// to `true`).
+    fn respond_override_value(&self, peer: &str, method: &str) -> PolicyOverrideValue {
+        let respond = self.manual_policy_override_for(peer).respond;
+        match method {
+            "ping" => respond.ping,
+            "onboard" => respond.onboard,
+            "sign" => respond.sign,
+            "ecdh" => respond.ecdh,
+            "echo" => respond.echo,
+            _ => PolicyOverrideValue::Unset,
+        }
+    }
+
+    /// Decide how to handle an inbound request for `method` from `peer`. When
+    /// `forced` (resuming an approved request) the answer is always `Allow`.
+    /// A local `respond` override of `Ask` parks the request; otherwise the
+    /// existing allow/deny policy applies.
+    fn inbound_disposition(&self, peer: &str, method: &str, forced: bool) -> InboundDisposition {
+        if forced {
+            return InboundDisposition::Allow;
+        }
+        if matches!(
+            self.respond_override_value(peer, method),
+            PolicyOverrideValue::Ask
+        ) {
+            return InboundDisposition::Ask;
+        }
+        if self.inbound_allowed(peer, method) {
+            InboundDisposition::Allow
+        } else {
+            InboundDisposition::Deny
+        }
+    }
+
     pub fn peer_status(&self) -> Vec<PeerStatus> {
         let now = now_unix_secs();
         let mut peers = self
@@ -1111,6 +1215,28 @@ impl SigningDevice {
         statuses
     }
 
+    /// Operator-facing projection of the parked-approval queue, oldest first.
+    pub fn pending_approvals(&self) -> Vec<PendingApprovalSummary> {
+        let mut approvals = self
+            .state
+            .pending_approvals
+            .iter()
+            .map(|(request_id, approval)| PendingApprovalSummary {
+                request_id: request_id.clone(),
+                peer: approval.peer.clone(),
+                method: approval.method.clone(),
+                queued_at: approval.queued_at,
+                expires_at: approval.expires_at,
+            })
+            .collect::<Vec<_>>();
+        approvals.sort_by(|a, b| {
+            a.queued_at
+                .cmp(&b.queued_at)
+                .then_with(|| a.request_id.cmp(&b.request_id))
+        });
+        approvals
+    }
+
     pub fn runtime_status(&self) -> RuntimeStatusSummary {
         let peers = self.peer_status();
         RuntimeStatusSummary {
@@ -1121,6 +1247,7 @@ impl SigningDevice {
             peer_permission_states: self.peer_permission_states(),
             onboarding_statuses: self.onboarding_statuses(),
             pending_operations: self.pending_operations(),
+            pending_approvals: self.pending_approvals(),
         }
     }
 
@@ -1389,7 +1516,7 @@ impl SigningDevice {
             // ping (it can't decrypt the envelope to know better).
             let op_type = inbound_op_type(&envelope.payload);
             let request_id = envelope.request_id.clone();
-            match self.handle_inbound_request(envelope, sender.clone()) {
+            match self.handle_inbound_request(envelope, sender.clone(), false) {
                 Ok(outbound) => outbound,
                 Err(err) => {
                     self.failures.push_back(OperationFailure {
@@ -1753,6 +1880,13 @@ impl SigningDevice {
                 self.fail_request(&request_id, code, message);
                 effects.persistence_hint = PersistenceHint::Batch;
             }
+            SignerInput::ResolveApproval {
+                request_id,
+                approved,
+            } => {
+                effects.outbound = self.resolve_approval(&request_id, approved)?;
+                effects.persistence_hint = PersistenceHint::Batch;
+            }
         }
         effects.completions.extend(self.take_completions());
         effects.failures.extend(self.take_failures());
@@ -1795,6 +1929,12 @@ impl SigningDevice {
         for failure in &stale {
             self.state.op_started_ms.remove(&failure.request_id);
         }
+        // Drop parked approvals the operator never resolved. Silent: the
+        // requester's own operation has already timed out by now, so there is no
+        // peer left waiting for a response.
+        self.state
+            .pending_approvals
+            .retain(|_, approval| approval.expires_at > now);
         stale
     }
 
@@ -1969,10 +2109,14 @@ impl SigningDevice {
         )
     }
 
+    /// Handle a decrypted inbound request. `forced` is set only when resuming an
+    /// operator-approved request from the queue — it bypasses the policy check so
+    /// the same envelope re-runs verbatim through the per-method handlers below.
     fn handle_inbound_request(
         &mut self,
         envelope: BridgeEnvelope,
         sender: String,
+        forced: bool,
     ) -> Result<Vec<Event>> {
         let sender_idx = self
             .member_idx_by_pubkey
@@ -1981,16 +2125,41 @@ impl SigningDevice {
             .ok_or_else(|| SignerError::UnknownPeer(sender.clone()))?;
         let now = now_unix_secs();
 
-        match envelope.payload {
-            BridgePayload::PingRequest(wire) => {
-                if !self.inbound_allowed(&sender, "ping") {
+        // Single policy gate for every inbound method (ping/onboard/sign/ecdh):
+        // deny rejects, ask parks the request for the operator, allow falls
+        // through to the handlers. Response payloads have no method and skip this.
+        if let Some(method) = inbound_method_name(&envelope.payload) {
+            match self.inbound_disposition(&sender, method, forced) {
+                InboundDisposition::Allow => {}
+                InboundDisposition::Deny => {
+                    if method == "onboard" {
+                        self.note_onboarding_status(
+                            &sender,
+                            OnboardingStatusStage::Failed,
+                            now,
+                            Some("inbound onboard denied by local policy".to_string()),
+                        );
+                    }
                     return self.reject_request(
                         &sender,
                         envelope.request_id,
                         "peer_denied",
-                        "inbound ping denied by local policy",
+                        &format!("inbound {method} denied by local policy"),
                     );
                 }
+                InboundDisposition::Ask => {
+                    return Ok(self.queue_pending_approval(
+                        sender,
+                        method.to_string(),
+                        envelope,
+                        now,
+                    ));
+                }
+            }
+        }
+
+        match envelope.payload {
+            BridgePayload::PingRequest(wire) => {
                 let ping: PingPayload =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -2023,20 +2192,6 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::OnboardRequest(wire) => {
-                if !self.inbound_allowed(&sender, "onboard") {
-                    self.note_onboarding_status(
-                        &sender,
-                        OnboardingStatusStage::Failed,
-                        now,
-                        Some("inbound onboard denied by local policy".to_string()),
-                    );
-                    return self.reject_request(
-                        &sender,
-                        envelope.request_id,
-                        "peer_denied",
-                        "inbound onboard denied by local policy",
-                    );
-                }
                 let request: bifrost_core::types::OnboardRequest =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -2154,14 +2309,6 @@ impl SigningDevice {
                 Ok(outbound)
             }
             BridgePayload::SignRequest(wire) => {
-                if !self.inbound_allowed(&sender, "sign") {
-                    return self.reject_request(
-                        &sender,
-                        envelope.request_id,
-                        "peer_denied",
-                        "inbound sign denied by local policy",
-                    );
-                }
                 let session: SignSessionPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -2225,14 +2372,6 @@ impl SigningDevice {
                 self.encrypt_for_peers(&[sender], &response)
             }
             BridgePayload::EcdhRequest(wire) => {
-                if !self.inbound_allowed(&sender, "ecdh") {
-                    return self.reject_request(
-                        &sender,
-                        envelope.request_id,
-                        "peer_denied",
-                        "inbound ecdh denied by local policy",
-                    );
-                }
                 let req: EcdhPackage =
                     wire.try_into().map_err(|e: bifrost_codec::CodecError| {
                         SignerError::InvalidRequest(e.to_string())
@@ -2735,6 +2874,78 @@ impl SigningDevice {
         self.encrypt_for_peers(&[peer.to_string()], &response)
     }
 
+    /// Park an inbound request awaiting an operator decision (the `Ask`
+    /// disposition). Stores the decrypted envelope so the request can be replayed
+    /// verbatim on approval. Returns no outbound — the peer waits.
+    fn queue_pending_approval(
+        &mut self,
+        peer: String,
+        method: String,
+        envelope: BridgeEnvelope,
+        now: u64,
+    ) -> Vec<Event> {
+        let request_id = envelope.request_id.clone();
+        let expires_at = now.saturating_add(self.config.approval_timeout_secs);
+        debug!(
+            device_id = %self.device_id,
+            peer = %peer,
+            method = %method,
+            request_id = %request_id,
+            "parking inbound request for operator approval"
+        );
+        self.state.pending_approvals.insert(
+            request_id,
+            PendingApproval {
+                peer,
+                method,
+                envelope,
+                queued_at: now,
+                expires_at,
+            },
+        );
+        Vec::new()
+    }
+
+    /// Resolve a parked approval. Approving replays the stored request through the
+    /// normal handler (`forced`, so the policy gate is skipped); denying sends an
+    /// `operator_denied` error. Unknown / already-expired ids are a no-op.
+    fn resolve_approval(&mut self, request_id: &str, approved: bool) -> Result<Vec<Event>> {
+        let Some(approval) = self.state.pending_approvals.remove(request_id) else {
+            debug!(
+                device_id = %self.device_id,
+                request_id = %request_id,
+                "resolve_approval: no parked request for id (no-op)"
+            );
+            return Ok(Vec::new());
+        };
+        if !approved {
+            return self.reject_request(
+                &approval.peer,
+                request_id.to_string(),
+                "operator_denied",
+                "request denied by operator",
+            );
+        }
+        // Replay the stored request verbatim. Classify the op type before the
+        // move so a handler error (e.g. a nonce miss) surfaces correctly typed,
+        // mirroring `process_event`, rather than aborting the whole `apply`.
+        let op_type = inbound_op_type(&approval.envelope.payload);
+        let peer = approval.peer.clone();
+        match self.handle_inbound_request(approval.envelope, approval.peer, true) {
+            Ok(outbound) => Ok(outbound),
+            Err(err) => {
+                self.failures.push_back(OperationFailure {
+                    request_id: request_id.to_string(),
+                    op_type,
+                    code: OperationFailureCode::PeerRejected,
+                    message: err.to_string(),
+                    failed_peer: Some(peer),
+                });
+                Ok(Vec::new())
+            }
+        }
+    }
+
     fn record_request(
         &mut self,
         sender: &str,
@@ -2804,6 +3015,18 @@ fn inbound_op_type(payload: &BridgePayload) -> PendingOpType {
         BridgePayload::PingRequest(_)
         | BridgePayload::PingResponse(_)
         | BridgePayload::Error(_) => PendingOpType::Ping,
+    }
+}
+
+/// Policy method name for an inbound *request* payload, or `None` for responses
+/// and errors (which carry no method and bypass the policy gate).
+fn inbound_method_name(payload: &BridgePayload) -> Option<&'static str> {
+    match payload {
+        BridgePayload::PingRequest(_) => Some("ping"),
+        BridgePayload::OnboardRequest(_) => Some("onboard"),
+        BridgePayload::SignRequest(_) => Some("sign"),
+        BridgePayload::EcdhRequest(_) => Some("ecdh"),
+        _ => None,
     }
 }
 
@@ -3689,7 +3912,7 @@ mod tests {
         };
         let err = fixture
             .signer
-            .handle_inbound_request(unsupported_version, sender)
+            .handle_inbound_request(unsupported_version, sender, false)
             .expect_err("unsupported version must fail");
         assert!(matches!(err, SignerError::InvalidRequest(_)));
         assert_eq!(fixture.signer.onboarding_statuses().len(), 1);
@@ -3724,7 +3947,7 @@ mod tests {
 
         let outbound = fixture
             .signer
-            .handle_inbound_request(request, sender.clone())
+            .handle_inbound_request(request, sender.clone(), false)
             .expect("valid onboard request should produce response");
         assert_eq!(outbound.len(), 1);
 
@@ -3756,9 +3979,180 @@ mod tests {
         };
         let err = fixture
             .signer
-            .handle_inbound_request(response, sender)
+            .handle_inbound_request(response, sender, false)
             .expect_err("orphan response must fail");
         assert!(matches!(err, SignerError::InvalidRequest(_)));
+    }
+
+    // ---- Interactive approval queue (the `Ask` disposition) ----
+
+    fn ping_request_envelope(request_id: &str) -> BridgeEnvelope {
+        BridgeEnvelope {
+            request_id: request_id.to_string(),
+            sent_at: now_unix_secs(),
+            payload: BridgePayload::PingRequest(PingPayloadWire::from(PingPayload {
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
+                policy_profile: None,
+                nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
+            })),
+        }
+    }
+
+    fn set_respond_ping_ask(signer: &mut SigningDevice, peer: &str) {
+        let mut override_policy = PeerPolicyOverride::default();
+        override_policy.respond.ping = PolicyOverrideValue::Ask;
+        signer
+            .set_peer_policy_override(peer, override_policy)
+            .expect("set ask override");
+    }
+
+    fn local_sender_pubkey(fixture: &Fixture) -> String {
+        let member = fixture
+            .group
+            .members
+            .iter()
+            .find(|member| member.idx == fixture.local_share.idx)
+            .expect("local member");
+        hex::encode(&member.pubkey[1..])
+    }
+
+    #[test]
+    fn ask_disposition_parks_inbound_request_without_responding() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, _) = first_peer(&fixture);
+        set_respond_ping_ask(&mut fixture.signer, &peer);
+
+        let outbound = fixture
+            .signer
+            .handle_inbound_request(ping_request_envelope("req-ask-1"), peer.clone(), false)
+            .expect("ask parks without error");
+        assert!(outbound.is_empty(), "parked request must not respond yet");
+
+        let summary = fixture.signer.runtime_status();
+        assert_eq!(summary.pending_approvals.len(), 1);
+        let parked = &summary.pending_approvals[0];
+        assert_eq!(parked.request_id, "req-ask-1");
+        assert_eq!(parked.peer, peer);
+        assert_eq!(parked.method, "ping");
+        // The `Ask` peer is still capability-allowed for readiness purposes.
+        assert!(fixture.signer.inbound_allowed(&peer, "ping"));
+    }
+
+    #[test]
+    fn forced_replay_bypasses_ask_and_responds() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, _) = first_peer(&fixture);
+        set_respond_ping_ask(&mut fixture.signer, &peer);
+
+        // `forced` (resuming an approved request) must not re-park.
+        let outbound = fixture
+            .signer
+            .handle_inbound_request(ping_request_envelope("req-ask-forced"), peer.clone(), true)
+            .expect("forced replay responds");
+        assert_eq!(outbound.len(), 1);
+        assert!(fixture.signer.state.pending_approvals.is_empty());
+    }
+
+    #[test]
+    fn resolve_approval_approved_emits_response_and_clears_queue() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, peer_idx) = first_peer(&fixture);
+        set_respond_ping_ask(&mut fixture.signer, &peer);
+        fixture
+            .signer
+            .handle_inbound_request(ping_request_envelope("req-ask-2"), peer.clone(), false)
+            .expect("park");
+
+        let outbound = fixture
+            .signer
+            .resolve_approval("req-ask-2", true)
+            .expect("approve");
+        assert_eq!(outbound.len(), 1, "approval emits the deferred response");
+        assert!(fixture.signer.state.pending_approvals.is_empty());
+
+        // The emitted event decrypts to a real ping response for the requester.
+        let peer_share = fixture
+            .shares
+            .iter()
+            .find(|share| share.idx == peer_idx)
+            .cloned()
+            .expect("peer share");
+        let decoded =
+            decode_envelope_for_local(&peer_share, &local_sender_pubkey(&fixture), &outbound[0]);
+        assert!(matches!(decoded.payload, BridgePayload::PingResponse(_)));
+    }
+
+    #[test]
+    fn resolve_approval_denied_emits_operator_denied_error() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, peer_idx) = first_peer(&fixture);
+        set_respond_ping_ask(&mut fixture.signer, &peer);
+        fixture
+            .signer
+            .handle_inbound_request(ping_request_envelope("req-ask-3"), peer.clone(), false)
+            .expect("park");
+
+        let outbound = fixture
+            .signer
+            .resolve_approval("req-ask-3", false)
+            .expect("deny");
+        assert_eq!(outbound.len(), 1);
+        assert!(fixture.signer.state.pending_approvals.is_empty());
+
+        let peer_share = fixture
+            .shares
+            .iter()
+            .find(|share| share.idx == peer_idx)
+            .cloned()
+            .expect("peer share");
+        let decoded =
+            decode_envelope_for_local(&peer_share, &local_sender_pubkey(&fixture), &outbound[0]);
+        match decoded.payload {
+            BridgePayload::Error(err) => assert_eq!(err.code, "operator_denied"),
+            other => panic!("expected operator_denied error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_approval_unknown_id_is_noop() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let outbound = fixture
+            .signer
+            .resolve_approval("no-such-request", true)
+            .expect("unknown id is a no-op");
+        assert!(outbound.is_empty());
+    }
+
+    #[test]
+    fn expire_stale_drops_parked_approvals_silently() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let (peer, _) = first_peer(&fixture);
+        set_respond_ping_ask(&mut fixture.signer, &peer);
+        fixture
+            .signer
+            .handle_inbound_request(ping_request_envelope("req-ask-4"), peer.clone(), false)
+            .expect("park");
+        assert_eq!(fixture.signer.state.pending_approvals.len(), 1);
+
+        let expires_at = fixture.signer.state.pending_approvals["req-ask-4"].expires_at;
+        let failures = fixture.signer.expire_stale(expires_at + 1);
+        assert!(
+            failures.is_empty(),
+            "dropping a parked approval emits no failure"
+        );
+        assert!(fixture.signer.state.pending_approvals.is_empty());
+    }
+
+    #[test]
+    fn runtime_status_json_carries_pending_approvals_field() {
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let json = serde_json::to_string(&fixture.signer.runtime_status()).expect("serialize");
+        assert!(
+            json.contains("\"pending_approvals\""),
+            "runtime_status JSON must expose pending_approvals"
+        );
     }
 
     #[test]

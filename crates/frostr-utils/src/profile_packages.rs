@@ -43,6 +43,7 @@ pub enum BfPolicyOverrideValue {
     Unset,
     Allow,
     Deny,
+    Ask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -329,6 +330,7 @@ pub fn bf_policy_override_value_to_core(value: BfPolicyOverrideValue) -> PolicyO
         BfPolicyOverrideValue::Unset => PolicyOverrideValue::Unset,
         BfPolicyOverrideValue::Allow => PolicyOverrideValue::Allow,
         BfPolicyOverrideValue::Deny => PolicyOverrideValue::Deny,
+        BfPolicyOverrideValue::Ask => PolicyOverrideValue::Ask,
     }
 }
 
@@ -354,6 +356,7 @@ pub fn core_policy_override_value_to_bf(value: PolicyOverrideValue) -> BfPolicyO
         PolicyOverrideValue::Unset => BfPolicyOverrideValue::Unset,
         PolicyOverrideValue::Allow => BfPolicyOverrideValue::Allow,
         PolicyOverrideValue::Deny => BfPolicyOverrideValue::Deny,
+        PolicyOverrideValue::Ask => BfPolicyOverrideValue::Ask,
     }
 }
 

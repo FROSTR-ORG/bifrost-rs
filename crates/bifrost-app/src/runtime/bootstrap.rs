@@ -85,6 +85,7 @@ pub fn load_or_init_signer_resolved<S: DeviceStore>(
             ecdh_timeout_secs: config.options.ecdh_timeout_secs,
             ping_timeout_secs: config.options.ping_timeout_secs,
             onboard_timeout_secs: config.options.onboard_timeout_secs,
+            approval_timeout_secs: config.options.approval_timeout_secs,
             request_ttl_secs: config.options.request_ttl_secs,
             max_future_skew_secs: config.options.max_future_skew_secs,
             request_cache_limit: config.options.request_cache_limit,

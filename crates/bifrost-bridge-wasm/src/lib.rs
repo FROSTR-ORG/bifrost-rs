@@ -153,6 +153,7 @@ enum CommandInput {
     RefreshPeer { peer_pubkey32_hex: String },
     RefreshAllPeers,
     Onboard { peer_pubkey32_hex: String },
+    ResolveApproval { request_id: String, approved: bool },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1139,6 +1140,13 @@ fn parse_command(input: CommandInput) -> Result<BridgeCommand> {
         CommandInput::Onboard { peer_pubkey32_hex } => Ok(BridgeCommand::Onboard {
             peer: peer_pubkey32_hex,
         }),
+        CommandInput::ResolveApproval {
+            request_id,
+            approved,
+        } => Ok(BridgeCommand::ResolveApproval {
+            request_id,
+            approved,
+        }),
     }
 }
 
@@ -1843,6 +1851,22 @@ mod tests {
                 assert_eq!(peer, "peer-b");
             }
             other => panic!("unexpected onboard command: {other:?}"),
+        }
+
+        match parse_command(CommandInput::ResolveApproval {
+            request_id: "req-1".to_string(),
+            approved: true,
+        })
+        .expect("resolve_approval parses")
+        {
+            BridgeCommand::ResolveApproval {
+                request_id,
+                approved,
+            } => {
+                assert_eq!(request_id, "req-1");
+                assert!(approved);
+            }
+            other => panic!("unexpected resolve command: {other:?}"),
         }
 
         let err = parse_command(CommandInput::RefreshAllPeers).expect_err("refresh all must fail");
