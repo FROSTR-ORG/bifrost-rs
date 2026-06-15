@@ -45,6 +45,9 @@ pub struct ProfilePreview {
     pub source: &'static str,
 }
 
+// Field-assembly constructor: the arguments are the manifest's fields, so the
+// count is inherent rather than a sign of a function doing too much.
+#[allow(clippy::too_many_arguments)]
 pub fn build_profile_manifest(
     profile_id: &str,
     label: String,

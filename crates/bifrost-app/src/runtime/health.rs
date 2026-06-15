@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bifrost_signer::DeviceState;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -336,5 +336,3 @@ mod tests {
         let _ = fs::remove_file(state_path.with_extension("run.json"));
     }
 }
-
-use anyhow::Context;

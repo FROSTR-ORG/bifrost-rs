@@ -287,6 +287,9 @@ impl FilesystemProfileDomain {
         Ok(path.display().to_string())
     }
 
+    // Field-assembly import entrypoint: the arguments are the imported profile's
+    // constituent parts, so the count is inherent.
+    #[allow(clippy::too_many_arguments)]
     pub fn import_profile_from_files(
         &self,
         group: &GroupPackage,
@@ -418,6 +421,7 @@ impl FilesystemProfileDomain {
         self.relays.write_relay_profiles(&profiles)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_imported_profile(
         &self,
         profile_id: &str,
