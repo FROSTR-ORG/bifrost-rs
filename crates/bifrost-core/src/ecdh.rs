@@ -1,5 +1,5 @@
 use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use k256::{AffinePoint, EncodedPoint, ProjectivePoint, SecretKey};
+use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar, SecretKey};
 
 use crate::error::{CoreError, CoreResult};
 use crate::types::{Bytes32, Bytes33, EcdhEntry, EcdhPackage, SharePackage};
@@ -11,7 +11,14 @@ pub fn create_ecdh_package(
 ) -> CoreResult<EcdhPackage> {
     let sk =
         SecretKey::from_slice(share.seckey.expose_bytes()).map_err(|_| CoreError::InvalidScalar)?;
-    let scalar = *sk.to_nonzero_scalar().as_ref();
+    // Weight this share by its Lagrange coefficient over the participating quorum
+    // (`members`) before the ECDH point-multiply, so the summed threshold
+    // contributions in `combine_ecdh_packages` reconstruct `group_secret · target`
+    // (the real group-key ECDH) rather than a merely self-consistent sum. This
+    // mirrors FROSTR V1 (`@vbyte/frost` `calc_lagrange_coeff`); without it the
+    // derived secret can't interop with standard NIP-44 peers for any t-of-n, t > 1.
+    let lambda = lagrange_coeff_at_zero(members, share.idx)?;
+    let scalar = (*sk.to_nonzero_scalar().as_ref()) * lambda;
     let mut entries = Vec::with_capacity(ecdh_pks.len());
 
     for ecdh_pk in ecdh_pks {
@@ -76,6 +83,28 @@ pub fn local_pubkey_from_share(share: &SharePackage) -> CoreResult<Bytes32> {
     Ok(out)
 }
 
+// Lagrange interpolation coefficient for member `idx`, evaluated at x = 0, over the
+// participating quorum `members` (the share x-coordinates). `λ_i = Π_{j≠i} x_j /
+// (x_j - x_i)`, so `Σ λ_i · share_i = f(0) = group_secret` for the quorum's shares of
+// the degree-(t-1) sharing polynomial `f`. The member index is the share's
+// x-coordinate (matching the `frost` keygen identifiers). For a singleton/empty
+// `members` (threshold-1) this is `1`, so the threshold-1 path is unchanged.
+fn lagrange_coeff_at_zero(members: &[u16], idx: u16) -> CoreResult<Scalar> {
+    let xi = Scalar::from(u64::from(idx));
+    let mut num = Scalar::ONE;
+    let mut den = Scalar::ONE;
+    for &member in members {
+        if member == idx {
+            continue;
+        }
+        let xj = Scalar::from(u64::from(member));
+        num *= xj;
+        den *= xj - xi;
+    }
+    let den_inv = Option::<Scalar>::from(den.invert()).ok_or(CoreError::InvalidScalar)?;
+    Ok(num * den_inv)
+}
+
 fn point_from_pubkey32(bytes: Bytes32) -> CoreResult<AffinePoint> {
     let mut compressed = [0u8; 33];
     compressed[0] = 0x02;
@@ -136,5 +165,63 @@ mod tests {
         let standard_x = ep.x().expect("x coordinate");
 
         assert_eq!(&frostr_secret[..], standard_x.as_slice());
+    }
+
+    // The threshold case that the prior tests miss: a real t-of-n (t > 1) quorum must
+    // also reconstruct the *group-key* ECDH secret (raw X of `group_secret · target`),
+    // not just a self-consistent sum. This requires the Lagrange weighting in
+    // `create_ecdh_package`; without it a 2-of-3 combine yields `(Σ shares)·target`,
+    // which is undecryptable by a standard NIP-44 peer (the "invalid MAC" the @live
+    // interop test caught). Here a degree-1 polynomial gives explicit 2-of-3 shares.
+    #[test]
+    fn combine_reconstructs_group_key_ecdh_for_threshold_quorum() {
+        let scalar_bytes = |s: Scalar| {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&s.to_bytes());
+            out
+        };
+
+        // f(x) = a0 + a1*x; a0 is the group secret, shares are f(1), f(2), f(3).
+        let a0 = Scalar::from(1_234_567u64);
+        let a1 = Scalar::from(7_654_321u64);
+        let f = |x: u64| a0 + a1 * Scalar::from(x);
+        let share = |idx: u16| SharePackage {
+            idx,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(f(u64::from(idx)))),
+        };
+
+        // External counterparty with secret `c`; target = its x-only pubkey.
+        let c = Scalar::from(99u64);
+        let counterparty = SharePackage {
+            idx: 7,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(c)),
+        };
+        let target = local_pubkey_from_share(&counterparty).expect("target pubkey");
+        let group_xonly = local_pubkey_from_share(&SharePackage {
+            idx: 1,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(a0)),
+        })
+        .expect("group pubkey");
+
+        // FROSTR side: the {1,2} quorum builds + combines its ECDH packages.
+        let members = vec![1u16, 2u16];
+        let pkg1 = create_ecdh_package(&members, &share(1), &[target]).expect("pkg1");
+        let pkg2 = create_ecdh_package(&members, &share(2), &[target]).expect("pkg2");
+        let frostr_secret = combine_ecdh_packages(&[pkg1, pkg2], target).expect("combine");
+
+        // Standard counterparty: ECDH(c, group_pubkey), raw X-coordinate.
+        let group_point = point_from_pubkey32(group_xonly).expect("group point");
+        let shared = (ProjectivePoint::from(group_point) * c).to_affine();
+        let ep = shared.to_encoded_point(false);
+        let standard_x = ep.x().expect("x coordinate");
+
+        assert_eq!(&frostr_secret[..], standard_x.as_slice());
+
+        // Sanity: a different quorum {2,3} must reconstruct the same group secret.
+        let members_b = vec![2u16, 3u16];
+        let pkg2b = create_ecdh_package(&members_b, &share(2), &[target]).expect("pkg2b");
+        let pkg3b = create_ecdh_package(&members_b, &share(3), &[target]).expect("pkg3b");
+        let frostr_secret_b = combine_ecdh_packages(&[pkg2b, pkg3b], target).expect("combine b");
+        assert_eq!(frostr_secret_b, frostr_secret);
     }
 }
