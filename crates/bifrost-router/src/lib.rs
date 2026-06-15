@@ -569,6 +569,15 @@ impl BridgeCore {
     }
 
     fn fail_request_and_dispatch(&mut self, request_id: String, message: String) {
+        // Recover the real op type before request_id is consumed, so an internal
+        // failure surfaces under its true op instead of a Ping sentinel.
+        let op_type = self
+            .signer
+            .state()
+            .pending_operations
+            .get(&request_id)
+            .map(|op| op.op_type.clone())
+            .unwrap_or(bifrost_signer::PendingOpType::Ping);
         match self.signer.apply(SignerInput::FailRequest {
             request_id,
             code: OperationFailureCode::PeerRejected,
@@ -577,7 +586,7 @@ impl BridgeCore {
             Ok(effects) => self.dispatch_effects(effects, None),
             Err(err) => self.failures.push_back(OperationFailure {
                 request_id: "local-fail-request".to_string(),
-                op_type: bifrost_signer::PendingOpType::Ping,
+                op_type,
                 code: OperationFailureCode::PeerRejected,
                 message: err.to_string(),
                 failed_peer: None,
