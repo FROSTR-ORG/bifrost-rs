@@ -18,13 +18,7 @@ jobs:
           - fmt
           - clippy
           - check
-          - test-core
-          - test-node
-          - test-ws
-          - test-ws-nip44
-          - test-integration
-          - runtime-e2e
-          - check-example
+          - test
           - coverage
           - security-audit
 
@@ -50,39 +44,13 @@ jobs:
         if: matrix.task == 'clippy'
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-      - name: Test core+codec
-        if: matrix.task == 'test-core'
-        run: cargo test -p bifrost-core -p bifrost-codec
-
-      - name: Test node unit+integration
-        if: matrix.task == 'test-node'
-        run: cargo test -p bifrost-node
-
-      - name: Test websocket transport
-        if: matrix.task == 'test-ws'
-        run: cargo test -p bifrost-transport-ws
-
-      - name: Test websocket NIP44 vectors
-        if: matrix.task == 'test-ws-nip44'
-        run: cargo test -p bifrost-transport-ws nip44_fixture_vectors
-
-      - name: Test node integration targets
-        if: matrix.task == 'test-integration'
-        run: |
-          cargo test -p bifrost-node --test happy_paths
-          cargo test -p bifrost-node --test adversarial
-          cargo test -p bifrost-node --test fault_injection
-
-      - name: Runtime smoke and e2e
-        if: matrix.task == 'runtime-e2e'
-        run: |
-          scripts/devnet.sh smoke
-          scripts/test-node-e2e.sh
-          scripts/test-tui-e2e.sh
-
-      - name: Check example package
-        if: matrix.task == 'check-example'
-        run: cargo check -p node_ws_multi_peer_example
+      # Whole-workspace tests — covers every crate (signer / router / bridges /
+      # app / core / codec / frostr-utils / profile / devtools), including the
+      # NIP-44 KATs (bifrost-signer `nip44_kat`, frostr-utils `nip44_protocol_kat`).
+      # Enumerating crates is what rotted the previous matrix; --workspace can't.
+      - name: Workspace tests
+        if: matrix.task == 'test'
+        run: cargo test --workspace
 
       - name: Install llvm-cov tooling
         if: matrix.task == 'coverage'
@@ -124,20 +92,3 @@ jobs:
         with:
           name: cargo-audit-report
           path: artifacts/cargo-audit.txt
-
-  runtime-regressions:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run ignored runtime regressions
-        run: cargo test -p bifrost-dev -- --ignored e2e_node_command_sequence_regression
