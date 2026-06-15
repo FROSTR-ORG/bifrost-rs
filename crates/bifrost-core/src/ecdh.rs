@@ -1,3 +1,4 @@
+use frost_secp256k1_tr_unofficial as frost;
 use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
 use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar, SecretKey};
 
@@ -90,19 +91,32 @@ pub fn local_pubkey_from_share(share: &SharePackage) -> CoreResult<Bytes32> {
 // x-coordinate (matching the `frost` keygen identifiers). For a singleton/empty
 // `members` (threshold-1) this is `1`, so the threshold-1 path is unchanged.
 fn lagrange_coeff_at_zero(members: &[u16], idx: u16) -> CoreResult<Scalar> {
-    let xi = Scalar::from(u64::from(idx));
+    let xi = member_scalar(idx)?;
     let mut num = Scalar::ONE;
     let mut den = Scalar::ONE;
     for &member in members {
         if member == idx {
             continue;
         }
-        let xj = Scalar::from(u64::from(member));
+        let xj = member_scalar(member)?;
         num *= xj;
         den *= xj - xi;
     }
     let den_inv = Option::<Scalar>::from(den.invert()).ok_or(CoreError::InvalidScalar)?;
     Ok(num * den_inv)
+}
+
+// The member index's x-coordinate in the sharing polynomial, derived from the SAME
+// `frost` Identifier mapping that signing uses (`Identifier::try_from(idx)`), so the
+// ECDH Lagrange basis can't drift from the keygen/signing identifier encoding. The
+// Lagrange formula above stays hand-rolled because frost-core exposes no public
+// per-identifier coefficient API (only `keys::reconstruct`, which needs every share
+// on one device and so can't serve the distributed ECDH protocol).
+fn member_scalar(idx: u16) -> CoreResult<Scalar> {
+    let id = frost::Identifier::try_from(idx).map_err(|e| CoreError::Frost(e.to_string()))?;
+    let bytes = id.serialize();
+    let sk = SecretKey::from_slice(&bytes).map_err(|_| CoreError::InvalidScalar)?;
+    Ok(*sk.to_nonzero_scalar().as_ref())
 }
 
 fn point_from_pubkey32(bytes: Bytes32) -> CoreResult<AffinePoint> {
