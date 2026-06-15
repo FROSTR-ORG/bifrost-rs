@@ -367,6 +367,30 @@ mod tests {
         assert_eq!(secret_ab, secret_ba);
     }
 
+    // Decisive check on the real keygen: with correct Lagrange weighting, ANY
+    // threshold quorum reconstructs the same group-key ECDH secret. If the member
+    // index → polynomial x-coordinate mapping were wrong, different quorums would
+    // disagree. (Before the Lagrange restoration this failed.)
+    #[test]
+    fn ecdh_secret_is_quorum_independent() {
+        let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");
+        let target = local_pubkey_from_share(&bundle.shares[0]).expect("target");
+
+        let mut q_ab = vec![bundle.shares[0].idx, bundle.shares[1].idx];
+        q_ab.sort_unstable();
+        let a0 = ecdh_create_from_share(&q_ab, &bundle.shares[0], &[target]).expect("a0");
+        let a1 = ecdh_create_from_share(&q_ab, &bundle.shares[1], &[target]).expect("a1");
+        let secret_ab = ecdh_finalize(&[a0, a1], target).expect("ab");
+
+        let mut q_bc = vec![bundle.shares[1].idx, bundle.shares[2].idx];
+        q_bc.sort_unstable();
+        let b1 = ecdh_create_from_share(&q_bc, &bundle.shares[1], &[target]).expect("b1");
+        let b2 = ecdh_create_from_share(&q_bc, &bundle.shares[2], &[target]).expect("b2");
+        let secret_bc = ecdh_finalize(&[b1, b2], target).expect("bc");
+
+        assert_eq!(secret_ab, secret_bc);
+    }
+
     #[test]
     fn stateless_onboard_exchange_roundtrip() {
         let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");
