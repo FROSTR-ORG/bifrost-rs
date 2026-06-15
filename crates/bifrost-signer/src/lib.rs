@@ -562,6 +562,37 @@ pub struct RuntimeStatusSummary {
     /// disposition). Empty unless a peer+method is set to `Ask`.
     #[serde(default)]
     pub pending_approvals: Vec<PendingApprovalSummary>,
+    /// Most recent `Sign` operation failure retained for host display (e.g. a
+    /// "signing failed" banner). Runtime-only; `None` until a sign op fails,
+    /// cleared on the next successful sign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sign_failure: Option<OperationFailureSummary>,
+    /// Currently-connected relay URLs. **Host/bridge-enriched, not owned by the
+    /// signer core** — relay sockets live in the bridge layer, so the core
+    /// always emits `None` here and the Tokio bridge (native) / browser bridge
+    /// (WASM, in TS) fill it. `None` means "not reported"; `Some(empty)` means
+    /// "reported, zero connected" (drives the all-relays-offline condition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_relays: Option<Vec<String>>,
+    /// Configured relay URLs the host attempts to connect. Host/bridge-enriched
+    /// (see [`connected_relays`](Self::connected_relays)); gives "N of M
+    /// connected" context. `None` from the core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_relays: Option<Vec<String>>,
+    /// Most recent profile load/restore failure. **Host/bridge-enriched** —
+    /// restore errors are returned at call time, not retained by the core, so
+    /// the core emits `None` and the bridge layer caches and fills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_load_error: Option<LoadErrorSummary>,
+}
+
+/// Serializable host/bridge-enriched record of the most recent profile
+/// load/restore failure (see [`RuntimeStatusSummary::last_load_error`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoadErrorSummary {
+    pub message: String,
+    /// Unix seconds when the load/restore failure was observed.
+    pub at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -601,7 +632,7 @@ pub struct PendingOperation {
     pub context: PendingOpContext,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PendingOpType {
     Sign,
     Ecdh,
@@ -774,7 +805,8 @@ impl PersistenceHint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OperationFailureCode {
     Timeout,
     InvalidLockedPeerResponse,
@@ -788,6 +820,35 @@ pub struct OperationFailure {
     pub code: OperationFailureCode,
     pub message: String,
     pub failed_peer: Option<String>,
+}
+
+/// Serializable projection of the most-recent operation failure for
+/// `runtime_status()`. Runtime-only (never persisted) — surfaced so hosts can
+/// render a "signing failed" condition without consuming the lossy
+/// `take_failures()` drain. Carries a `failed_at` wall-clock stamp the raw
+/// [`OperationFailure`] lacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperationFailureSummary {
+    pub request_id: String,
+    pub op_type: PendingOpType,
+    pub code: OperationFailureCode,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_peer: Option<String>,
+    pub failed_at: u64,
+}
+
+impl OperationFailureSummary {
+    fn from_failure(failure: &OperationFailure, failed_at: u64) -> Self {
+        Self {
+            request_id: failure.request_id.clone(),
+            op_type: failure.op_type.clone(),
+            code: failure.code,
+            message: failure.message.clone(),
+            failed_peer: failure.failed_peer.clone(),
+            failed_at,
+        }
+    }
 }
 
 /// Runtime-only ECDH cache entry.
@@ -833,6 +894,10 @@ pub struct SigningDevice {
     device_id: DeviceId,
     completions: VecDeque<CompletedOperation>,
     failures: VecDeque<OperationFailure>,
+    /// Runtime-only retention of the most recent `Sign` failure for host
+    /// display. Independent of the lossy `failures` drain; cleared on the next
+    /// successful sign and on `wipe_state`.
+    last_sign_failure: Option<OperationFailureSummary>,
     onboarding_statuses: HashMap<String, OnboardingStatus>,
     latest_request_id: Option<String>,
     runtime_persistence_hint: PersistenceHint,
@@ -893,6 +958,7 @@ impl SigningDevice {
             device_id,
             completions: VecDeque::new(),
             failures: VecDeque::new(),
+            last_sign_failure: None,
             onboarding_statuses: HashMap::new(),
             latest_request_id: None,
             runtime_persistence_hint: PersistenceHint::None,
@@ -943,6 +1009,7 @@ impl SigningDevice {
         self.state.nonce_pool.init_peer(self.share.idx);
         self.completions.clear();
         self.failures.clear();
+        self.last_sign_failure = None;
         self.onboarding_statuses.clear();
         self.latest_request_id = None;
         self.runtime_persistence_hint = PersistenceHint::Immediate;
@@ -1248,6 +1315,12 @@ impl SigningDevice {
             onboarding_statuses: self.onboarding_statuses(),
             pending_operations: self.pending_operations(),
             pending_approvals: self.pending_approvals(),
+            last_sign_failure: self.last_sign_failure.clone(),
+            // Host/bridge-enriched (relay sockets + load errors live outside the
+            // signer core); the bridge layer overwrites these post-call.
+            connected_relays: None,
+            configured_relays: None,
+            last_load_error: None,
         }
     }
 
@@ -1890,7 +1963,34 @@ impl SigningDevice {
         }
         effects.completions.extend(self.take_completions());
         effects.failures.extend(self.take_failures());
+        self.note_last_sign_failure(&effects.completions, &effects.failures);
         Ok(effects)
+    }
+
+    /// Maintain the host-facing `last_sign_failure` retention: a successful sign
+    /// clears it; the newest `Sign` failure in this batch sets it. Non-sign ops
+    /// are ignored. Order: clear-then-set so a same-batch failure wins.
+    fn note_last_sign_failure(
+        &mut self,
+        completions: &[CompletedOperation],
+        failures: &[OperationFailure],
+    ) {
+        if completions
+            .iter()
+            .any(|completion| matches!(completion, CompletedOperation::Sign { .. }))
+        {
+            self.last_sign_failure = None;
+        }
+        if let Some(failure) = failures
+            .iter()
+            .rev()
+            .find(|failure| matches!(failure.op_type, PendingOpType::Sign))
+        {
+            self.last_sign_failure = Some(OperationFailureSummary::from_failure(
+                failure,
+                now_unix_secs(),
+            ));
+        }
     }
 
     pub fn take_completions(&mut self) -> Vec<CompletedOperation> {
@@ -4153,6 +4253,93 @@ mod tests {
             json.contains("\"pending_approvals\""),
             "runtime_status JSON must expose pending_approvals"
         );
+    }
+
+    #[test]
+    fn last_sign_failure_retention_tracks_sign_failures_only_and_clears_on_success() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        assert!(fixture.signer.runtime_status().last_sign_failure.is_none());
+
+        // A non-sign failure must not set the sign-failure retention.
+        fixture.signer.note_last_sign_failure(
+            &[],
+            &[OperationFailure {
+                request_id: "ping-1".to_string(),
+                op_type: PendingOpType::Ping,
+                code: OperationFailureCode::Timeout,
+                message: "ping timeout".to_string(),
+                failed_peer: None,
+            }],
+        );
+        assert!(fixture.signer.runtime_status().last_sign_failure.is_none());
+
+        // A sign failure sets it (newest in the batch wins).
+        fixture.signer.note_last_sign_failure(
+            &[],
+            &[
+                OperationFailure {
+                    request_id: "sign-old".to_string(),
+                    op_type: PendingOpType::Sign,
+                    code: OperationFailureCode::Timeout,
+                    message: "old".to_string(),
+                    failed_peer: None,
+                },
+                OperationFailure {
+                    request_id: "sign-new".to_string(),
+                    op_type: PendingOpType::Sign,
+                    code: OperationFailureCode::PeerRejected,
+                    message: "peer rejected".to_string(),
+                    failed_peer: Some("peerhex".to_string()),
+                },
+            ],
+        );
+        let retained = fixture
+            .signer
+            .runtime_status()
+            .last_sign_failure
+            .expect("sign failure retained");
+        assert_eq!(retained.request_id, "sign-new");
+        assert_eq!(retained.op_type, PendingOpType::Sign);
+        assert_eq!(retained.code, OperationFailureCode::PeerRejected);
+        assert_eq!(retained.failed_peer.as_deref(), Some("peerhex"));
+
+        // A successful sign clears it.
+        fixture.signer.note_last_sign_failure(
+            &[CompletedOperation::Sign {
+                request_id: "sign-ok".to_string(),
+                signatures: vec![],
+            }],
+            &[],
+        );
+        assert!(fixture.signer.runtime_status().last_sign_failure.is_none());
+    }
+
+    #[test]
+    fn runtime_status_last_sign_failure_round_trips_and_omits_when_absent() {
+        // Absent → omitted from JSON (skip_serializing_if); present → wire
+        // round-trip preserves the serializable summary. A wire test, not a
+        // handler test: a serde-shape regression on the new field would slip a
+        // handler-only assertion.
+        let fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let json = serde_json::to_string(&fixture.signer.runtime_status()).expect("serialize");
+        assert!(
+            !json.contains("last_sign_failure"),
+            "absent failure must be omitted from runtime_status JSON"
+        );
+
+        let summary = OperationFailureSummary {
+            request_id: "req-sign".to_string(),
+            op_type: PendingOpType::Sign,
+            code: OperationFailureCode::PeerRejected,
+            message: "peer rejected".to_string(),
+            failed_peer: Some("peerhex".to_string()),
+            failed_at: 1_700_000_123,
+        };
+        let encoded = serde_json::to_string(&summary).expect("serialize summary");
+        assert!(encoded.contains("\"peer_rejected\""), "code is snake_case");
+        let decoded: OperationFailureSummary =
+            serde_json::from_str(&encoded).expect("deserialize summary");
+        assert_eq!(decoded, summary);
     }
 
     #[test]

@@ -34,6 +34,20 @@ pub trait RelayAdapter: Send {
     async fn subscribe(&mut self, filters: Vec<Filter>) -> Result<()>;
     async fn publish(&mut self, event: Event) -> Result<()>;
     async fn next_event(&mut self) -> Result<Event>;
+    /// Relay URLs this adapter is configured to use. `None` means "not
+    /// reported" (the default); `Some` is surfaced as
+    /// `RuntimeStatusSummary::configured_relays`.
+    fn configured_relays(&self) -> Option<Vec<String>> {
+        None
+    }
+    /// Relay URLs currently connected. `None` means "not reported" (the
+    /// default, e.g. test mocks); `Some(empty)` means "reported, zero
+    /// connected" and drives the host all-relays-offline condition. Surfaced as
+    /// `RuntimeStatusSummary::connected_relays`. Takes `&mut self` so the
+    /// adapter future stays `Send` in the bridge actor without a `Sync` bound.
+    async fn connected_relays(&mut self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 pub const DEFAULT_RELAY_BACKOFF_MS: u64 = 50;
@@ -312,7 +326,15 @@ impl Bridge {
                                 let _ = reply.send(Ok(core.readiness()));
                             }
                             BridgeCommand::RuntimeStatus { reply } => {
-                                let _ = reply.send(Ok(core.runtime_status()));
+                                // Enrich the core read-model with bridge-owned
+                                // relay connectivity (the signer core does not
+                                // own relay sockets). `last_load_error` stays
+                                // None here: native restore failures surface in
+                                // host bootstrap, not a running runtime.
+                                let mut status = core.runtime_status();
+                                status.configured_relays = adapter.configured_relays();
+                                status.connected_relays = adapter.connected_relays().await;
+                                let _ = reply.send(Ok(status));
                             }
                             BridgeCommand::RuntimeMetadata { reply } => {
                                 let _ = reply.send(Ok(core.runtime_metadata()));
@@ -895,5 +917,20 @@ impl RelayAdapter for NostrSdkAdapter {
                 return Ok((*event).clone());
             }
         }
+    }
+
+    fn configured_relays(&self) -> Option<Vec<String>> {
+        Some(self.relays.clone())
+    }
+
+    async fn connected_relays(&mut self) -> Option<Vec<String>> {
+        let relays = self.client.relays().await;
+        Some(
+            relays
+                .values()
+                .filter(|relay| relay.is_connected())
+                .map(|relay| relay.url().to_string())
+                .collect(),
+        )
     }
 }
