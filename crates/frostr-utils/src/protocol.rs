@@ -391,6 +391,88 @@ mod tests {
         assert_eq!(secret_ab, secret_bc);
     }
 
+    // Frost-anchored cross-check across thresholds: the threshold-ECDH secret must equal
+    // the group-key ECDH computed from the secret reconstructed by frost's OWN Lagrange
+    // (`frost::keys::reconstruct`, via `recover_key`), and must be independent of which
+    // t-sized quorum participates. Covers t-of-n shapes beyond 2-of-3.
+    #[test]
+    fn ecdh_matches_frost_reconstructed_group_key_across_thresholds() {
+        use bifrost_core::secret::SharePrivateKey;
+        use k256::ProjectivePoint;
+
+        // Fixed external counterparty: secret c, target = x-only(c·G).
+        let c_bytes = [0x42u8; 32];
+        let c_scalar = *SecretKey::from_slice(&c_bytes)
+            .expect("counterparty secret")
+            .to_nonzero_scalar()
+            .as_ref();
+        let target = local_pubkey_from_share(&SharePackage {
+            idx: 1,
+            seckey: SharePrivateKey::new(c_bytes),
+        })
+        .expect("target pubkey");
+
+        for (threshold, count) in [(2u16, 3u16), (3, 5), (3, 4)] {
+            let bundle = create_keyset(CreateKeysetConfig::new("Threshold KAT", threshold, count))
+                .expect("bundle");
+
+            // Group secret via frost's own Lagrange reconstruction.
+            let recovered = crate::recover_key(&crate::types::RecoverKeyInput {
+                group: bundle.group.clone(),
+                shares: bundle.shares.clone(),
+            })
+            .expect("recover");
+            let d_scalar = *SecretKey::from_slice(recovered.signing_key32.expose_bytes())
+                .expect("group secret")
+                .to_nonzero_scalar()
+                .as_ref();
+            // Expected raw-X = X((d·c)·G) = X(group_secret · target_point); X is parity-invariant.
+            let expected = (ProjectivePoint::GENERATOR * (d_scalar * c_scalar)).to_affine();
+            let expected = expected.to_encoded_point(false);
+            let expected_x = expected.x().expect("x coordinate");
+
+            // ECDH over the first t shares.
+            let quorum_a: Vec<u16> = bundle
+                .shares
+                .iter()
+                .take(threshold as usize)
+                .map(|s| s.idx)
+                .collect();
+            let pkgs_a: Vec<_> = bundle
+                .shares
+                .iter()
+                .take(threshold as usize)
+                .map(|s| ecdh_create_from_share(&quorum_a, s, &[target]).expect("pkg a"))
+                .collect();
+            let secret_a = ecdh_finalize(&pkgs_a, target).expect("combine a");
+            assert_eq!(
+                &secret_a[..],
+                expected_x.as_slice(),
+                "(t,n)=({threshold},{count}): combine != frost-reconstructed group ECDH"
+            );
+
+            // A different t-sized quorum (the last t shares) must agree.
+            let tail: Vec<_> = bundle
+                .shares
+                .iter()
+                .rev()
+                .take(threshold as usize)
+                .cloned()
+                .collect();
+            let mut quorum_b: Vec<u16> = tail.iter().map(|s| s.idx).collect();
+            quorum_b.sort_unstable();
+            let pkgs_b: Vec<_> = tail
+                .iter()
+                .map(|s| ecdh_create_from_share(&quorum_b, s, &[target]).expect("pkg b"))
+                .collect();
+            let secret_b = ecdh_finalize(&pkgs_b, target).expect("combine b");
+            assert_eq!(
+                secret_b, secret_a,
+                "(t,n)=({threshold},{count}): quorum independence"
+            );
+        }
+    }
+
     #[test]
     fn stateless_onboard_exchange_roundtrip() {
         let bundle = create_keyset(CreateKeysetConfig::new("Test Group", 2, 3)).expect("bundle");

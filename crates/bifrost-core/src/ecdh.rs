@@ -238,4 +238,68 @@ mod tests {
         let frostr_secret_b = combine_ecdh_packages(&[pkg2b, pkg3b], target).expect("combine b");
         assert_eq!(frostr_secret_b, frostr_secret);
     }
+
+    // Spec-anchored known-answer test: pins a fixed-input threshold ECDH to a stable
+    // raw-X output, so any future change to the Lagrange / point math is caught — not
+    // just internal inconsistency. The pinned answer is cross-checked in-test against an
+    // independent k256 computation of the standard group-key ECDH, and must hold across
+    // every threshold quorum. Re-pin EXPECTED_SECRET_HEX only after a deliberate,
+    // reviewed change to the ECDH derivation.
+    #[test]
+    fn ecdh_threshold_kat() {
+        const EXPECTED_SECRET_HEX: &str =
+            "044cb5cb96a3459b171e913b34b8e85c3bb17ca228aa608d37151ec7e478e8ac";
+
+        let scalar_bytes = |s: Scalar| {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&s.to_bytes());
+            out
+        };
+
+        // Fixed degree-1 sharing polynomial f(x) = a0 + a1*x (a0 = group secret), with
+        // shares at x = 1,2,3; fixed external counterparty secret c, target = x-only(c·G).
+        let a0 = Scalar::from(0x1234_5678_9abc_def0u64);
+        let a1 = Scalar::from(0x0fed_cba9_8765_4321u64);
+        let c = Scalar::from(0x00de_ad00_beef_0042u64);
+        let f = |x: u64| a0 + a1 * Scalar::from(x);
+        let share = |idx: u16| SharePackage {
+            idx,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(f(u64::from(idx)))),
+        };
+        let target = local_pubkey_from_share(&SharePackage {
+            idx: 9,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(c)),
+        })
+        .expect("target pubkey");
+        let group_xonly = local_pubkey_from_share(&SharePackage {
+            idx: 1,
+            seckey: crate::secret::SharePrivateKey::new(scalar_bytes(a0)),
+        })
+        .expect("group pubkey");
+
+        // Independent k256 anchor: standard ECDH(c, group_pubkey), raw X-coordinate.
+        let group_point = point_from_pubkey32(group_xonly).expect("group point");
+        let shared = (ProjectivePoint::from(group_point) * c).to_affine();
+        let ep = shared.to_encoded_point(false);
+        let standard_x = ep.x().expect("x coordinate");
+        assert_eq!(
+            hex::encode(standard_x),
+            EXPECTED_SECRET_HEX,
+            "ECDH KAT drift — re-pin EXPECTED_SECRET_HEX only after a deliberate ECDH change"
+        );
+
+        // Every threshold quorum must reconstruct exactly the pinned secret.
+        for members in [vec![1u16, 2], vec![1, 3], vec![2, 3]] {
+            let pkgs: Vec<_> = members
+                .iter()
+                .map(|&idx| create_ecdh_package(&members, &share(idx), &[target]).expect("package"))
+                .collect();
+            let secret = combine_ecdh_packages(&pkgs, target).expect("combine");
+            assert_eq!(
+                hex::encode(secret),
+                EXPECTED_SECRET_HEX,
+                "quorum {members:?} diverged from the pinned ECDH secret"
+            );
+        }
+    }
 }
