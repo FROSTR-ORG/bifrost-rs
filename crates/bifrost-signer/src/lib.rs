@@ -1073,7 +1073,9 @@ impl SigningDevice {
         let signing_peer_count = peers
             .iter()
             .filter(|peer| {
-                peer.can_sign && self.effective_policy_for_peer(&peer.pubkey).request.sign
+                peer.online
+                    && peer.can_sign
+                    && self.effective_policy_for_peer(&peer.pubkey).request.sign
             })
             .count();
         let ecdh_peer_count = peers
@@ -1254,7 +1256,6 @@ impl SigningDevice {
 
         let envelope = self.decrypt_event(event, &sender)?;
         let now = now_unix_secs();
-        self.state.peer_last_seen.insert(sender.clone(), now);
         self.record_request(&sender, &envelope.request_id, envelope.sent_at, now)?;
 
         let mut outbound = if self
@@ -1263,7 +1264,10 @@ impl SigningDevice {
             .contains_key(&envelope.request_id)
         {
             match self.match_pending_response(&envelope, &sender) {
-                Ok(outbound) => outbound,
+                Ok(outbound) => {
+                    self.state.peer_last_seen.insert(sender.clone(), now);
+                    outbound
+                }
                 Err(err) => {
                     let code = match &envelope.payload {
                         BridgePayload::Error(_) => OperationFailureCode::PeerRejected,
@@ -1279,6 +1283,15 @@ impl SigningDevice {
                 }
             }
         } else {
+            if matches!(
+                &envelope.payload,
+                BridgePayload::PingRequest(_)
+                    | BridgePayload::OnboardRequest(_)
+                    | BridgePayload::SignRequest(_)
+                    | BridgePayload::EcdhRequest(_)
+            ) {
+                self.state.peer_last_seen.insert(sender.clone(), now);
+            }
             self.handle_inbound_request(envelope, sender)?
         };
 
@@ -3065,6 +3078,36 @@ mod tests {
     }
 
     #[test]
+    fn readiness_does_not_report_sign_ready_from_offline_cached_nonces() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let mut peer_state = DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
+        let generated = peer_state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_state.secrets.nonce_pool_secret,
+            )
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, generated);
+
+        let readiness = fixture.signer.readiness();
+        assert!(!readiness.sign_ready);
+        assert_eq!(readiness.signing_peer_count, 0);
+        assert!(
+            readiness
+                .degraded_reasons
+                .contains(&RuntimeDegradedReason::InsufficientSigningPeers)
+        );
+    }
+
+    #[test]
     fn scoped_policy_storage_and_local_policy_profile_respect_target_peer() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
         let peer = fixture.signer.peers[0].clone();
@@ -3426,6 +3469,50 @@ mod tests {
             OperationFailureCode::InvalidLockedPeerResponse
         );
         assert_eq!(failure.failed_peer, Some(locked_peer));
+    }
+
+    #[test]
+    fn orphan_ping_response_does_not_refresh_peer_liveness() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let local_pubkey =
+            decode_member_pubkey(&fixture.group, fixture.local_share.idx).expect("local pubkey");
+        let now = now_unix_secs();
+
+        let inbound = BridgeEnvelope {
+            request_id: "orphan-ping-response".to_string(),
+            sent_at: now,
+            payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
+                policy_profile: None,
+                nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
+            })),
+        };
+        let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
+        let content = super::crypto::encrypt_content_for_peer_with_nonce(
+            *peer_share.seckey.expose_bytes(),
+            &local_pubkey,
+            &plaintext,
+            [8u8; 32],
+        )
+        .expect("encrypt");
+        let event = build_signed_event(
+            *peer_share.seckey.expose_bytes(),
+            fixture.signer.config.event_kind,
+            vec![vec!["p".to_string(), local_pubkey]],
+            content,
+        )
+        .expect("build event");
+
+        let outbound = fixture.signer.process_event(&event).expect("process event");
+        assert!(outbound.is_empty());
+        assert!(
+            fixture.signer.state.peer_last_seen.get(&peer).is_none(),
+            "orphan/stale responses must not make an offline peer look live"
+        );
     }
 
     #[test]
