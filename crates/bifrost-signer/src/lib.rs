@@ -1283,15 +1283,6 @@ impl SigningDevice {
                 }
             }
         } else {
-            if matches!(
-                &envelope.payload,
-                BridgePayload::PingRequest(_)
-                    | BridgePayload::OnboardRequest(_)
-                    | BridgePayload::SignRequest(_)
-                    | BridgePayload::EcdhRequest(_)
-            ) {
-                self.state.peer_last_seen.insert(sender.clone(), now);
-            }
             self.handle_inbound_request(envelope, sender)?
         };
 
@@ -3512,6 +3503,54 @@ mod tests {
         assert!(
             fixture.signer.state.peer_last_seen.get(&peer).is_none(),
             "orphan/stale responses must not make an offline peer look live"
+        );
+    }
+
+    #[test]
+    fn inbound_ping_request_does_not_refresh_peer_liveness() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+        let local_pubkey =
+            decode_member_pubkey(&fixture.group, fixture.local_share.idx).expect("local pubkey");
+        let now = now_unix_secs();
+
+        let inbound = BridgeEnvelope {
+            request_id: "stale-ping-request".to_string(),
+            sent_at: now,
+            payload: BridgePayload::PingRequest(PingPayloadWire::from(PingPayload {
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
+                policy_profile: None,
+                nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
+            })),
+        };
+        let plaintext = encode_bridge_envelope(&inbound).expect("encode envelope");
+        let content = super::crypto::encrypt_content_for_peer_with_nonce(
+            *peer_share.seckey.expose_bytes(),
+            &local_pubkey,
+            &plaintext,
+            [9u8; 32],
+        )
+        .expect("encrypt");
+        let event = build_signed_event(
+            *peer_share.seckey.expose_bytes(),
+            fixture.signer.config.event_kind,
+            vec![vec!["p".to_string(), local_pubkey]],
+            content,
+        )
+        .expect("build event");
+
+        let outbound = fixture.signer.process_event(&event).expect("process event");
+        assert_eq!(
+            outbound.len(),
+            1,
+            "inbound ping requests should still get a response"
+        );
+        assert!(
+            fixture.signer.state.peer_last_seen.get(&peer).is_none(),
+            "inbound requests from relay history must not make an offline peer look live"
         );
     }
 
