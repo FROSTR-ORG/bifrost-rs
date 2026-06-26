@@ -52,6 +52,7 @@ Hosted clients should treat `bifrost-rs` as the signer authority.
 
 - `runtime_status()` is the canonical aggregated read model.
 - `readiness()` is the narrower capability view.
+- `peer_status()` reports peer capability, policy, latency, and nonce-inventory telemetry for operator UIs.
 - `drain_runtime_events()` is incremental and lossy-safe; clients must recover truth from `runtime_status()`.
 - `prepare_sign()` and `prepare_ecdh()` are the normal operation-prep APIs.
 - `wipe_state()` is the canonical signer-side reset path.

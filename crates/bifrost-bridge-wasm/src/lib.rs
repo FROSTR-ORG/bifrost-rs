@@ -1588,6 +1588,92 @@ mod tests {
     }
 
     #[test]
+    fn inbound_sign_nonce_miss_surfaces_sign_failure() {
+        let bundle =
+            create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
+        let group = bundle.group.clone();
+        let alice_share = bundle.shares[0].clone();
+        let bob_share = bundle.shares[1].clone();
+        let bob_peer = hex::encode(&group.members[1].pubkey[1..]);
+        let mut bob_seed_state = DeviceState::new(bob_share.idx, *bob_share.seckey.expose_bytes());
+        let stale_bob_nonces = bob_seed_state
+            .nonce_pool
+            .generate_for_peer(
+                alice_share.idx,
+                10,
+                &bob_seed_state.secrets.nonce_pool_secret,
+            )
+            .expect("generate stale bob nonces");
+
+        let alice_bootstrap = RuntimeBootstrapInput {
+            group: GroupPackageWire::from(group.clone()),
+            share: SharePackageWire::from(alice_share),
+            peers: vec![bob_peer.clone()],
+            initial_peer_nonces: vec![BootstrapPeerNoncesInput {
+                peer: bob_peer.clone(),
+                nonces: stale_bob_nonces.into_iter().map(Into::into).collect(),
+            }],
+        };
+        let bob_bootstrap = RuntimeBootstrapInput {
+            group: GroupPackageWire::from(group),
+            share: SharePackageWire::from(bob_share),
+            peers: vec![hex::encode(&bundle.group.members[0].pubkey[1..])],
+            initial_peer_nonces: Vec::new(),
+        };
+        let now = 1_700_000_000_000u64;
+
+        let mut alice = WasmBridgeRuntime::new();
+        alice
+            .init_runtime(
+                "{}".to_string(),
+                serde_json::to_string(&alice_bootstrap).expect("alice bootstrap"),
+            )
+            .expect("init alice");
+        let mut bob = WasmBridgeRuntime::new();
+        bob.init_runtime(
+            "{}".to_string(),
+            serde_json::to_string(&bob_bootstrap).expect("bob bootstrap"),
+        )
+        .expect("init bob");
+
+        alice
+            .handle_command(
+                serde_json::json!({
+                    "type": "sign",
+                    "message_hex_32": hex::encode([0x77; 32])
+                })
+                .to_string(),
+            )
+            .expect("queue sign");
+        alice.tick(now).expect("tick alice");
+        let outbound: Vec<Event> =
+            serde_json::from_str(&alice.drain_outbound_events().expect("alice outbound"))
+                .expect("decode alice outbound");
+        assert_eq!(outbound.len(), 1);
+
+        bob.handle_inbound_event(
+            serde_json::to_string(&outbound[0]).expect("encode inbound event"),
+        )
+        .expect("bob handle inbound");
+        bob.tick(now + 1).expect("tick bob");
+
+        let failures: serde_json::Value =
+            serde_json::from_str(&bob.drain_failures().expect("bob failures"))
+                .expect("decode failures");
+        let failure_array = failures.as_array().expect("failure array");
+        assert_eq!(failure_array.len(), 1);
+        assert_eq!(failure_array[0]["op_type"], "sign");
+        assert_eq!(failure_array[0]["code"], "peer_rejected");
+        assert!(
+            failure_array[0]["message"]
+                .as_str()
+                .expect("failure message")
+                .to_ascii_lowercase()
+                .contains("nonce unavailable")
+        );
+    }
+
+    #[test]
     fn restore_runtime_round_trip_preserves_runtime_metadata_and_status() {
         let bundle =
             create_keyset(CreateKeysetConfig::new("Test Group", 2, 2)).expect("create keyset");
