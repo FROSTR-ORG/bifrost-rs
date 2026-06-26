@@ -33,7 +33,7 @@ pub use error::{Result, SignerError};
 use event_io::{build_signed_event, event_content, event_kind, event_pubkey_xonly};
 use util::{
     decode_32, decode_member_index, decode_member_pubkey, decode_pubkey32, is_valid_pubkey32_hex,
-    now_unix_secs, random_request_id, shuffle_strings,
+    now_unix_millis, now_unix_secs, random_request_id, shuffle_strings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,8 +157,11 @@ pub struct DeviceState {
     pub manual_policy_overrides: HashMap<String, PeerPolicyOverride>,
     pub remote_scoped_policies: HashMap<String, PeerScopedPolicyProfile>,
     pub remote_nonce_inventory_observations: HashMap<String, PeerNonceInventoryObservation>,
+    pub peer_nonce_inventory_history: HashMap<String, VecDeque<PeerNonceInventorySample>>,
     pub pending_operations: HashMap<String, PendingOperation>,
+    pub pending_operation_started_ms: HashMap<String, u64>,
     pub peer_last_seen: HashMap<String, u64>,
+    pub peer_response_latency_ms: HashMap<String, u64>,
     pub request_seq: u64,
     pub last_active: u64,
     pub version: u32,
@@ -179,8 +182,11 @@ impl DeviceState {
             manual_policy_overrides: HashMap::new(),
             remote_scoped_policies: HashMap::new(),
             remote_nonce_inventory_observations: HashMap::new(),
+            peer_nonce_inventory_history: HashMap::new(),
             pending_operations: HashMap::new(),
+            pending_operation_started_ms: HashMap::new(),
             peer_last_seen: HashMap::new(),
+            peer_response_latency_ms: HashMap::new(),
             request_seq: 1,
             last_active: now_unix_secs(),
             version: Self::VERSION,
@@ -195,7 +201,10 @@ impl DeviceState {
         self.secrets = DeviceSecrets::new(share_seckey);
         self.nonce_pool = NoncePool::new(group_member_idx, NoncePoolConfig::default());
         self.pending_operations.clear();
+        self.pending_operation_started_ms.clear();
         self.remote_nonce_inventory_observations.clear();
+        self.peer_nonce_inventory_history.clear();
+        self.peer_response_latency_ms.clear();
         self.last_active = now_unix_secs();
     }
 
@@ -212,8 +221,11 @@ impl DeviceState {
             manual_policy_overrides: persisted.manual_policy_overrides,
             remote_scoped_policies: persisted.remote_scoped_policies,
             remote_nonce_inventory_observations: persisted.remote_nonce_inventory_observations,
+            peer_nonce_inventory_history: HashMap::new(),
             pending_operations: persisted.pending_operations,
+            pending_operation_started_ms: HashMap::new(),
             peer_last_seen: persisted.peer_last_seen,
+            peer_response_latency_ms: HashMap::new(),
             request_seq: persisted.request_seq,
             last_active: persisted.last_active,
             version: persisted.version,
@@ -272,6 +284,12 @@ pub struct PeerNonceInventoryObservation {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerNonceInventorySample {
+    pub updated_at: u64,
+    pub held_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct OnboardingBootstrapSeed {
     pub request_nonces: Vec<DerivedPublicNonce>,
@@ -320,6 +338,8 @@ pub fn finalize_onboarding_bootstrap_seed(
         .nonce_pool
         .store_incoming(inviter_member_idx, inviter_nonces);
     state.pending_operations.clear();
+    state.pending_operation_started_ms.clear();
+    state.peer_nonce_inventory_history.clear();
     state.last_active = now_unix_secs();
     Ok(state)
 }
@@ -405,7 +425,14 @@ pub struct PeerStatus {
     pub incoming_available: usize,
     pub outgoing_available: usize,
     pub outgoing_spent: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nonce_inventory_history: Vec<PeerNonceInventorySample>,
     pub can_sign: bool,
+    pub can_ping: bool,
+    pub can_onboard: bool,
+    pub can_ecdh: bool,
     pub should_send_nonces: bool,
 }
 
@@ -679,6 +706,7 @@ pub struct SigningDevice {
 
 impl SigningDevice {
     const PEER_ONLINE_GRACE_SECS: u64 = 120;
+    const PEER_NONCE_HISTORY_LIMIT: usize = 8;
 
     pub fn new(
         group: GroupPackage,
@@ -959,6 +987,7 @@ impl SigningDevice {
                 let online = last_seen
                     .map(|seen| now.saturating_sub(seen) <= Self::PEER_ONLINE_GRACE_SECS)
                     .unwrap_or(false);
+                let effective_policy = self.effective_policy_for_peer(peer);
                 Some(PeerStatus {
                     idx,
                     pubkey: peer.clone(),
@@ -968,7 +997,17 @@ impl SigningDevice {
                     incoming_available: stats.incoming_available,
                     outgoing_available: stats.outgoing_available,
                     outgoing_spent: stats.outgoing_spent,
-                    can_sign: stats.can_sign,
+                    latency_ms: self.state.peer_response_latency_ms.get(peer).copied(),
+                    nonce_inventory_history: self
+                        .state
+                        .peer_nonce_inventory_history
+                        .get(peer)
+                        .map(|samples| samples.iter().cloned().collect())
+                        .unwrap_or_default(),
+                    can_sign: stats.can_sign && effective_policy.request.sign,
+                    can_ping: online && effective_policy.request.ping,
+                    can_onboard: online && effective_policy.request.onboard,
+                    can_ecdh: online && effective_policy.request.ecdh,
                     should_send_nonces: self.peer_needs_nonce_refill(peer, idx),
                 })
             })
@@ -1275,7 +1314,25 @@ impl SigningDevice {
                 }
             }
         } else {
-            self.handle_inbound_request(envelope, sender)?
+            let request_id = envelope.request_id.clone();
+            let failure_op_type = inbound_request_op_type(&envelope.payload);
+            match self.handle_inbound_request(envelope, sender.clone()) {
+                Ok(outbound) => outbound,
+                Err(err) => {
+                    if let Some(op_type) = failure_op_type {
+                        self.failures.push_back(OperationFailure {
+                            request_id,
+                            op_type,
+                            code: OperationFailureCode::PeerRejected,
+                            message: err.to_string(),
+                            failed_peer: Some(sender),
+                        });
+                        Vec::new()
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
         };
 
         self.state.last_active = now;
@@ -1286,7 +1343,8 @@ impl SigningDevice {
     }
 
     pub fn initiate_sign(&mut self, message: [u8; 32]) -> Result<Vec<Event>> {
-        let now = now_unix_secs();
+        let now_ms = now_unix_millis();
+        let now = now_ms / 1_000;
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
         if let Some(signatures) = self.sig_cache_get(message, now) {
@@ -1388,7 +1446,7 @@ impl SigningDevice {
         )
         .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
-        self.state.pending_operations.insert(
+        self.insert_pending_operation(
             request_id.clone(),
             PendingOperation {
                 op_type: PendingOpType::Sign,
@@ -1403,6 +1461,7 @@ impl SigningDevice {
                     partials: vec![self_partial],
                 },
             },
+            now_ms,
         );
         self.latest_request_id = Some(request_id.clone());
 
@@ -1415,7 +1474,8 @@ impl SigningDevice {
     }
 
     pub fn initiate_ecdh(&mut self, target: [u8; 32]) -> Result<Vec<Event>> {
-        let now = now_unix_secs();
+        let now_ms = now_unix_millis();
+        let now = now_ms / 1_000;
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
         if let Some(shared_secret) = self.ecdh_cache_get(target, now) {
@@ -1455,7 +1515,7 @@ impl SigningDevice {
             return Ok(Vec::new());
         }
 
-        self.state.pending_operations.insert(
+        self.insert_pending_operation(
             request_id.clone(),
             PendingOperation {
                 op_type: PendingOpType::Ecdh,
@@ -1471,6 +1531,7 @@ impl SigningDevice {
                     responses: Vec::new(),
                 },
             },
+            now_ms,
         );
 
         let envelope = BridgeEnvelope {
@@ -1499,9 +1560,10 @@ impl SigningDevice {
 
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
-        let now = now_unix_secs();
+        let now_ms = now_unix_millis();
+        let now = now_ms / 1_000;
 
-        self.state.pending_operations.insert(
+        self.insert_pending_operation(
             request_id.clone(),
             PendingOperation {
                 op_type: PendingOpType::Ping,
@@ -1513,6 +1575,7 @@ impl SigningDevice {
                 collected_responses: Vec::new(),
                 context: PendingOpContext::PingRequest,
             },
+            now_ms,
         );
 
         let envelope = BridgeEnvelope {
@@ -1538,7 +1601,8 @@ impl SigningDevice {
             .ok_or_else(|| SignerError::UnknownPeer(peer.to_string()))?;
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
-        let now = now_unix_secs();
+        let now_ms = now_unix_millis();
+        let now = now_ms / 1_000;
         let request_nonces = {
             let DeviceState {
                 nonce_pool,
@@ -1554,7 +1618,7 @@ impl SigningDevice {
                 .map_err(|e| SignerError::InvalidRequest(e.to_string()))?
         };
 
-        self.state.pending_operations.insert(
+        self.insert_pending_operation(
             request_id.clone(),
             PendingOperation {
                 op_type: PendingOpType::Onboard,
@@ -1566,6 +1630,7 @@ impl SigningDevice {
                 collected_responses: Vec::new(),
                 context: PendingOpContext::OnboardRequest,
             },
+            now_ms,
         );
 
         let envelope = BridgeEnvelope {
@@ -1647,6 +1712,7 @@ impl SigningDevice {
 
     pub fn expire_stale(&mut self, now: u64) -> Vec<OperationFailure> {
         let mut stale = Vec::new();
+        let mut expired_ids = Vec::new();
         self.state.pending_operations.retain(|id, op| {
             if op.timeout_at <= now {
                 stale.push(OperationFailure {
@@ -1656,11 +1722,15 @@ impl SigningDevice {
                     message: "locked peer response timeout".to_string(),
                     failed_peer: None,
                 });
+                expired_ids.push(id.clone());
                 false
             } else {
                 true
             }
         });
+        for id in expired_ids {
+            self.state.pending_operation_started_ms.remove(&id);
+        }
         stale
     }
 
@@ -1796,6 +1866,7 @@ impl SigningDevice {
         failed_peer: Option<String>,
     ) {
         if let Some(op) = self.state.pending_operations.remove(request_id) {
+            self.state.pending_operation_started_ms.remove(request_id);
             self.failures.push_back(OperationFailure {
                 request_id: request_id.to_string(),
                 op_type: op.op_type,
@@ -1804,6 +1875,37 @@ impl SigningDevice {
                 failed_peer,
             });
         }
+    }
+
+    fn insert_pending_operation(
+        &mut self,
+        request_id: String,
+        operation: PendingOperation,
+        started_at_ms: u64,
+    ) {
+        self.state
+            .pending_operation_started_ms
+            .insert(request_id.clone(), started_at_ms);
+        self.state.pending_operations.insert(request_id, operation);
+    }
+
+    fn record_peer_response_latency(
+        &mut self,
+        request_id: &str,
+        operation: &PendingOperation,
+        peer: &str,
+        now_ms: u64,
+    ) {
+        let started_at_ms = self
+            .state
+            .pending_operation_started_ms
+            .get(request_id)
+            .copied()
+            .unwrap_or_else(|| operation.started_at.saturating_mul(1_000));
+        let latency_ms = now_ms.saturating_sub(started_at_ms);
+        self.state
+            .peer_response_latency_ms
+            .insert(peer.to_string(), latency_ms);
     }
 
     fn decrypt_event(&self, event: &Event, sender33: &str) -> Result<BridgeEnvelope> {
@@ -2140,7 +2242,8 @@ impl SigningDevice {
         sender: &str,
     ) -> Result<Vec<Event>> {
         let request_id = envelope.request_id.clone();
-        let now = now_unix_secs();
+        let now_ms = now_unix_millis();
+        let now = now_ms / 1_000;
 
         let mut should_complete = false;
         let mut completion: Option<CompletedOperation> = None;
@@ -2314,6 +2417,7 @@ impl SigningDevice {
             }
         }
 
+        self.record_peer_response_latency(&request_id, &op, sender, now_ms);
         op.collected_responses.push(CollectedResponse {
             peer: sender.to_string(),
             request_id: request_id.clone(),
@@ -2323,6 +2427,7 @@ impl SigningDevice {
 
         if should_complete {
             self.state.pending_operations.remove(&request_id);
+            self.state.pending_operation_started_ms.remove(&request_id);
             if let Some(done) = completion {
                 self.completions.push_back(done);
             }
@@ -2479,6 +2584,7 @@ impl SigningDevice {
             .collect::<Vec<_>>();
         normalized_codes.sort_unstable();
         normalized_codes.dedup();
+        self.record_peer_nonce_inventory_sample(peer, updated_at, normalized_codes.len());
         self.state.remote_nonce_inventory_observations.insert(
             peer.to_string(),
             PeerNonceInventoryObservation {
@@ -2486,6 +2592,26 @@ impl SigningDevice {
                 updated_at,
             },
         );
+    }
+
+    fn record_peer_nonce_inventory_sample(
+        &mut self,
+        peer: &str,
+        updated_at: u64,
+        held_count: usize,
+    ) {
+        let samples = self
+            .state
+            .peer_nonce_inventory_history
+            .entry(peer.to_string())
+            .or_default();
+        samples.push_back(PeerNonceInventorySample {
+            updated_at,
+            held_count,
+        });
+        while samples.len() > Self::PEER_NONCE_HISTORY_LIMIT {
+            samples.pop_front();
+        }
     }
 
     fn advertised_nonces_for_peer(
@@ -2627,11 +2753,26 @@ fn extract_recipient_p_tags(event: &Event) -> Vec<String> {
         .collect()
 }
 
+fn inbound_request_op_type(payload: &BridgePayload) -> Option<PendingOpType> {
+    match payload {
+        BridgePayload::SignRequest(_) => Some(PendingOpType::Sign),
+        BridgePayload::EcdhRequest(_) => Some(PendingOpType::Ecdh),
+        BridgePayload::PingRequest(_) => Some(PendingOpType::Ping),
+        BridgePayload::OnboardRequest(_) => Some(PendingOpType::Onboard),
+        BridgePayload::SignResponse(_)
+        | BridgePayload::EcdhResponse(_)
+        | BridgePayload::PingResponse(_)
+        | BridgePayload::OnboardResponse(_)
+        | BridgePayload::Error(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bifrost_codec::wire::{DerivedPublicNonceWire, OnboardRequestWire};
     use bifrost_core::MethodPolicy;
+    use bifrost_core::types::MethodPolicyOverride;
     use frostr_utils::{CreateKeysetConfig, create_keyset};
 
     struct Fixture {
@@ -2888,6 +3029,139 @@ mod tests {
         assert!(status.known);
         assert!(status.online);
         assert!(status.last_seen.is_some());
+    }
+
+    #[test]
+    fn peer_status_reports_method_capabilities_from_policy() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), now_unix_secs());
+
+        fixture
+            .signer
+            .set_peer_policy_override(
+                &peer,
+                PeerPolicyOverride {
+                    request: MethodPolicyOverride {
+                        ping: PolicyOverrideValue::Deny,
+                        onboard: PolicyOverrideValue::Allow,
+                        sign: PolicyOverrideValue::Unset,
+                        ecdh: PolicyOverrideValue::Allow,
+                        echo: PolicyOverrideValue::Unset,
+                    },
+                    respond: MethodPolicyOverride::default(),
+                },
+            )
+            .expect("policy override");
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer status");
+
+        assert!(!status.can_ping);
+        assert!(status.can_onboard);
+        assert!(status.can_ecdh);
+    }
+
+    #[test]
+    fn peer_status_reports_latest_response_latency() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let request_id = "req-latency".to_string();
+        let sender = fixture.signer.peers[0].clone();
+        let now = now_unix_secs();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(sender.clone(), now);
+        fixture.signer.state.pending_operations.insert(
+            request_id.clone(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: request_id.clone(),
+                started_at: now.saturating_sub(2),
+                timeout_at: now + 30,
+                target_peers: vec![sender.clone()],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::PingRequest,
+            },
+        );
+
+        let response = BridgeEnvelope {
+            request_id,
+            sent_at: now,
+            payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
+                policy_profile: None,
+            })),
+        };
+
+        fixture
+            .signer
+            .match_pending_response(&response, &sender)
+            .expect("match ping response");
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == sender)
+            .expect("peer status");
+        let latency_ms = status.latency_ms.expect("latency");
+
+        assert!(latency_ms >= 2_000);
+        assert!(latency_ms < 3_500);
+    }
+
+    #[test]
+    fn peer_status_reports_nonce_inventory_history() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_idx = share_for_peer(&fixture.group, &fixture.shares, &peer).idx;
+        let generated = fixture
+            .signer
+            .state
+            .nonce_pool
+            .generate_for_peer(peer_idx, 3, &fixture.signer.state.secrets.nonce_pool_secret)
+            .expect("generate outgoing nonces");
+        let held_codes = generated.iter().map(|nonce| nonce.code).collect::<Vec<_>>();
+
+        fixture.signer.store_remote_nonce_inventory_observation(
+            &peer,
+            peer_idx,
+            vec![held_codes[0]],
+            100,
+        );
+        fixture.signer.store_remote_nonce_inventory_observation(
+            &peer,
+            peer_idx,
+            vec![held_codes[0], held_codes[1], [0xFEu8; 32]],
+            101,
+        );
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == peer)
+            .expect("peer status");
+        let samples = status
+            .nonce_inventory_history
+            .iter()
+            .map(|sample| (sample.updated_at, sample.held_count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(samples, vec![(100, 1), (101, 2)]);
     }
 
     #[test]
@@ -3290,6 +3564,65 @@ mod tests {
             OperationFailureCode::InvalidLockedPeerResponse
         );
         assert_eq!(failure.failed_peer, Some(locked_peer));
+    }
+
+    #[test]
+    fn inbound_sign_request_failure_reports_sign_op_type() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let locked_peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &locked_peer);
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+
+        let advertised = peer_signer
+            .state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_signer.state.secrets.nonce_pool_secret,
+            )
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, advertised.clone());
+
+        let request = fixture
+            .signer
+            .initiate_sign([0x55; 32])
+            .expect("initiate sign");
+        assert_eq!(request.len(), 1);
+        let envelope =
+            decode_envelope_for_local(&peer_share, fixture.signer.local_pubkey32(), &request[0]);
+
+        peer_signer
+            .state
+            .nonce_pool
+            .take_outgoing_signing_nonces_many(fixture.local_share.idx, &[advertised[0].code])
+            .expect("spend referenced peer nonce");
+
+        let outbound = peer_signer
+            .process_event(&request[0])
+            .expect("inbound failure is surfaced through failures");
+        assert!(outbound.is_empty());
+
+        let failures = peer_signer.take_failures();
+        assert_eq!(failures.len(), 1);
+        let failure = &failures[0];
+        assert_eq!(failure.request_id, envelope.request_id);
+        assert!(matches!(failure.op_type, PendingOpType::Sign));
+        assert_eq!(failure.code, OperationFailureCode::PeerRejected);
+        assert!(
+            failure
+                .message
+                .to_ascii_lowercase()
+                .contains("nonce unavailable")
+        );
+        assert_eq!(
+            failure.failed_peer.as_deref(),
+            Some(fixture.signer.local_pubkey32())
+        );
     }
 
     #[test]

@@ -19,6 +19,19 @@ pub(crate) fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn now_unix_millis() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return js_sys::Date::now().floor() as u64;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub(crate) fn decode_member_index(members: &[MemberPackage], peer: &str) -> Result<u16> {
     if peer != peer.to_ascii_lowercase() {
         return Err(SignerError::InvalidConfig(
