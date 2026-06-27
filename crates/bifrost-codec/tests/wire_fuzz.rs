@@ -235,6 +235,11 @@ fn gen_ping(rng: &mut Rng) -> PingPayloadWire {
         version: if rng.bool() { 2 } else { rng.u16() },
         advertised_nonces: (0..list_len(rng).min(6)).map(|_| gen_nonce(rng)).collect(),
         held_peer_nonce_codes: (0..list_len(rng).min(6)).map(|_| field(rng, 32)).collect(),
+        recognized_peer_nonce_codes: if rng.bool() {
+            None
+        } else {
+            Some((0..list_len(rng).min(6)).map(|_| field(rng, 32)).collect())
+        },
         policy_profile: if rng.bool() {
             None
         } else {

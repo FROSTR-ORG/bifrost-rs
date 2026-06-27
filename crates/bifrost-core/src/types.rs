@@ -568,7 +568,10 @@ mod tests {
         assert_eq!(onboard.group.members.len(), 2);
         assert_eq!(ping.version, 2);
         assert_eq!(ping.held_peer_nonce_codes.len(), 1);
-        assert_eq!(ping.recognized_peer_nonce_codes.as_deref(), Some(&[[12u8; 32]][..]));
+        assert_eq!(
+            ping.recognized_peer_nonce_codes.as_deref(),
+            Some(&[[12u8; 32]][..])
+        );
         assert_eq!(
             ping.policy_profile
                 .as_ref()

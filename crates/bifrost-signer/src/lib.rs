@@ -2301,11 +2301,7 @@ impl SigningDevice {
                     request_id: served_request_id.clone(),
                     sent_at: now,
                     payload: BridgePayload::PingResponse(PingPayloadWire::from(
-                        self.ping_payload(
-                            &sender,
-                            sender_idx,
-                            Some(recognized_peer_nonce_codes),
-                        )?,
+                        self.ping_payload(&sender, sender_idx, Some(recognized_peer_nonce_codes))?,
                     )),
                 };
                 let outbound = self.encrypt_for_peers(&[sender], &response)?;
@@ -3003,9 +2999,10 @@ impl SigningDevice {
             version: 2,
             advertised_nonces: self.advertised_nonces_for_peer(peer, peer_idx)?,
             held_peer_nonce_codes: self.state.nonce_pool.incoming_nonce_codes(peer_idx),
-            recognized_peer_nonce_codes: Some(recognized_peer_nonce_codes.unwrap_or_else(|| {
-                self.normalized_remote_held_nonce_codes(peer, peer_idx)
-            })),
+            recognized_peer_nonce_codes: Some(
+                recognized_peer_nonce_codes
+                    .unwrap_or_else(|| self.normalized_remote_held_nonce_codes(peer, peer_idx)),
+            ),
             policy_profile: Some(self.local_policy_profile_for(peer)?),
             nonce_pool_generation: self.state.nonce_pool.generation(),
         })
