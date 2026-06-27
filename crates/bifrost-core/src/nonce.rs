@@ -236,10 +236,37 @@ impl NoncePool {
         }
     }
 
+    pub fn retain_incoming_codes(&mut self, peer_idx: u16, codes: &[Bytes32]) {
+        let Some(map) = self.incoming.get_mut(&peer_idx) else {
+            return;
+        };
+        let retain = codes.iter().copied().collect::<HashSet<_>>();
+        map.retain(|code, _| retain.contains(code));
+        if let Some(order) = self.incoming_order.get_mut(&peer_idx) {
+            order.retain(|code| map.contains_key(code));
+        }
+    }
+
     pub fn consume_incoming(&mut self, peer_idx: u16) -> Option<MemberPublicNonce> {
         let map = self.incoming.get_mut(&peer_idx)?;
         let order = self.incoming_order.get_mut(&peer_idx)?;
         while let Some(code) = order.pop_front() {
+            if let Some(nonce) = map.remove(&code) {
+                return Some(MemberPublicNonce {
+                    idx: peer_idx,
+                    binder_pn: nonce.binder_pn,
+                    hidden_pn: nonce.hidden_pn,
+                    code: nonce.code,
+                });
+            }
+        }
+        None
+    }
+
+    pub fn consume_latest_incoming(&mut self, peer_idx: u16) -> Option<MemberPublicNonce> {
+        let map = self.incoming.get_mut(&peer_idx)?;
+        let order = self.incoming_order.get_mut(&peer_idx)?;
+        while let Some(code) = order.pop_back() {
             if let Some(nonce) = map.remove(&code) {
                 return Some(MemberPublicNonce {
                     idx: peer_idx,
@@ -531,5 +558,52 @@ mod tests {
         let consumed_second = pool.consume_incoming(2).expect("second nonce");
         assert_eq!(consumed_first.code, first.code);
         assert_eq!(consumed_second.code, second.code);
+    }
+
+    #[test]
+    fn retain_incoming_codes_prunes_stale_entries_and_order() {
+        let mut pool = NoncePool::new(1, NoncePoolConfig::default());
+        pool.init_peer(2);
+
+        let stale = DerivedPublicNonce {
+            binder_pn: [2u8; 33],
+            hidden_pn: [3u8; 33],
+            code: [10u8; 32],
+        };
+        let current = DerivedPublicNonce {
+            binder_pn: [4u8; 33],
+            hidden_pn: [5u8; 33],
+            code: [11u8; 32],
+        };
+        pool.store_incoming(2, vec![stale, current.clone()]);
+        pool.retain_incoming_codes(2, &[current.code]);
+
+        let consumed = pool.consume_incoming(2).expect("retained nonce");
+        assert_eq!(consumed.code, current.code);
+        assert!(pool.consume_incoming(2).is_none());
+    }
+
+    #[test]
+    fn consume_latest_incoming_prefers_newly_stored_nonces() {
+        let mut pool = NoncePool::new(1, NoncePoolConfig::default());
+        pool.init_peer(2);
+
+        let old = DerivedPublicNonce {
+            binder_pn: [2u8; 33],
+            hidden_pn: [3u8; 33],
+            code: [10u8; 32],
+        };
+        let new = DerivedPublicNonce {
+            binder_pn: [4u8; 33],
+            hidden_pn: [5u8; 33],
+            code: [11u8; 32],
+        };
+        pool.store_incoming(2, vec![old.clone()]);
+        pool.store_incoming(2, vec![new.clone()]);
+
+        let consumed_new = pool.consume_latest_incoming(2).expect("latest nonce");
+        let consumed_old = pool.consume_latest_incoming(2).expect("old nonce");
+        assert_eq!(consumed_new.code, new.code);
+        assert_eq!(consumed_old.code, old.code);
     }
 }

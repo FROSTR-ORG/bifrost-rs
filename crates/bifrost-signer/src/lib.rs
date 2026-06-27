@@ -716,6 +716,16 @@ pub enum CompletedOperation {
         request_id: String,
         peer: String,
     },
+    /// Recorded by the responder after it answers a ping request.
+    PingServed {
+        request_id: String,
+        peer: String,
+    },
+    /// Recorded by the responder after it returns a signing share.
+    SignServed {
+        request_id: String,
+        peer: String,
+    },
     Onboard {
         request_id: String,
         group_member_count: usize,
@@ -737,6 +747,8 @@ impl CompletedOperation {
             CompletedOperation::Sign { request_id, .. }
             | CompletedOperation::Ecdh { request_id, .. }
             | CompletedOperation::Ping { request_id, .. }
+            | CompletedOperation::PingServed { request_id, .. }
+            | CompletedOperation::SignServed { request_id, .. }
             | CompletedOperation::Onboard { request_id, .. }
             | CompletedOperation::OnboardServed { request_id, .. } => request_id,
         }
@@ -1648,7 +1660,7 @@ impl SigningDevice {
             let nonce = self
                 .state
                 .nonce_pool
-                .consume_incoming(idx)
+                .consume_latest_incoming(idx)
                 .ok_or(SignerError::NonceUnavailable)?;
             member_nonce_sets.push(bifrost_core::types::MemberNonceCommitmentSet {
                 idx,
@@ -1821,7 +1833,7 @@ impl SigningDevice {
             .member_idx_by_pubkey
             .get(peer)
             .ok_or_else(|| SignerError::UnknownPeer(peer.to_string()))?;
-        let payload = self.ping_payload(peer, peer_idx)?;
+        let payload = self.ping_payload(peer, peer_idx, None)?;
 
         let request_id = self.next_request_id();
         self.latest_request_id = Some(request_id.clone());
@@ -2265,12 +2277,13 @@ impl SigningDevice {
                         SignerError::InvalidRequest(e.to_string())
                     })?;
                 let peer_generation = ping.nonce_pool_generation;
+                let recognized_peer_nonce_codes = self
+                    .recognized_peer_nonce_codes_for_reported_inventory(
+                        sender_idx,
+                        &ping.held_peer_nonce_codes,
+                    );
                 self.reconcile_peer_generation(&sender, sender_idx, peer_generation);
-                if !ping.advertised_nonces.is_empty() {
-                    self.state
-                        .nonce_pool
-                        .store_incoming(sender_idx, ping.advertised_nonces);
-                }
+                self.apply_ping_nonce_payload(sender_idx, &ping);
                 self.store_remote_nonce_inventory_observation(
                     &sender,
                     sender_idx,
@@ -2282,14 +2295,25 @@ impl SigningDevice {
                     self.store_remote_scoped_policy(&sender, profile)?;
                 }
 
+                let served_request_id = envelope.request_id;
+                let served_peer = sender.clone();
                 let response = BridgeEnvelope {
-                    request_id: envelope.request_id,
+                    request_id: served_request_id.clone(),
                     sent_at: now,
                     payload: BridgePayload::PingResponse(PingPayloadWire::from(
-                        self.ping_payload(&sender, sender_idx)?,
+                        self.ping_payload(
+                            &sender,
+                            sender_idx,
+                            Some(recognized_peer_nonce_codes),
+                        )?,
                     )),
                 };
-                self.encrypt_for_peers(&[sender], &response)
+                let outbound = self.encrypt_for_peers(&[sender], &response)?;
+                self.completions.push_back(CompletedOperation::PingServed {
+                    request_id: served_request_id,
+                    peer: served_peer,
+                });
+                Ok(outbound)
             }
             BridgePayload::OnboardRequest(wire) => {
                 let request: bifrost_core::types::OnboardRequest =
@@ -2464,12 +2488,19 @@ impl SigningDevice {
                     partial.replenish = Some(replenish);
                 }
 
+                let served_request_id = envelope.request_id;
+                let served_peer = sender.clone();
                 let response = BridgeEnvelope {
-                    request_id: envelope.request_id,
+                    request_id: served_request_id.clone(),
                     sent_at: now,
                     payload: BridgePayload::SignResponse(PartialSigPackageWire::from(partial)),
                 };
-                self.encrypt_for_peers(&[sender], &response)
+                let outbound = self.encrypt_for_peers(&[sender], &response)?;
+                self.completions.push_back(CompletedOperation::SignServed {
+                    request_id: served_request_id,
+                    peer: served_peer,
+                });
+                Ok(outbound)
             }
             BridgePayload::EcdhRequest(wire) => {
                 let req: EcdhPackage =
@@ -2547,11 +2578,7 @@ impl SigningDevice {
                     .ok_or_else(|| SignerError::UnknownPeer(sender.to_string()))?;
                 let peer_generation = ping.nonce_pool_generation;
                 self.reconcile_peer_generation(sender, sender_idx, peer_generation);
-                if !ping.advertised_nonces.is_empty() {
-                    self.state
-                        .nonce_pool
-                        .store_incoming(sender_idx, ping.advertised_nonces);
-                }
+                self.apply_ping_nonce_payload(sender_idx, &ping);
                 self.store_remote_nonce_inventory_observation(
                     sender,
                     sender_idx,
@@ -2845,6 +2872,26 @@ impl SigningDevice {
         held_codes
     }
 
+    fn recognized_peer_nonce_codes_for_reported_inventory(
+        &self,
+        peer_idx: u16,
+        held_codes: &[Bytes32],
+    ) -> Vec<Bytes32> {
+        let current_codes = self.state.nonce_pool.outgoing_public_nonce_codes(peer_idx);
+        if current_codes.is_empty() || held_codes.is_empty() {
+            return Vec::new();
+        }
+        let current_code_set = current_codes.into_iter().collect::<HashSet<_>>();
+        let mut recognized_codes = held_codes
+            .iter()
+            .copied()
+            .filter(|code| current_code_set.contains(code))
+            .collect::<Vec<_>>();
+        recognized_codes.sort_unstable();
+        recognized_codes.dedup();
+        recognized_codes
+    }
+
     fn peer_needs_nonce_refill(&self, peer: &str, peer_idx: u16) -> bool {
         self.normalized_remote_held_nonce_codes(peer, peer_idx)
             .len()
@@ -2946,14 +2993,39 @@ impl SigningDevice {
             .collect())
     }
 
-    fn ping_payload(&mut self, peer: &str, peer_idx: u16) -> Result<PingPayload> {
+    fn ping_payload(
+        &mut self,
+        peer: &str,
+        peer_idx: u16,
+        recognized_peer_nonce_codes: Option<Vec<Bytes32>>,
+    ) -> Result<PingPayload> {
         Ok(PingPayload {
             version: 2,
             advertised_nonces: self.advertised_nonces_for_peer(peer, peer_idx)?,
             held_peer_nonce_codes: self.state.nonce_pool.incoming_nonce_codes(peer_idx),
+            recognized_peer_nonce_codes: Some(recognized_peer_nonce_codes.unwrap_or_else(|| {
+                self.normalized_remote_held_nonce_codes(peer, peer_idx)
+            })),
             policy_profile: Some(self.local_policy_profile_for(peer)?),
             nonce_pool_generation: self.state.nonce_pool.generation(),
         })
+    }
+
+    fn apply_ping_nonce_payload(&mut self, peer_idx: u16, payload: &PingPayload) {
+        if let Some(recognized_codes) = payload.recognized_peer_nonce_codes.as_ref() {
+            let mut retained = recognized_codes.clone();
+            retained.extend(payload.advertised_nonces.iter().map(|nonce| nonce.code));
+            retained.sort_unstable();
+            retained.dedup();
+            self.state
+                .nonce_pool
+                .retain_incoming_codes(peer_idx, &retained);
+        }
+        if !payload.advertised_nonces.is_empty() {
+            self.state
+                .nonce_pool
+                .store_incoming(peer_idx, payload.advertised_nonces.clone());
+        }
     }
 
     fn reject_request(
@@ -3457,6 +3529,143 @@ mod tests {
         let ready_idx =
             decode_member_index(&fixture.group.members, &ready_peer).expect("ready idx");
         assert_eq!(session.members, vec![fixture.local_share.idx, ready_idx]);
+
+        let responder_peers = fixture
+            .group
+            .members
+            .iter()
+            .filter(|member| member.idx != ready_share.idx)
+            .map(|member| hex::encode(&member.pubkey[1..]))
+            .collect::<Vec<_>>();
+        let mut responder = SigningDevice::new(
+            fixture.group.clone(),
+            ready_share,
+            responder_peers,
+            peer_state,
+            DeviceConfig::default(),
+        )
+        .expect("ready peer signer");
+        let responder_effects = responder
+            .apply(SignerInput::ProcessEvent {
+                event: outbound[0].clone(),
+            })
+            .expect("process sign request");
+        assert_eq!(responder_effects.outbound.len(), 1);
+        let sign_served_peer = responder_effects
+            .completions
+            .iter()
+            .find_map(|completion| match completion {
+                CompletedOperation::SignServed { peer, .. } => Some(peer.clone()),
+                _ => None,
+            })
+            .expect("expected sign-served completion");
+        assert_eq!(sign_served_peer, fixture.signer.local_pubkey32());
+    }
+
+    #[test]
+    fn ping_refill_prunes_stale_peer_nonces_before_signing() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+
+        let mut stale_peer_state =
+            DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
+        let stale_nonces = stale_peer_state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &stale_peer_state.secrets.nonce_pool_secret,
+            )
+            .expect("generate stale peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, stale_nonces);
+        assert!(fixture.signer.state.nonce_pool.can_sign(peer_share.idx));
+
+        let mut current_peer = build_peer_signer(&fixture.group, &peer_share);
+        let ping = fixture
+            .signer
+            .apply(SignerInput::BeginPing { peer: peer.clone() })
+            .expect("begin sync ping")
+            .outbound;
+        assert_eq!(ping.len(), 1);
+
+        let response = current_peer
+            .process_event(&ping[0])
+            .expect("peer processes sync ping");
+        assert_eq!(response.len(), 1);
+        fixture
+            .signer
+            .process_event(&response[0])
+            .expect("requester processes sync response");
+
+        let request = fixture
+            .signer
+            .initiate_sign([0x66; 32])
+            .expect("initiate sign after sync");
+        assert_eq!(request.len(), 1);
+
+        let effects = current_peer
+            .apply(SignerInput::ProcessEvent {
+                event: request[0].clone(),
+            })
+            .expect("current peer processes sign request");
+        assert_eq!(effects.outbound.len(), 1);
+    }
+
+    #[test]
+    fn initiate_sign_prefers_newly_advertised_peer_nonces() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
+
+        let mut stale_peer_state =
+            DeviceState::new(peer_share.idx, *peer_share.seckey.expose_bytes());
+        let stale_nonces = stale_peer_state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &stale_peer_state.secrets.nonce_pool_secret,
+            )
+            .expect("generate stale peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, stale_nonces);
+
+        let mut current_peer = build_peer_signer(&fixture.group, &peer_share);
+        let fresh_nonces = current_peer
+            .state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &current_peer.state.secrets.nonce_pool_secret,
+            )
+            .expect("generate fresh peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, fresh_nonces);
+
+        let request = fixture
+            .signer
+            .initiate_sign([0x77; 32])
+            .expect("initiate sign with mixed stale and fresh nonces");
+        assert_eq!(request.len(), 1);
+
+        let effects = current_peer
+            .apply(SignerInput::ProcessEvent {
+                event: request[0].clone(),
+            })
+            .expect("current peer processes sign request");
+        assert_eq!(effects.outbound.len(), 1);
     }
 
     #[test]
@@ -3561,6 +3770,65 @@ mod tests {
         assert_eq!(status.nonce_history[0].ts, 1_700);
         assert_eq!(status.nonce_history[0].held, 5);
         assert_eq!(status.nonce_history[1].held, 7);
+    }
+
+    #[test]
+    fn peer_status_reports_latest_response_latency() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let request_id = "req-latency".to_string();
+        let sender = fixture.signer.peers[0].clone();
+        let now = now_unix_secs();
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(sender.clone(), now);
+        fixture.signer.state.pending_operations.insert(
+            request_id.clone(),
+            PendingOperation {
+                op_type: PendingOpType::Ping,
+                request_id: request_id.clone(),
+                started_at: now.saturating_sub(2),
+                timeout_at: now + 30,
+                target_peers: vec![sender.clone()],
+                threshold: 1,
+                collected_responses: vec![],
+                context: PendingOpContext::PingRequest,
+            },
+        );
+        fixture.signer.state.op_started_ms.insert(
+            request_id.clone(),
+            now_unix_millis().saturating_sub(2_000),
+        );
+
+        let response = BridgeEnvelope {
+            request_id,
+            sent_at: now,
+            payload: BridgePayload::PingResponse(PingPayloadWire::from(PingPayload {
+                version: 2,
+                advertised_nonces: Vec::new(),
+                held_peer_nonce_codes: Vec::new(),
+                recognized_peer_nonce_codes: None,
+                policy_profile: None,
+                nonce_pool_generation: fixture.signer.state.nonce_pool.generation(),
+            })),
+        };
+
+        fixture
+            .signer
+            .match_pending_response(&response, &sender)
+            .expect("match ping response");
+
+        let status = fixture
+            .signer
+            .peer_status()
+            .into_iter()
+            .find(|entry| entry.pubkey == sender)
+            .expect("peer status");
+        let latency_ms = status.last_response_latency_ms.expect("latency");
+
+        assert!(latency_ms >= 2_000);
+        assert!(latency_ms < 3_500);
     }
 
     #[test]
@@ -3709,6 +3977,8 @@ mod tests {
             DeviceConfig::default(),
         )
         .expect("requester signer");
+        let requester_pubkey =
+            decode_member_pubkey(&inviter.group, requester_share.idx).expect("requester pubkey");
 
         let ping = requester
             .apply(SignerInput::BeginPing {
@@ -3717,11 +3987,22 @@ mod tests {
             .expect("begin ping")
             .outbound;
         assert_eq!(ping.len(), 1);
-        let ping_response = inviter
+        let ping_effects = inviter
             .signer
-            .process_event(&ping[0])
+            .apply(SignerInput::ProcessEvent {
+                event: ping[0].clone(),
+            })
             .expect("process ping");
-        assert_eq!(ping_response.len(), 1);
+        assert_eq!(ping_effects.outbound.len(), 1);
+        let ping_served_peer = ping_effects
+            .completions
+            .iter()
+            .find_map(|completion| match completion {
+                CompletedOperation::PingServed { peer, .. } => Some(peer.clone()),
+                _ => None,
+            })
+            .expect("expected ping-served completion");
+        assert_eq!(ping_served_peer, requester_pubkey);
 
         let onboard = requester
             .apply(SignerInput::BeginOnboard {
@@ -3739,8 +4020,6 @@ mod tests {
         assert_eq!(inviter_effects.outbound.len(), 1);
         // The responder records an OnboardServed completion carrying the
         // requester's x-only pubkey so hosts can mark its share onboarded.
-        let requester_pubkey =
-            decode_member_pubkey(&inviter.group, requester_share.idx).expect("requester pubkey");
         let served_peer = inviter_effects
             .completions
             .iter()
@@ -3994,6 +4273,78 @@ mod tests {
     }
 
     #[test]
+    fn inbound_sign_request_failure_reports_sign_op_type() {
+        let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
+        let locked_peer = fixture.signer.peers[0].clone();
+        let peer_share = share_for_peer(&fixture.group, &fixture.shares, &locked_peer);
+        let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+
+        let advertised = peer_signer
+            .state
+            .nonce_pool
+            .generate_for_peer(
+                fixture.local_share.idx,
+                10,
+                &peer_signer.state.secrets.nonce_pool_secret,
+            )
+            .expect("generate peer nonces");
+        fixture
+            .signer
+            .state
+            .nonce_pool
+            .store_incoming(peer_share.idx, advertised.clone());
+
+        let request = fixture
+            .signer
+            .initiate_sign([0x55; 32])
+            .expect("initiate sign");
+        assert_eq!(request.len(), 1);
+        let envelope =
+            decode_envelope_for_local(&peer_share, fixture.signer.local_pubkey32(), &request[0]);
+        let BridgePayload::SignRequest(wire) = envelope.payload.clone() else {
+            panic!("expected sign request");
+        };
+        let session = SignSessionPackage::try_from(wire).expect("decode sign request");
+        let peer_nonce_set = session
+            .nonces
+            .as_ref()
+            .and_then(|sets| sets.iter().find(|entry| entry.idx == peer_share.idx))
+            .expect("peer nonce set");
+        let mut codes_by_hash: Vec<Bytes32> = vec![[0u8; 32]; session.hashes.len()];
+        for entry in &peer_nonce_set.entries {
+            codes_by_hash[entry.hash_index as usize] = entry.code;
+        }
+
+        peer_signer
+            .state
+            .nonce_pool
+            .take_outgoing_signing_nonces_many(fixture.local_share.idx, &codes_by_hash)
+            .expect("spend referenced peer nonce");
+
+        let outbound = peer_signer
+            .process_event(&request[0])
+            .expect("inbound failure is surfaced through failures");
+        assert!(outbound.is_empty());
+
+        let failures = peer_signer.take_failures();
+        assert_eq!(failures.len(), 1);
+        let failure = &failures[0];
+        assert_eq!(failure.request_id, envelope.request_id);
+        assert!(matches!(failure.op_type, PendingOpType::Sign));
+        assert_eq!(failure.code, OperationFailureCode::PeerRejected);
+        assert!(
+            failure
+                .message
+                .to_ascii_lowercase()
+                .contains("nonce unavailable")
+        );
+        assert_eq!(
+            failure.failed_peer.as_deref(),
+            Some(fixture.signer.local_pubkey32())
+        );
+    }
+
+    #[test]
     fn inbound_onboard_request_rejects_unsupported_version() {
         let mut fixture = fixture(PeerSelectionStrategy::DeterministicSorted);
         let sender = fixture.signer.peers[0].clone();
@@ -4094,6 +4445,7 @@ mod tests {
                 version: 2,
                 advertised_nonces: Vec::new(),
                 held_peer_nonce_codes: Vec::new(),
+                recognized_peer_nonce_codes: None,
                 policy_profile: None,
                 nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
             })),
@@ -4479,6 +4831,7 @@ mod tests {
                 version: 2,
                 advertised_nonces: Vec::new(),
                 held_peer_nonce_codes: Vec::new(),
+                recognized_peer_nonce_codes: None,
                 policy_profile: None,
                 nonce_pool_generation: bifrost_core::nonce::UNKNOWN_POOL_GENERATION,
             })),

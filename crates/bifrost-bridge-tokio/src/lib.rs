@@ -847,6 +847,8 @@ fn completed_operation_kind(operation: &CompletedOperation) -> &'static str {
         CompletedOperation::Sign { .. } => "sign",
         CompletedOperation::Ecdh { .. } => "ecdh",
         CompletedOperation::Ping { .. } => "ping",
+        CompletedOperation::PingServed { .. } => "ping_served",
+        CompletedOperation::SignServed { .. } => "sign_served",
         CompletedOperation::Onboard { .. } => "onboard",
         CompletedOperation::OnboardServed { .. } => "onboard_served",
     }

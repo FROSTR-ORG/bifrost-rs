@@ -286,6 +286,14 @@ enum CompletedOperationJson {
         request_id: String,
         peer: String,
     },
+    PingServed {
+        request_id: String,
+        peer_pubkey32_hex: String,
+    },
+    SignServed {
+        request_id: String,
+        peer_pubkey32_hex: String,
+    },
     Onboard {
         request_id: String,
         group_member_count: usize,
@@ -2077,6 +2085,15 @@ mod tests {
             serde_json::from_str(&bob.drain_outbound_events().expect("bob outbound"))
                 .expect("decode bob outbound");
         assert_eq!(bob_outbound.len(), 1);
+        let bob_completions: serde_json::Value =
+            serde_json::from_str(&bob.drain_completions().expect("bob completions"))
+                .expect("decode bob completions");
+        let bob_completion_array = bob_completions.as_array().expect("completion array");
+        assert_eq!(bob_completion_array.len(), 1);
+        assert_eq!(
+            bob_completion_array[0]["PingServed"]["peer_pubkey32_hex"],
+            bob_bootstrap.peers[0]
+        );
 
         alice
             .handle_inbound_event(serde_json::to_string(&bob_outbound[0]).expect("encode reply"))
@@ -2220,6 +2237,14 @@ impl From<CompletedOperation> for CompletedOperationJson {
                 shared_secret_hex32: hex::encode(shared_secret),
             },
             CompletedOperation::Ping { request_id, peer } => Self::Ping { request_id, peer },
+            CompletedOperation::PingServed { request_id, peer } => Self::PingServed {
+                request_id,
+                peer_pubkey32_hex: peer,
+            },
+            CompletedOperation::SignServed { request_id, peer } => Self::SignServed {
+                request_id,
+                peer_pubkey32_hex: peer,
+            },
             CompletedOperation::Onboard {
                 request_id,
                 group_member_count,

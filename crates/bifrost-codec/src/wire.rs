@@ -144,6 +144,8 @@ pub struct PingPayloadWire {
     pub version: u16,
     pub advertised_nonces: Vec<DerivedPublicNonceWire>,
     pub held_peer_nonce_codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recognized_peer_nonce_codes: Option<Vec<String>>,
     pub policy_profile: Option<PeerScopedPolicyProfileWire>,
     /// Hex of the sender's nonce-pool generation. Empty/absent on legacy peers.
     #[serde(default)]
@@ -637,6 +639,15 @@ impl TryFrom<PingPayloadWire> for PingPayload {
                 "ping held peer nonce codes exceed max size",
             ));
         }
+        if value
+            .recognized_peer_nonce_codes
+            .as_ref()
+            .is_some_and(|codes| codes.len() > MAX_NONCE_PACKAGE)
+        {
+            return Err(crate::error::CodecError::InvalidPayload(
+                "ping recognized peer nonce codes exceed max size",
+            ));
+        }
         let advertised_nonces = value
             .advertised_nonces
             .into_iter()
@@ -647,6 +658,15 @@ impl TryFrom<PingPayloadWire> for PingPayload {
             .into_iter()
             .map(|code| hexbytes::decode(&code))
             .collect::<Result<Vec<_>, _>>()?;
+        let recognized_peer_nonce_codes = value
+            .recognized_peer_nonce_codes
+            .map(|codes| {
+                codes
+                    .into_iter()
+                    .map(|code| hexbytes::decode(&code))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
 
         let nonce_pool_generation = if value.nonce_pool_generation.is_empty() {
             bifrost_core::nonce::UNKNOWN_POOL_GENERATION
@@ -658,6 +678,7 @@ impl TryFrom<PingPayloadWire> for PingPayload {
             version: value.version,
             advertised_nonces,
             held_peer_nonce_codes,
+            recognized_peer_nonce_codes,
             policy_profile: value.policy_profile.map(TryInto::try_into).transpose()?,
             nonce_pool_generation,
         })
@@ -678,6 +699,12 @@ impl From<PingPayload> for PingPayloadWire {
                 .into_iter()
                 .map(|code| hexbytes::encode(&code))
                 .collect(),
+            recognized_peer_nonce_codes: value.recognized_peer_nonce_codes.map(|codes| {
+                codes
+                    .into_iter()
+                    .map(|code| hexbytes::encode(&code))
+                    .collect()
+            }),
             policy_profile: value.policy_profile.map(Into::into),
             nonce_pool_generation: if value.nonce_pool_generation
                 == bifrost_core::nonce::UNKNOWN_POOL_GENERATION
@@ -1033,6 +1060,7 @@ mod tests {
                 code: [3u8; 32],
             }],
             held_peer_nonce_codes: vec![[4u8; 32], [5u8; 32]],
+            recognized_peer_nonce_codes: Some(vec![[6u8; 32]]),
             policy_profile: None,
             nonce_pool_generation: [9u8; 32],
         };
@@ -1047,6 +1075,7 @@ mod tests {
             version: 1,
             advertised_nonces: Vec::new(),
             held_peer_nonce_codes: Vec::new(),
+            recognized_peer_nonce_codes: None,
             policy_profile: None,
             nonce_pool_generation: String::new(),
         };

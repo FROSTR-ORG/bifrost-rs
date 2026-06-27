@@ -469,6 +469,8 @@ pub struct PingPayload {
     pub advertised_nonces: Vec<DerivedPublicNonce>,
     #[serde(with = "serde_fixed_array::vec_bytes32")]
     pub held_peer_nonce_codes: Vec<Bytes32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recognized_peer_nonce_codes: Option<Vec<Bytes32>>,
     pub policy_profile: Option<PeerScopedPolicyProfile>,
     /// The sender's nonce-pool generation; a change signals the sender reset its
     /// outgoing pool, so the receiver discards the nonces it holds from it. Absent
@@ -527,6 +529,7 @@ mod tests {
                 code: [7u8; 32],
             }],
             held_peer_nonce_codes: vec![[11u8; 32]],
+            recognized_peer_nonce_codes: Some(vec![[12u8; 32]]),
             policy_profile: Some(PeerScopedPolicyProfile {
                 for_peer: [8u8; 32],
                 revision: 9,
@@ -565,6 +568,7 @@ mod tests {
         assert_eq!(onboard.group.members.len(), 2);
         assert_eq!(ping.version, 2);
         assert_eq!(ping.held_peer_nonce_codes.len(), 1);
+        assert_eq!(ping.recognized_peer_nonce_codes.as_deref(), Some(&[[12u8; 32]][..]));
         assert_eq!(
             ping.policy_profile
                 .as_ref()
