@@ -15,12 +15,13 @@ fn token_with_byte(b: u8) -> DaemonToken {
 }
 
 fn temp_path(name: &str, suffix: &str) -> PathBuf {
+    let short_name = name.chars().next().unwrap_or('x');
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "bifrost-daemon-errors-{name}-{}-{nonce}.{suffix}",
+        "bde-{short_name}-{}-{nonce}.{suffix}",
         std::process::id()
     ))
 }

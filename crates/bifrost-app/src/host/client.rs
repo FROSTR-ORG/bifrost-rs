@@ -192,9 +192,10 @@ mod tests {
 
     #[cfg(unix)]
     fn test_socket_path(name: &str) -> PathBuf {
+        let short_name = name.chars().next().unwrap_or('x');
         let unique = format!(
-            "bifrost-app-client-{}-{}-{}.sock",
-            name,
+            "bac-{}-{}-{}.sock",
+            short_name,
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
