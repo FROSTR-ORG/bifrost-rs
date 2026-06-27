@@ -3793,10 +3793,11 @@ mod tests {
                 context: PendingOpContext::PingRequest,
             },
         );
-        fixture.signer.state.op_started_ms.insert(
-            request_id.clone(),
-            now_unix_millis().saturating_sub(2_000),
-        );
+        fixture
+            .signer
+            .state
+            .op_started_ms
+            .insert(request_id.clone(), now_unix_millis().saturating_sub(2_000));
 
         let response = BridgeEnvelope {
             request_id,

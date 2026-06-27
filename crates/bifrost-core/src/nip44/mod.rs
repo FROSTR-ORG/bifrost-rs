@@ -44,7 +44,6 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 type HmacSha256 = Hmac<Sha256>;
-type MessageKeys = ([u8; 32], [u8; 12], [u8; 32]);
 
 /// NIP-44 v2 HKDF salt (domain separation for the peer-bridge
 /// conversation key derivation). This value is load-bearing for

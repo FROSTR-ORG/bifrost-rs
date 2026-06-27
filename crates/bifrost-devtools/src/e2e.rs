@@ -973,8 +973,18 @@ mod tests {
         unsafe {
             env::remove_var("IGLOO_SHELL_BIN");
         }
-        let resolved = resolve_shell_exe(None).expect("default resolution");
-        assert!(resolved.ends_with("repos/igloo-shell/target/debug/igloo-shell"));
+        let default_path = infra_root()
+            .expect("infra root")
+            .join("repos/igloo-shell/target/debug/igloo-shell");
+        match resolve_shell_exe(None) {
+            Ok(resolved) => assert_eq!(resolved, default_path),
+            Err(err) => {
+                assert!(!default_path.is_file());
+                let message = err.to_string();
+                assert!(message.contains("missing igloo-shell binary"));
+                assert!(message.contains(&default_path.display().to_string()));
+            }
+        }
     }
 
     #[test]
