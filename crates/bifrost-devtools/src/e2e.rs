@@ -1,8 +1,8 @@
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,8 @@ use serde_json::Value;
 
 const DEFAULT_RELAY: &str = "ws://127.0.0.1:8194";
 const DEFAULT_VAULT_PASSPHRASE: &str = "igloo-shell-e2e-passphrase";
+const EXEC_BUSY_RETRIES: usize = 5;
+const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 pub fn run_e2e_node_command(args: &[String]) -> Result<()> {
     let mut out_dir: Option<PathBuf> = None;
@@ -737,8 +739,7 @@ fn run_command(
     args: &[&str],
     name: &str,
 ) -> Result<()> {
-    let status = build_command(exe, shell_env, args)
-        .status()
+    let status = command_status_with_busy_retry(exe, shell_env, args)
         .with_context(|| format!("run {name}"))?;
     if !status.success() {
         bail!("{name} failed: {status}");
@@ -771,8 +772,7 @@ fn run_shell_json(
     shell_env: Option<&ManagedShellEnv>,
     args: &[&str],
 ) -> Result<Value> {
-    let output = build_command(shell_exe, shell_env, args)
-        .output()
+    let output = command_output_with_busy_retry(shell_exe, shell_env, args)
         .context("capture igloo-shell output")?;
     if !output.status.success() {
         bail!(
@@ -791,6 +791,39 @@ fn build_command(exe: &Path, shell_env: Option<&ManagedShellEnv>, args: &[&str])
     }
     command.args(args);
     command
+}
+
+fn command_status_with_busy_retry(
+    exe: &Path,
+    shell_env: Option<&ManagedShellEnv>,
+    args: &[&str],
+) -> io::Result<ExitStatus> {
+    retry_if_executable_busy(|| build_command(exe, shell_env, args).status())
+}
+
+fn command_output_with_busy_retry(
+    exe: &Path,
+    shell_env: Option<&ManagedShellEnv>,
+    args: &[&str],
+) -> io::Result<Output> {
+    retry_if_executable_busy(|| build_command(exe, shell_env, args).output())
+}
+
+fn retry_if_executable_busy<T>(mut run: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    for attempt in 0..EXEC_BUSY_RETRIES {
+        match run() {
+            Ok(value) => return Ok(value),
+            Err(err) if is_executable_busy(&err) && attempt + 1 < EXEC_BUSY_RETRIES => {
+                thread::sleep(EXEC_BUSY_RETRY_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!("retry loop always returns before exhausting attempts")
+}
+
+fn is_executable_busy(err: &io::Error) -> bool {
+    cfg!(unix) && err.raw_os_error() == Some(26)
 }
 
 fn append_output(path: &Path, label: &str, output: &str) -> Result<()> {
