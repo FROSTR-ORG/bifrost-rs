@@ -721,6 +721,11 @@ pub enum CompletedOperation {
         request_id: String,
         peer: String,
     },
+    /// Recorded by the responder after it returns an ECDH share.
+    EcdhServed {
+        request_id: String,
+        peer: String,
+    },
     /// Recorded by the responder after it returns a signing share.
     SignServed {
         request_id: String,
@@ -748,6 +753,7 @@ impl CompletedOperation {
             | CompletedOperation::Ecdh { request_id, .. }
             | CompletedOperation::Ping { request_id, .. }
             | CompletedOperation::PingServed { request_id, .. }
+            | CompletedOperation::EcdhServed { request_id, .. }
             | CompletedOperation::SignServed { request_id, .. }
             | CompletedOperation::Onboard { request_id, .. }
             | CompletedOperation::OnboardServed { request_id, .. } => request_id,
@@ -2513,12 +2519,19 @@ impl SigningDevice {
                 let response = ecdh_create_from_share(&req.members, &self.share, &targets)
                     .map_err(|e| SignerError::InvalidRequest(e.to_string()))?;
 
+                let served_request_id = envelope.request_id;
+                let served_peer = sender.clone();
                 let envelope = BridgeEnvelope {
-                    request_id: envelope.request_id,
+                    request_id: served_request_id.clone(),
                     sent_at: now,
                     payload: BridgePayload::EcdhResponse(EcdhPackageWire::from(response)),
                 };
-                self.encrypt_for_peers(&[sender], &envelope)
+                let outbound = self.encrypt_for_peers(&[sender], &envelope)?;
+                self.completions.push_back(CompletedOperation::EcdhServed {
+                    request_id: served_request_id,
+                    peer: served_peer,
+                });
+                Ok(outbound)
             }
             BridgePayload::Error(_) => Ok(Vec::new()),
             BridgePayload::PingResponse(_) => {
@@ -4975,10 +4988,22 @@ mod tests {
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
 
         let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
-        let responses = peer_signer
-            .process_event(&outbound[0])
+        let peer_effects = peer_signer
+            .apply(SignerInput::ProcessEvent {
+                event: outbound[0].clone(),
+            })
             .expect("peer processes ecdh");
+        let responses = peer_effects.outbound;
         assert_eq!(responses.len(), 1);
+        let ecdh_served_peer = peer_effects
+            .completions
+            .iter()
+            .find_map(|completion| match completion {
+                CompletedOperation::EcdhServed { peer, .. } => Some(peer.clone()),
+                _ => None,
+            })
+            .expect("expected ecdh-served completion");
+        assert_eq!(ecdh_served_peer, fixture.signer.local_pubkey32());
         let response = decode_envelope_for_local(&fixture.local_share, &peer, &responses[0]);
 
         let matched = fixture

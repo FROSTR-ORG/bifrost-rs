@@ -290,6 +290,10 @@ enum CompletedOperationJson {
         request_id: String,
         peer_pubkey32_hex: String,
     },
+    EcdhServed {
+        request_id: String,
+        peer_pubkey32_hex: String,
+    },
     SignServed {
         request_id: String,
         peer_pubkey32_hex: String,
@@ -2238,6 +2242,10 @@ impl From<CompletedOperation> for CompletedOperationJson {
             },
             CompletedOperation::Ping { request_id, peer } => Self::Ping { request_id, peer },
             CompletedOperation::PingServed { request_id, peer } => Self::PingServed {
+                request_id,
+                peer_pubkey32_hex: peer,
+            },
+            CompletedOperation::EcdhServed { request_id, peer } => Self::EcdhServed {
                 request_id,
                 peer_pubkey32_hex: peer,
             },
