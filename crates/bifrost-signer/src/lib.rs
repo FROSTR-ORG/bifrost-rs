@@ -2030,14 +2030,23 @@ impl SigningDevice {
 
     pub fn expire_stale(&mut self, now: u64) -> Vec<OperationFailure> {
         let mut stale = Vec::new();
+        let mut ping_failed_peers = Vec::new();
         self.state.pending_operations.retain(|id, op| {
             if op.timeout_at <= now {
+                let failed_peer = if matches!(op.op_type, PendingOpType::Ping) {
+                    op.target_peers.first().cloned()
+                } else {
+                    None
+                };
+                if let Some(peer) = failed_peer.clone() {
+                    ping_failed_peers.push(peer);
+                }
                 stale.push(OperationFailure {
                     request_id: id.clone(),
                     op_type: op.op_type.clone(),
                     code: OperationFailureCode::Timeout,
                     message: "locked peer response timeout".to_string(),
-                    failed_peer: None,
+                    failed_peer,
                 });
                 false
             } else {
@@ -2046,6 +2055,9 @@ impl SigningDevice {
         });
         for failure in &stale {
             self.state.op_started_ms.remove(&failure.request_id);
+        }
+        for peer in ping_failed_peers {
+            self.state.peer_last_seen.remove(&peer);
         }
         // Drop parked approvals the operator never resolved. Silent: the
         // requester's own operation has already timed out by now, so there is no
@@ -4063,6 +4075,11 @@ mod tests {
         let peer = fixture.signer.peers[0].clone();
         let peer_share = share_for_peer(&fixture.group, &fixture.shares, &peer);
         let mut peer_signer = build_peer_signer(&fixture.group, &peer_share);
+        fixture
+            .signer
+            .state
+            .peer_last_seen
+            .insert(peer.clone(), now_unix_secs());
 
         let first_ping = fixture
             .signer
@@ -4078,6 +4095,11 @@ mod tests {
             })
             .expect("expire timed-out ping");
         assert_eq!(expired.failures.len(), 1);
+        assert_eq!(
+            expired.failures[0].failed_peer.as_deref(),
+            Some(peer.as_str())
+        );
+        assert!(!fixture.signer.state.peer_last_seen.contains_key(&peer));
 
         let second_ping = fixture
             .signer
